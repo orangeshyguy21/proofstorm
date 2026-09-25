@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail, ensure};
 use proofstorm_core::{
-    AuthenticationMode, CatalogEntry, CatalogPlatform, CatalogResponse, StorageBackend,
-    SupportLifecycle, catalog_for_platform, catalog_image_source, digest_json,
+    AuthenticationMode, CatalogEntry, CatalogPlatform, CatalogResponse, ComponentKind,
+    StorageBackend, SupportLifecycle, catalog_for_platform, catalog_image_source, digest_json,
 };
 use serde::Serialize;
 
@@ -331,6 +331,102 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// Embedded CDK backends are configuration of the one CDK entry. Each
+    /// embedded backend is qualified per storage mode by its own gate.
+    fn embedded_mint(&mut self, entry: &CatalogEntry) -> Result<()> {
+        let backends = entry
+            .support_matrix
+            .embedded_payment_bindings
+            .iter()
+            .map(|binding| binding.backend.as_str())
+            .collect::<BTreeSet<_>>();
+        for &backend in &backends {
+            for storage in &entry.support_matrix.storage {
+                let postgres = *storage == StorageBackend::Postgres;
+                let gate = match (backend, postgres) {
+                    ("ldk-node", false) => "cdk-ldk",
+                    ("ldk-node", true) => "cdk-ldk-postgres",
+                    ("bdk", false) => "cdk-bdk",
+                    ("bdk", true) => "cdk-bdk-postgres",
+                    _ => bail!("unmapped embedded backend/storage"),
+                };
+                if backend == "bdk" {
+                    let mut dependencies = vec!["bitcoin-core"];
+                    let stress_gate = if postgres {
+                        dependencies.push("postgresql");
+                        "cdk-bdk-postgres-stress"
+                    } else {
+                        "cdk-bdk-stress"
+                    };
+                    self.gate(stress_gate, &[entry], &dependencies, BTreeSet::new(), false)?;
+                }
+                let mut claims = BTreeSet::from([
+                    claim(entry, "behavior", &entry.id),
+                    claim(entry, "storage", storage),
+                    claim(
+                        entry,
+                        "authentication",
+                        &AuthenticationMode::Unauthenticated,
+                    ),
+                ]);
+                for binding in &entry.support_matrix.embedded_payment_bindings {
+                    if binding.backend == backend {
+                        claims.insert(claim(entry, "embedded_payment", binding));
+                    }
+                }
+                let mut others = if backend == "ldk-node" {
+                    vec!["bitcoin-core", "cln", "nutshell-wallet"]
+                } else {
+                    vec!["bitcoin-core"]
+                };
+                if postgres {
+                    others.push("postgresql");
+                }
+                let components = others
+                    .iter()
+                    .map(|name| component(preferred(self.catalog, name)?))
+                    .collect::<Result<Vec<_>>>()?;
+                claims.extend(dependencies(entry, &components));
+                // Wallet adapters settle Lightning; on-chain has no wallet pairing.
+                if backend != "ldk-node" {
+                    self.gate(gate, &[entry], &others, claims.clone(), false)?;
+                    continue;
+                }
+                // Each declared wallet pairing must execute a real round trip.
+                for wallet in &entry.support_matrix.compatible_wallet_adapters {
+                    for version in &wallet.versions {
+                        let wallet_entry =
+                            crate::planner::entry(self.catalog, &wallet.implementation, version)?;
+                        let mut variant_claims = claims.clone();
+                        variant_claims.insert(claim(
+                            entry,
+                            "wallet",
+                            &(&wallet.implementation, version),
+                        ));
+                        self.gate(gate, &[entry, wallet_entry], &others, variant_claims, true)?;
+                    }
+                }
+            }
+        }
+        // Linked Lightning and embedded on-chain in one mint.
+        if backends.contains("bdk") && !entry.support_matrix.payment_bindings.is_empty() {
+            let mut claims = BTreeSet::from([claim(entry, "behavior", &entry.id)]);
+            for binding in &entry.support_matrix.embedded_payment_bindings {
+                if binding.backend == "bdk" {
+                    claims.insert(claim(entry, "embedded_payment", binding));
+                }
+            }
+            let others = ["bitcoin-core", "lnd"];
+            let components = others
+                .iter()
+                .map(|name| component(preferred(self.catalog, name)?))
+                .collect::<Result<Vec<_>>>()?;
+            claims.extend(dependencies(entry, &components));
+            self.gate("cdk-lnd-bdk", &[entry], &others, claims, true)?;
+        }
+        Ok(())
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "keep the explicit catalog-to-scenario mapping together for review"
@@ -386,84 +482,10 @@ impl Builder<'_> {
                         true,
                     );
                 }
-                "cdk" | "nutshell" => self.mint(entry)?,
-                "cdk-ldk" | "cdk-bdk" => {
-                    for storage in &entry.support_matrix.storage {
-                        let gate = match (entry.id.as_str(), storage) {
-                            ("cdk-ldk", StorageBackend::Sqlite) => "cdk-ldk",
-                            ("cdk-ldk", StorageBackend::Postgres) => "cdk-ldk-postgres",
-                            ("cdk-bdk", StorageBackend::Sqlite) => "cdk-bdk",
-                            ("cdk-bdk", StorageBackend::Postgres) => "cdk-bdk-postgres",
-                            _ => bail!("unmapped embedded backend/storage"),
-                        };
-                        if entry.id == "cdk-bdk" {
-                            let mut dependencies = vec!["bitcoin-core"];
-                            let stress_gate = if *storage == StorageBackend::Postgres {
-                                dependencies.push("postgresql");
-                                "cdk-bdk-postgres-stress"
-                            } else {
-                                "cdk-bdk-stress"
-                            };
-                            self.gate(
-                                stress_gate,
-                                &[entry],
-                                &dependencies,
-                                BTreeSet::new(),
-                                false,
-                            )?;
-                        }
-                        let mut claims = BTreeSet::from([
-                            claim(entry, "behavior", &entry.id),
-                            claim(entry, "storage", storage),
-                            claim(
-                                entry,
-                                "authentication",
-                                &AuthenticationMode::Unauthenticated,
-                            ),
-                        ]);
-                        for binding in &entry.support_matrix.embedded_payment_bindings {
-                            claims.insert(claim(entry, "embedded_payment", binding));
-                        }
-                        let mut others = if entry.id == "cdk-ldk" {
-                            vec!["bitcoin-core", "cln", "nutshell-wallet"]
-                        } else {
-                            vec!["bitcoin-core"]
-                        };
-                        if *storage == StorageBackend::Postgres {
-                            others.push("postgresql");
-                        }
-                        let components = others
-                            .iter()
-                            .map(|name| component(preferred(self.catalog, name)?))
-                            .collect::<Result<Vec<_>>>()?;
-                        claims.extend(dependencies(entry, &components));
-                        if entry.support_matrix.compatible_wallet_adapters.is_empty() {
-                            self.gate(gate, &[entry], &others, claims.clone(), false)?;
-                        }
-                        // Each declared wallet pairing must execute a real round trip.
-                        for wallet in &entry.support_matrix.compatible_wallet_adapters {
-                            for version in &wallet.versions {
-                                let wallet_entry = crate::planner::entry(
-                                    self.catalog,
-                                    &wallet.implementation,
-                                    version,
-                                )?;
-                                let mut variant_claims = claims.clone();
-                                variant_claims.insert(claim(
-                                    entry,
-                                    "wallet",
-                                    &(&wallet.implementation, version),
-                                ));
-                                self.gate(
-                                    gate,
-                                    &[entry, wallet_entry],
-                                    &others,
-                                    variant_claims,
-                                    true,
-                                )?;
-                            }
-                        }
-                    }
+                "nutshell" => self.mint(entry)?,
+                "cdk" => {
+                    self.mint(entry)?;
+                    self.embedded_mint(entry)?;
                 }
                 "cdk-cli-wallet" => self.gate(
                     "cdk-wallet",
@@ -482,12 +504,12 @@ impl Builder<'_> {
                 other => bail!("supported implementation has no behavioral qualification: {other}"),
             }
         }
-        for mint in self
-            .catalog
-            .entries
-            .iter()
-            .filter(|entry| entry.id == "nutshell" && entry.support_lifecycle.is_supported())
-        {
+        // Any supported mint that declares NUT-21/22 gets its own OIDC gate.
+        for mint in self.catalog.entries.iter().filter(|entry| {
+            entry.kind == ComponentKind::Mint
+                && entry.source.is_none()
+                && entry.support_lifecycle.is_supported()
+        }) {
             let identity = preferred(self.catalog, "keycloak")?;
             let database = preferred(self.catalog, "postgresql")?;
             let mut auth_claims = BTreeSet::new();
@@ -496,19 +518,31 @@ impl Builder<'_> {
                     auth_claims.insert(claim(mint, "authentication", auth));
                 }
             }
-            let authenticating = !auth_claims.is_empty();
+            if auth_claims.is_empty() {
+                continue;
+            }
             auth_claims.extend(behavioral(identity));
             auth_claims.extend(dependencies(mint, &[component(identity)?]));
             auth_claims.extend(dependencies(identity, &[component(database)?]));
-            if authenticating {
-                self.gate(
-                    "nutshell-oidc",
-                    &[mint, identity, database],
-                    &["bitcoin-core", "lnd"],
-                    auth_claims,
-                    true,
-                )?;
-            }
+            let gate = match mint.id.as_str() {
+                "nutshell" => "nutshell-oidc",
+                "cdk" => "cdk-oidc",
+                other => bail!("mint {other:?} claims authentication without an OIDC gate"),
+            };
+            self.gate(
+                gate,
+                &[mint, identity, database],
+                &["bitcoin-core", "lnd"],
+                auth_claims,
+                true,
+            )?;
+        }
+        for mint in self
+            .catalog
+            .entries
+            .iter()
+            .filter(|entry| entry.id == "nutshell" && entry.support_lifecycle.is_supported())
+        {
             let cache = preferred(self.catalog, "redis")?;
             let mut cache_claims = behavioral(cache);
             cache_claims.extend(dependencies(mint, &[component(cache)?]));

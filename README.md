@@ -81,11 +81,9 @@ compatibility details.
 | LND | `lnd` | Lightning, BOLT11 |
 | Core Lightning | `cln` | Lightning, BOLT11 |
 | LDK Server | `ldk-server` | Experimental standalone Lightning node and native CLI |
-| CDK mint | `cdk` | LND / CLN / gRPC processor; SQLite / PostgreSQL |
-| CDK + LDK mint | `cdk-ldk` | Embedded Lightning; BOLT11 / BOLT12 |
-| CDK + BDK mint | `cdk-bdk` | On-chain payments; Bitcoin regtest |
+| CDK mint | `cdk` | Linked LND / CLN / gRPC processor or embedded LDK Node (BOLT11 / BOLT12), optional embedded BDK on-chain; SQLite / PostgreSQL; optional NUT-21 / NUT-22 auth |
 | CDK LDK Server processor | `cdk-ldk-server-processor` | Experimental gRPC BOLT11 / BOLT12 backend for CDK |
-| Nutshell mint | `nutshell` | LND / CLN; optional NUT-21 / NUT-22 auth |
+| Nutshell mint | `nutshell` | LND / CLN; Redis cache |
 | Nutshell wallet | `nutshell-wallet` | Persistent Cashu wallet |
 | CDK CLI wallet | `cdk-cli-wallet` | Cashu wallet CLI |
 | Coco daemon | `cocod-wallet` | Experimental Cashu wallet |

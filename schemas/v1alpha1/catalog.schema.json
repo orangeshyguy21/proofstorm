@@ -299,6 +299,22 @@
       ],
       "type": "object"
     },
+    "CatalogEndpointCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "config_field": {
+          "type": "string"
+        },
+        "equals": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "config_field",
+        "equals"
+      ],
+      "type": "object"
+    },
     "CatalogEntry": {
       "additionalProperties": false,
       "properties": {
@@ -507,6 +523,17 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "requires": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CatalogEndpointCondition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present only on components whose effective configuration selects it,\nsuch as an embedded backend that is optional in one image."
         }
       },
       "required": [

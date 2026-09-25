@@ -215,7 +215,7 @@ async fn candidate_profiles_admit_every_current_baseline_and_preserve_replays() 
                 .is_some_and(|profile| profile.baseline == e.version)
         })
         .collect::<Vec<_>>();
-    assert_eq!(cashu.len(), 7);
+    assert_eq!(cashu.len(), 5);
     for entry in cashu {
         let request = request(&entry.id, &format!("{}-source", entry.id));
         let candidate = admit(&store, "workspace", "agent", &request).await.unwrap();
@@ -252,7 +252,7 @@ async fn candidate_profiles_admit_every_current_baseline_and_preserve_replays() 
             .iter()
             .filter(|e| e.source.is_some())
             .count(),
-        13
+        5
     );
     let page = crate::catalog::list(
         &catalog,
@@ -264,7 +264,7 @@ async fn candidate_profiles_admit_every_current_baseline_and_preserve_replays() 
         32 * 1024,
     )
     .unwrap();
-    assert_eq!(page.matched_count, 9);
+    assert_eq!(page.matched_count, 1);
     assert!(
         store
             .effective_catalog("workspace", "reader")
@@ -428,133 +428,40 @@ async fn candidate_directory_and_diagnostics_are_passive_bounded_and_snapshot_bo
 }
 
 #[tokio::test]
-async fn candidate_one_cdk_build_supplies_all_presets_without_expanding_old_builds() {
-    for implementation in ["cdk", "cdk-ldk", "cdk-bdk"] {
-        let store = store();
-        let pending = admit(
-            &store,
-            "workspace",
-            "agent",
-            &request(implementation, "shared-cdk"),
-        )
+async fn candidate_cdk_build_publishes_the_one_cdk_entry() {
+    let store = store();
+    let pending = admit(&store, "workspace", "agent", &request("cdk", "shared-cdk"))
         .await
         .unwrap();
-        assert!(
-            store
-                .effective_catalog("workspace", "agent")
-                .unwrap()
-                .entries
-                .iter()
-                .all(|entry| entry.source.is_none())
-        );
-        let candidate = succeed(&store, pending);
-        let receipt = receipt(&candidate, false);
-        assert_eq!(receipt.catalog_entry.implementation, implementation);
-        assert_eq!(receipt.catalog_entries.len(), 3);
-        assert_eq!(
-            store.candidate_builds("workspace", "agent").unwrap().len(),
-            1
-        );
-        let catalog = store.effective_catalog("workspace", "agent").unwrap();
-        for preset in ["cdk", "cdk-bdk", "cdk-ldk"] {
-            let page = crate::catalog::list(
-                &catalog,
-                &serde_json::from_value(
-                    json!({"kinds":["mint"],"implementations":[preset],"origins":["candidate"]}),
-                )
-                .unwrap(),
-                "linux/arm64",
-                32 * 1024,
-            )
-            .unwrap();
-            assert_eq!(page.matched_count, 1);
-            assert_eq!(page.items[0]["candidate_id"], "shared-cdk");
-            assert_eq!(page.items[0]["image"], candidate.image.as_deref().unwrap());
-            assert_eq!(
-                page.items[0]["shared_image_implementations"],
-                json!(["cdk", "cdk-bdk", "cdk-ldk"])
-            );
-            let base = default_catalog()
-                .entries
-                .iter()
-                .find(|entry| entry.id == preset)
-                .unwrap();
-            let selected = catalog
-                .entries
-                .iter()
-                .find(|entry| entry.id == preset && entry.source.is_some())
-                .unwrap();
-            assert_eq!(selected.config_version, base.config_version);
-            assert_eq!(selected.support_matrix, base.support_matrix);
-            assert_eq!(selected.source, candidate.source());
-            assert_eq!(selected.image, candidate.image.as_deref().unwrap());
-            assert_eq!(
-                selected.support_lifecycle,
-                proofstorm_core::SupportLifecycle::Experimental
-            );
-            assert_eq!(base.image, proofstorm_core::CDK_MINT_IMAGE);
-            assert_eq!(
-                base.build_provenance,
-                default_catalog()
-                    .entries
-                    .iter()
-                    .find(|entry| entry.id == "cdk-ldk")
-                    .unwrap()
-                    .build_provenance
-            );
-        }
-        assert_historical_cdk_scope(&candidate);
-        let mut invalid = candidate.provenance.unwrap();
-        invalid
-            .profile
-            .catalog_implementations
-            .insert("nutshell".into());
-        invalid.profile_digest = invalid.profile.digest();
-        assert!(invalid.validate().is_err());
-    }
-}
-
-fn assert_historical_cdk_scope(candidate: &CandidateBuild) {
-    let implementation = candidate.implementation.as_str();
-    let mut historical = candidate.clone();
-    let saved = historical.provenance.as_mut().unwrap();
-    saved.profile.catalog_implementations.clear();
-    saved.profile.id = format!("{implementation}-source");
-    saved.profile.version = 4;
-    saved.profile_digest = saved.profile.digest();
-    let encoded = serde_json::to_string(&historical).unwrap();
-    assert!(!encoded.contains("catalog_implementations"));
-    let decoded: CandidateBuild = serde_json::from_str(&encoded).unwrap();
-    assert_eq!(decoded, historical);
-    for old in [
-        decoded,
-        CandidateBuild {
-            provenance: None,
-            ..historical
-        },
-    ] {
-        let old_catalog =
-            proofstorm_core::effective_catalog(default_catalog(), &[old.clone()]).unwrap();
-        assert_eq!(
-            old_catalog
-                .entries
-                .iter()
-                .filter(|entry| entry.source.is_some())
-                .count(),
-            1
-        );
-        let other = default_catalog()
-            .entries
-            .iter()
-            .find(|entry| {
-                entry.id
-                    == if implementation == "cdk" {
-                        "cdk-ldk"
-                    } else {
-                        "cdk"
-                    }
-            })
-            .unwrap();
-        assert!(proofstorm_core::candidate_catalog_entry(other, &old).is_err());
-    }
+    let candidate = succeed(&store, pending);
+    let receipt = receipt(&candidate, false);
+    assert_eq!(receipt.catalog_entry.implementation, "cdk");
+    assert_eq!(receipt.catalog_entries.len(), 1);
+    let catalog = store.effective_catalog("workspace", "agent").unwrap();
+    let base = default_catalog()
+        .entries
+        .iter()
+        .find(|entry| entry.id == "cdk")
+        .unwrap();
+    let selected = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.id == "cdk" && entry.source.is_some())
+        .unwrap();
+    assert_eq!(selected.config_version, base.config_version);
+    assert_eq!(selected.support_matrix, base.support_matrix);
+    assert_eq!(selected.runtime_endpoints, base.runtime_endpoints);
+    assert_eq!(selected.source, candidate.source());
+    assert_eq!(selected.image, candidate.image.as_deref().unwrap());
+    assert_eq!(
+        selected.support_lifecycle,
+        proofstorm_core::SupportLifecycle::Experimental
+    );
+    let mut invalid = candidate.provenance.unwrap();
+    invalid
+        .profile
+        .catalog_implementations
+        .insert("nutshell".into());
+    invalid.profile_digest = invalid.profile.digest();
+    assert!(invalid.validate().is_err());
 }

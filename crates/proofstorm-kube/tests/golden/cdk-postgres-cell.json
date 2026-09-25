@@ -238,7 +238,6 @@
       "credentials": [],
       "effective_config": {
         "config": {
-          "database_name": "cdk_mint",
           "storage_size": "1Gi"
         },
         "implementation": "postgresql"
@@ -316,7 +315,7 @@
       },
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:e94c3d7641b68c2679fd98e6358be166da1fd17db6b10bf45837bc46a5bcf63f",
+      "rollout_digest": "sha256:707d141be75b07d5de0290c57596eb2a65c59f4bef467adafa6045fb268a41aa",
       "storage": [
         {
           "claim_name": "data-database-0"
@@ -627,10 +626,13 @@
       ],
       "effective_config": {
         "config": {
+          "auth_max_blind_tokens": 50,
           "contact_email": "",
           "contact_nostr_public_key": "",
           "description": "Proofstorm regtest CDK mint",
           "description_long": "",
+          "embedded_lightning": "none",
+          "embedded_onchain": "none",
           "enable_info_page": false,
           "http_cache_tti_seconds": 60,
           "http_cache_ttl_seconds": 60,
@@ -646,6 +648,10 @@
           "mint_quote_ttl_seconds": 600,
           "motd": "",
           "name": "Proofstorm CDK mint",
+          "onchain_max_melt_sat": 1000000,
+          "onchain_max_mint_sat": 1000000,
+          "onchain_min_melt_sat": 1000,
+          "onchain_min_mint_sat": 1000,
           "tos_url": "",
           "use_keyset_v2": true
         },
@@ -786,7 +792,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:3e12cdea74dbd6bbc67f9adf5bc9728b3e20e5dc18a9901783804d63d568e8b7",
+      "rollout_digest": "sha256:aa367d425f1ed43b805ad3f4758b611216c4ae7b07d451619d895bc47d3c2041",
       "storage": [
         {
           "claim_name": "mint-data"
@@ -863,7 +869,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:3e12cdea74dbd6bbc67f9adf5bc9728b3e20e5dc18a9901783804d63d568e8b7"
+                "proofstorm.dev/rollout-digest": "sha256:aa367d425f1ed43b805ad3f4758b611216c4ae7b07d451619d895bc47d3c2041"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -903,13 +909,17 @@
                       "value": "postgres"
                     },
                     {
-                      "name": "CDK_MINTD_POSTGRES_URL",
+                      "name": "CDK_MINTD_POSTGRES_URL_PASSWORD",
                       "valueFrom": {
                         "secretKeyRef": {
-                          "key": "DATABASE_URL",
+                          "key": "POSTGRES_PASSWORD",
                           "name": "database-credentials"
                         }
                       }
+                    },
+                    {
+                      "name": "CDK_MINTD_POSTGRES_URL",
+                      "value": "postgresql://proofstorm:$(CDK_MINTD_POSTGRES_URL_PASSWORD)@database:5432/mint_primary"
                     }
                   ],
                   "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
@@ -980,14 +990,26 @@
                   "command": [
                     "sh",
                     "-ec",
-                    "# The Service exposes only ready PostgreSQL endpoints. Wait before running any\n# configuration/database mutation; do not retry a failed initializer itself.\nfor attempt in $(seq 1 120); do\n    if nc -z -w 2 \"$1\" \"$2\"; then\n        exit 0\n    fi\n    sleep 1\ndone\necho 'PostgreSQL service did not become ready before component initialization' >&2\nexit 1\n",
-                    "wait-for-database",
+                    "# Create this component's own database on the linked PostgreSQL server, once.\n# Arguments: host, port, database. The database name was validated as a\n# PostgreSQL identifier before publication, so it is safe to quote directly.\n# The Service exposes only ready PostgreSQL endpoints; wait for it, then\n# create idempotently. Never drop or alter an existing database.\nhost=$1\nport=$2\ndatabase=$3\nexport PGPASSWORD=\"$PROOFSTORM_POSTGRES_PASSWORD\"\nfor attempt in $(seq 1 120); do\n    if pg_isready -q -h \"$host\" -p \"$port\" -U proofstorm -d postgres; then\n        exists=$(psql -h \"$host\" -p \"$port\" -U proofstorm -d postgres -tAc \"SELECT 1 FROM pg_database WHERE datname = '$database'\") || exists=\n        if [ \"$exists\" = 1 ] || psql -q -h \"$host\" -p \"$port\" -U proofstorm -d postgres -c \"CREATE DATABASE \\\"$database\\\"\"; then\n            exit 0\n        fi\n    fi\n    sleep 1\ndone\necho \"PostgreSQL database $database was not available before component initialization\" >&2\nexit 1\n",
+                    "ensure-database",
                     "database",
-                    "5432"
+                    "5432",
+                    "mint_primary"
                   ],
-                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                  "env": [
+                    {
+                      "name": "PROOFSTORM_POSTGRES_PASSWORD",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_PASSWORD",
+                          "name": "database-credentials"
+                        }
+                      }
+                    }
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
                   "imagePullPolicy": "IfNotPresent",
-                  "name": "wait-for-database",
+                  "name": "ensure-database",
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -1034,13 +1056,17 @@
                       "value": "postgres"
                     },
                     {
-                      "name": "CDK_MINTD_POSTGRES_URL",
+                      "name": "CDK_MINTD_POSTGRES_URL_PASSWORD",
                       "valueFrom": {
                         "secretKeyRef": {
-                          "key": "DATABASE_URL",
+                          "key": "POSTGRES_PASSWORD",
                           "name": "database-credentials"
                         }
                       }
+                    },
+                    {
+                      "name": "CDK_MINTD_POSTGRES_URL",
+                      "value": "postgresql://proofstorm:$(CDK_MINTD_POSTGRES_URL_PASSWORD)@database:5432/mint_primary"
                     }
                   ],
                   "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
@@ -1564,7 +1590,7 @@
           "namespace": "proofstorm-i-golden-b2"
         },
         "stringData": {
-          "POSTGRES_DB": "cdk_mint",
+          "POSTGRES_DB": "postgres",
           "POSTGRES_USER": "proofstorm"
         },
         "type": "Opaque"
@@ -1932,7 +1958,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:e94c3d7641b68c2679fd98e6358be166da1fd17db6b10bf45837bc46a5bcf63f"
+                "proofstorm.dev/rollout-digest": "sha256:707d141be75b07d5de0290c57596eb2a65c59f4bef467adafa6045fb268a41aa"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -2012,7 +2038,7 @@
                         "-U",
                         "proofstorm",
                         "-d",
-                        "cdk_mint"
+                        "postgres"
                       ]
                     },
                     "failureThreshold": 40,

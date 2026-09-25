@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 pub const CANDIDATE_BUILD_MAX_CPU_MILLICORES: u32 = 4000;
 pub const CANDIDATE_BUILD_MAX_DEADLINE_SECONDS: u32 = 3600;
-pub const CDK_MINT_IMPLEMENTATIONS: [&str; 3] = ["cdk", "cdk-ldk", "cdk-bdk"];
+pub const CDK_MINT_IMPLEMENTATIONS: [&str; 1] = ["cdk"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -40,7 +40,7 @@ impl CandidateBuildProfile {
 #[must_use]
 pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildProfile> {
     let (repository, baseline, dockerfile) = match implementation {
-        "cdk" | "cdk-bdk" | "cdk-ldk" => ("cashubtc/cdk", "0.18.1", "Dockerfile.ldk-node"),
+        "cdk" => ("cashubtc/cdk", "0.18.1", "Dockerfile.ldk-node"),
         "cdk-cli-wallet" => ("cashubtc/cdk", "0.18.1", "Proofstorm.candidate.Dockerfile"),
         "nutshell" | "nutshell-wallet" => ("cashubtc/nutshell", "0.21.0", "Dockerfile"),
         "cocod-wallet" => (
@@ -51,7 +51,7 @@ pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildPro
         _ => return None,
     };
     let mut features = BTreeSet::new();
-    if matches!(implementation, "cdk" | "cdk-bdk" | "cdk-ldk" | "nutshell") {
+    if matches!(implementation, "cdk" | "nutshell") {
         features.insert(CatalogFeature::MintManagementRpc);
     }
     if matches!(
@@ -66,7 +66,7 @@ pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildPro
             (format!("cat > /workspace/{dockerfile} <<'PROOFSTORM_RECIPE_EOF'\n{recipe}\nPROOFSTORM_RECIPE_EOF\n"), vec!["Compiles the native wallet from the frozen source with its lockfile; checks command version and help. Build success does not establish runtime compatibility.".into()])
         }
         "nutshell" | "nutshell-wallet" => (format!("sed -i '/RUN poetry install --without dev --no-root/i RUN poetry remove breez-sdk-spark --lock && pip install --no-cache-dir breez-sdk-spark==0.17.0' /workspace/Dockerfile\ncat >> /workspace/Dockerfile <<'PROOFSTORM_MANAGEMENT_EOF'\n{}\nPROOFSTORM_MANAGEMENT_EOF\n", include_str!("candidate_profiles/nutshell-management-v1.Dockerfile")), vec!["Removes breez-sdk-spark from the Poetry lock and installs 0.17.0 separately for historical platform wheels. Installs source console commands and checks cashu/mint-cli help.".into()]),
-        _ => (format!("sh -s -- /workspace/{dockerfile} <<'PROOFSTORM_WORKSPACE_EOF'\n{}\nPROOFSTORM_WORKSPACE_EOF\ncat > /tmp/management-prefix <<'PROOFSTORM_MANAGEMENT_EOF'\n{}\nPROOFSTORM_MANAGEMENT_EOF\ncat /tmp/management-prefix /workspace/{dockerfile} > /tmp/management-dockerfile\ncat >> /tmp/management-dockerfile <<'PROOFSTORM_MANAGEMENT_EOF'\n{}\nPROOFSTORM_MANAGEMENT_EOF\nmv /tmp/management-dockerfile /workspace/{dockerfile}", include_str!("candidate_profiles/cdk-mint-workspace-v6.sh"), include_str!("candidate_profiles/cdk-management-v4.Dockerfile"), include_str!("candidate_profiles/cdk-mint-runtime-v7.Dockerfile")), vec!["Builds one CDK mint image for the cdk, cdk-ldk and cdk-bdk runtime presets using upstream Dockerfile.ldk-node with LDK and PostgreSQL enabled alongside the default backends. Runtime configuration selects the active backend; PostgreSQL servers stay separate. Uses the full frozen workspace, bindings and lockfiles; requires locked Cargo dependencies. Builds cdk-mint-cli before the daemon with two management-client Cargo jobs and one daemon Cargo job to bound memory, then adds wget and CA certificates required by readiness and Bitcoin dependency checks. Checks daemon, management client and wget commands before publishing.".into()]),
+        _ => (format!("sh -s -- /workspace/{dockerfile} <<'PROOFSTORM_WORKSPACE_EOF'\n{}\nPROOFSTORM_WORKSPACE_EOF\ncat > /tmp/management-prefix <<'PROOFSTORM_MANAGEMENT_EOF'\n{}\nPROOFSTORM_MANAGEMENT_EOF\ncat /tmp/management-prefix /workspace/{dockerfile} > /tmp/management-dockerfile\ncat >> /tmp/management-dockerfile <<'PROOFSTORM_MANAGEMENT_EOF'\n{}\nPROOFSTORM_MANAGEMENT_EOF\nmv /tmp/management-dockerfile /workspace/{dockerfile}", include_str!("candidate_profiles/cdk-mint-workspace-v6.sh"), include_str!("candidate_profiles/cdk-management-v4.Dockerfile"), include_str!("candidate_profiles/cdk-mint-runtime-v7.Dockerfile")), vec!["Builds the CDK mint image using upstream Dockerfile.ldk-node with LDK and PostgreSQL enabled alongside the default backends. Cell links and configuration select linked and embedded backends; PostgreSQL servers stay separate. Uses the full frozen workspace, bindings and lockfiles; requires locked Cargo dependencies. Builds cdk-mint-cli before the daemon with two management-client Cargo jobs and one daemon Cargo job to bound memory, then adds wget and CA certificates required by readiness and Bitcoin dependency checks. Checks daemon, management client and wget commands before publishing.".into()]),
     };
     // A cold ARM64 release build of the baseline CDK CLI exceeded the original
     // two-core, 30-minute budget. Keep that budget in saved v1 records; new Rust
@@ -95,7 +95,7 @@ pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildPro
             BTreeSet::new()
         },
         version: match implementation {
-            "cdk" | "cdk-ldk" | "cdk-bdk" => 8,
+            "cdk" => 9,
             "cdk-cli-wallet" => 3,
             "nutshell" | "nutshell-wallet" => 2,
             _ => 1,

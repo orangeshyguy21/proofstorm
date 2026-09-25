@@ -1,6 +1,3 @@
-// Retained for exact 0.18.0 locks and archived catalog entries.
-const LEGACY_CDK_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:6cbed49864bf15139a474b9dbec3248f35f45143f460f51eb97280c24b8a520a";
-
 // Shared 0.18.1 daemon with LDK, BDK and PostgreSQL support.
 pub const CDK_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df";
 
@@ -175,6 +172,37 @@ pub struct CatalogRuntimeEndpoint {
     pub controls: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub limitations: Vec<String>,
+    /// Present only on components whose effective configuration selects it,
+    /// such as an embedded backend that is optional in one image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires: Option<CatalogEndpointCondition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogEndpointCondition {
+    pub config_field: String,
+    pub equals: String,
+}
+
+impl CatalogRuntimeEndpoint {
+    fn requiring(mut self, config_field: &str, equals: &str) -> Self {
+        self.requires = Some(CatalogEndpointCondition {
+            config_field: config_field.into(),
+            equals: equals.into(),
+        });
+        self
+    }
+
+    /// Whether this endpoint exists for a component with this effective
+    /// configuration. Omitted fields never satisfy a condition.
+    #[must_use]
+    pub fn applies_to(&self, config: &BTreeMap<String, Value>) -> bool {
+        self.requires.as_ref().is_none_or(|condition| {
+            config.get(&condition.config_field).and_then(Value::as_str)
+                == Some(condition.equals.as_str())
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -465,17 +493,22 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
             "cdk",
             backends,
             ComponentKind::Mint,
-            "CDK Cashu mint",
+            "CDK Cashu mint: linked LND/CLN or embedded LDK Node Lightning, optional embedded BDK on-chain, optional NUT-21/22 auth",
             adapter_version,
-            "0.18.0",
+            "0.18.1",
             ReleaseChannel::Stable,
-            LEGACY_CDK_MINT_IMAGE,
+            CDK_MINT_IMAGE,
             BTreeSet::from([
                 CatalogFeature::NativeCli,
+                CatalogFeature::Regtest,
                 CatalogFeature::PersistentState,
                 CatalogFeature::Bolt11,
+                CatalogFeature::Bolt12,
+                CatalogFeature::Onchain,
                 CatalogFeature::Sqlite,
                 CatalogFeature::Postgres,
+                CatalogFeature::ClearAuth,
+                CatalogFeature::BlindAuth,
             ]),
             vec![
                 dependency(
@@ -484,104 +517,41 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
                     &["0.20.4-beta", "0.21.3-beta"],
                 ),
                 dependency(LinkKind::PaymentBackend, "cln", &["26.06.7"]),
-                dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
-            ],
-            support_matrix(
-                &[StorageBackend::Sqlite, StorageBackend::Postgres],
-                &[PaymentMethod::Bolt11],
-                &["cln", "lnd"],
-                &["sat"],
-                &[
-                    payment_binding(
-                        PaymentMethod::Bolt11,
-                        "sat",
-                        "lnd",
-                        &["0.20.4-beta", "0.21.3-beta"],
-                    ),
-                    payment_binding(PaymentMethod::Bolt11, "sat", "cln", &["26.06.7"]),
-                ],
-                &[AuthenticationMode::Unauthenticated],
-                vec![version_support("nutshell-wallet", &["0.20.3"])],
-            ),
-            vec![ControlClass::Target],
-        ),
-        catalog_entry(
-            amd64,
-            "cdk-ldk",
-            backends,
-            ComponentKind::Mint,
-            "CDK Cashu mint with embedded LDK Node",
-            adapter_version,
-            "0.18.0",
-            ReleaseChannel::Stable,
-            LEGACY_CDK_MINT_IMAGE,
-            BTreeSet::from([
-                CatalogFeature::NativeCli,
-                CatalogFeature::Regtest,
-                CatalogFeature::PersistentState,
-                CatalogFeature::Bolt11,
-                CatalogFeature::Bolt12,
-                CatalogFeature::Sqlite,
-                CatalogFeature::Postgres,
-            ]),
-            vec![
                 dependency(LinkKind::ChainBackend, "bitcoin-core", &["31.1"]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
+                dependency(LinkKind::AuthenticationBackend, "keycloak", &["25.0.6"]),
             ],
             with_embedded_payment_bindings(
                 support_matrix(
                     &[StorageBackend::Sqlite, StorageBackend::Postgres],
-                    &[PaymentMethod::Bolt11, PaymentMethod::Bolt12],
-                    &["ldk-node"],
+                    &[
+                        PaymentMethod::Bolt11,
+                        PaymentMethod::Bolt12,
+                        PaymentMethod::Onchain,
+                    ],
+                    &["bdk", "cln", "ldk-node", "lnd"],
                     &["sat"],
-                    &[],
-                    &[AuthenticationMode::Unauthenticated],
-                    vec![version_support("nutshell-wallet", &["0.20.3"])],
+                    &[
+                        payment_binding(
+                            PaymentMethod::Bolt11,
+                            "sat",
+                            "lnd",
+                            &["0.20.4-beta", "0.21.3-beta"],
+                        ),
+                        payment_binding(PaymentMethod::Bolt11, "sat", "cln", &["26.06.7"]),
+                    ],
+                    &[
+                        AuthenticationMode::Unauthenticated,
+                        AuthenticationMode::Nut21Clear,
+                        AuthenticationMode::Nut22Blind,
+                    ],
+                    vec![version_support("nutshell-wallet", &["0.20.3", "0.21.0"])],
                 ),
                 &[
                     embedded_payment_binding(PaymentMethod::Bolt11, "sat", "ldk-node"),
                     embedded_payment_binding(PaymentMethod::Bolt12, "sat", "ldk-node"),
+                    embedded_payment_binding(PaymentMethod::Onchain, "sat", "bdk"),
                 ],
-            ),
-            vec![ControlClass::Target],
-        ),
-        catalog_entry(
-            amd64,
-            "cdk-bdk",
-            backends,
-            ComponentKind::Mint,
-            "CDK Cashu mint with embedded BDK on-chain backend",
-            adapter_version,
-            "0.18.0",
-            ReleaseChannel::Stable,
-            LEGACY_CDK_MINT_IMAGE,
-            BTreeSet::from([
-                CatalogFeature::NativeCli,
-                CatalogFeature::Regtest,
-                CatalogFeature::PersistentState,
-                CatalogFeature::Onchain,
-                CatalogFeature::Sqlite,
-                CatalogFeature::Postgres,
-            ]),
-            vec![
-                dependency(LinkKind::ChainBackend, "bitcoin-core", &["31.1"]),
-                dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
-            ],
-            with_embedded_payment_bindings(
-                support_matrix(
-                    &[StorageBackend::Sqlite, StorageBackend::Postgres],
-                    &[PaymentMethod::Onchain],
-                    &["bdk"],
-                    &["sat"],
-                    &[],
-                    &[AuthenticationMode::Unauthenticated],
-                    vec![],
-                ),
-                &[embedded_payment_binding(
-                    PaymentMethod::Onchain,
-                    "sat",
-                    "bdk",
-                )],
             ),
             vec![ControlClass::Target],
         ),
@@ -762,17 +732,12 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
         if matches!(entry.id.as_str(), "nutshell" | "nutshell-wallet") {
             entry.features.insert(CatalogFeature::NativeCliEntrypoints);
         }
-        if matches!(
-            entry.id.as_str(),
-            "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell"
-        ) {
+        if matches!(entry.id.as_str(), "cdk" | "nutshell") {
             entry.features.insert(CatalogFeature::MintManagementRpc);
         }
         let encoded = match entry.id.as_str() {
             "bitcoin-core" => include_str!("../../../docker/bitcoin/bitcoin-31.1-provenance.json"),
-            "cdk" | "cdk-bdk" | "cdk-ldk" => {
-                include_str!("../../../docker/mint/cdk-ldk-management-provenance.json")
-            }
+            "cdk" => include_str!("../../../docker/mint/cdk-0.18.1-provenance.json"),
             _ => continue,
         };
         let provenance: BuildProvenance =
@@ -791,12 +756,6 @@ fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
     let mut previous = Vec::new();
     for entry in entries.iter_mut() {
         let (version, image, encoded, lifecycle) = match entry.id.as_str() {
-            "cdk" | "cdk-ldk" | "cdk-bdk" => (
-                "0.18.1",
-                CDK_MINT_IMAGE,
-                include_str!("../../../docker/mint/cdk-0.18.1-provenance.json"),
-                SupportLifecycle::Deprecated,
-            ),
             "cdk-cli-wallet" => {
                 let (image, provenance) = crate::wallet_builds::cdk_0181(amd64);
                 ("0.18.1", image, provenance, SupportLifecycle::Deprecated)
@@ -818,7 +777,7 @@ fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
         if entry.id == "nutshell" {
             entry.protocol_action_adapter_version = Some("nutshell-mint/0.21/v1".into());
         }
-        if entry.kind == ComponentKind::Mint && entry.id != "cdk-bdk" {
+        if entry.kind == ComponentKind::Mint {
             entry.support_matrix.compatible_wallet_adapters =
                 vec![version_support("nutshell-wallet", &["0.20.3", "0.21.0"])];
         }
@@ -1419,6 +1378,7 @@ fn runtime_endpoint(
             .iter()
             .map(|limitation| (*limitation).into())
             .collect(),
+        requires: None,
     }
 }
 
@@ -1464,17 +1424,13 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
             &["component_logs", "node_restart", "reachability_oracle"],
             &["live lightning-cli uses --network=regtest --lightning-dir=/home/cln/.lightning"],
         )],
-        "cdk" | "nutshell" => vec![runtime_endpoint(
+        "nutshell" => vec![runtime_endpoint(
             "component",
             "mint",
             &["component_logs", "reachability_oracle"],
-            &[if implementation == "cdk" {
-                CDK_MANAGEMENT
-            } else {
-                NUTSHELL_MANAGEMENT
-            }],
+            &[NUTSHELL_MANAGEMENT],
         )],
-        "cdk-ldk" => vec![
+        "cdk" => vec![
             runtime_endpoint(
                 "component",
                 "mint",
@@ -1488,16 +1444,15 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
                 &[
                     "the embedded LDK backend supports payments but its installed driver does not yet expose peer or channel controls",
                 ],
-            ),
-        ],
-        "cdk-bdk" => vec![
-            runtime_endpoint("component", "mint", OBSERVE, &[CDK_MANAGEMENT]),
+            )
+            .requiring("embedded_lightning", "ldk-node"),
             runtime_endpoint(
                 "bdk",
                 "onchain",
                 &[],
                 &["the embedded BDK backend has no direct runtime controls"],
-            ),
+            )
+            .requiring("embedded_onchain", "bdk"),
         ],
         "cocod-wallet" => vec![runtime_endpoint(
             "component",
@@ -1768,7 +1723,7 @@ mod tests {
 
     #[test]
     fn cdk_support_floor_rejects_active_seventeen_but_allows_archived_entries() {
-        for implementation in ["cdk", "cdk-ldk", "cdk-bdk", "cdk-cli-wallet"] {
+        for implementation in ["cdk", "cdk-cli-wallet"] {
             let mut entries = default_catalog().entries.clone();
             let mut historical = entries
                 .iter()
@@ -1919,11 +1874,11 @@ mod tests {
     fn management_clients_have_matching_build_provenance() {
         use sha2::{Digest, Sha256};
         let recipe = include_bytes!("../../../docker/mint/Dockerfile.cdk-0.18.1");
-        for id in ["cdk", "cdk-ldk", "cdk-bdk"] {
+        {
             let entry = default_catalog()
                 .entries
                 .iter()
-                .find(|entry| entry.id == id)
+                .find(|entry| entry.id == "cdk")
                 .unwrap();
             let provenance = entry.build_provenance.as_ref().unwrap();
             assert_eq!(
@@ -2019,8 +1974,8 @@ mod tests {
     )]
     fn catalog_support_summary_is_exact_and_invariants_fail_closed() {
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 23);
-        assert_eq!(catalog.implementations.len(), 16);
+        assert_eq!(catalog.entries.len(), 18);
+        assert_eq!(catalog.implementations.len(), 14);
         let lnd = catalog
             .implementations
             .iter()
@@ -2072,8 +2027,8 @@ mod tests {
         let mut unsupported_claim = catalog.entries.clone();
         unsupported_claim
             .iter_mut()
-            .find(|entry| entry.id == "cdk" && entry.version == "0.18.0")
-            .expect("CDK entry")
+            .find(|entry| entry.id == "nutshell")
+            .expect("Nutshell entry")
             .support_matrix
             .payment_methods
             .insert(PaymentMethod::Bolt12);
@@ -2084,12 +2039,13 @@ mod tests {
         );
 
         let mut false_cross_product = catalog.entries.clone();
-        let cdk = false_cross_product
+        let nutshell = false_cross_product
             .iter_mut()
-            .find(|entry| entry.id == "cdk" && entry.version == "0.18.0")
-            .expect("CDK entry");
-        cdk.features.insert(CatalogFeature::Bolt12);
-        cdk.support_matrix
+            .find(|entry| entry.id == "nutshell")
+            .expect("Nutshell entry");
+        nutshell.features.insert(CatalogFeature::Bolt12);
+        nutshell
+            .support_matrix
             .payment_methods
             .insert(PaymentMethod::Bolt12);
         assert!(
@@ -2099,22 +2055,22 @@ mod tests {
         );
 
         let mut unsupported_by_target = catalog.entries.clone();
-        let cdk = unsupported_by_target
+        let nutshell = unsupported_by_target
             .iter_mut()
-            .find(|entry| entry.id == "cdk")
-            .expect("CDK entry");
-        cdk.features.insert(CatalogFeature::Bolt12);
-        cdk.support_matrix.payment_methods = [PaymentMethod::Bolt12].into();
-        cdk.support_matrix.payment_backends = ["lnd".into()].into();
-        let mut binding = cdk
+            .find(|entry| entry.id == "nutshell")
+            .expect("Nutshell entry");
+        nutshell.features.insert(CatalogFeature::Bolt12);
+        nutshell.support_matrix.payment_methods = [PaymentMethod::Bolt12].into();
+        nutshell.support_matrix.payment_backends = ["lnd".into()].into();
+        let mut binding = nutshell
             .support_matrix
             .payment_bindings
             .iter()
             .find(|binding| binding.backend.implementation == "lnd")
             .cloned()
-            .expect("CDK payment binding");
+            .expect("Nutshell payment binding");
         binding.method = PaymentMethod::Bolt12;
-        cdk.support_matrix.payment_bindings = [binding].into();
+        nutshell.support_matrix.payment_bindings = [binding].into();
         assert!(
             CatalogResponse::try_new(unsupported_by_target)
                 .expect_err("target backend must support the exact tuple")
@@ -2141,14 +2097,18 @@ mod tests {
     fn promoted_releases_keep_exact_historical_entries_and_current_defaults() {
         for platform in [CatalogPlatform::LinuxArm64, CatalogPlatform::LinuxAmd64] {
             let catalog = catalog_for_platform(platform);
-            for id in [
-                "cdk",
-                "cdk-ldk",
-                "cdk-bdk",
-                "cdk-cli-wallet",
-                "nutshell",
-                "nutshell-wallet",
-            ] {
+            let cdk_versions = catalog
+                .entries
+                .iter()
+                .filter(|entry| entry.id == "cdk")
+                .map(|entry| entry.version.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                cdk_versions,
+                ["0.18.1"],
+                "the CDK mint has one current entry"
+            );
+            for id in ["cdk-cli-wallet", "nutshell", "nutshell-wallet"] {
                 let cdk = id.starts_with("cdk");
                 let old_version = if cdk { "0.18.0" } else { "0.20.3" };
                 let version = if cdk { "0.18.1" } else { "0.21.0" };
@@ -2230,17 +2190,19 @@ mod qualification_support_tests {
                         .any(|dependency| dependency.link_kind == LinkKind::AuthenticationBackend)
                 );
             }
-            let mut bdk = catalog
+            let mut onchain_only = catalog
                 .entries
                 .iter()
-                .find(|entry| entry.id == "cdk-bdk" && entry.version == "0.18.1")
+                .find(|entry| entry.id == "cdk")
                 .unwrap()
                 .clone();
-            assert!(bdk.support_matrix.compatible_wallet_adapters.is_empty());
-            bdk.support_matrix
-                .compatible_wallet_adapters
-                .push(version_support("nutshell-wallet", &["0.21.0"]));
-            assert!(validate_wallet_support(&bdk, &catalog.entries).is_err());
+            onchain_only.support_matrix.payment_bindings.clear();
+            onchain_only
+                .support_matrix
+                .embedded_payment_bindings
+                .retain(|binding| binding.method == PaymentMethod::Onchain);
+            onchain_only.support_matrix.payment_methods = [PaymentMethod::Onchain].into();
+            assert!(validate_wallet_support(&onchain_only, &catalog.entries).is_err());
         }
     }
 }

@@ -53,8 +53,6 @@ static COMPONENT_RENDERERS: LazyLock<BTreeMap<&'static str, ComponentRenderer>> 
             ("workspace", render_workspace_component as ComponentRenderer),
             ("bitcoin-core", render_bitcoin_component),
             ("cdk", render_cdk_component),
-            ("cdk-ldk", render_cdk_component),
-            ("cdk-bdk", render_cdk_component),
             ("cln", render_cln_component),
             ("keycloak", render_keycloak_component),
             ("lnd", render_lnd_component),
@@ -1451,8 +1449,9 @@ pub fn render_postgres_component(
         "metadata": metadata(&secret_name, &plan.instance_key, &namespace, Some(&plan.component_id)),
         "type": "Opaque",
         "stringData": {
-            "POSTGRES_USER": "proofstorm",
-            "POSTGRES_DB": config.database_name
+            "POSTGRES_USER": POSTGRES_OWNER,
+            // Maintenance database only; linked components create their own.
+            "POSTGRES_DB": "postgres"
         }
     }))?);
     rendered.services.push(resource(service_from_plan(plan))?);
@@ -1486,7 +1485,7 @@ pub fn render_postgres_component(
                         "readinessProbe": {
                             // The entrypoint's temporary bootstrap server only
                             // listens on a Unix socket. Consumers need TCP.
-                            "exec": {"command": ["pg_isready", "-h", "127.0.0.1", "-p", postgres_port.to_string(), "-U", "proofstorm", "-d", config.database_name]},
+                            "exec": {"command": ["pg_isready", "-h", "127.0.0.1", "-p", postgres_port.to_string(), "-U", POSTGRES_OWNER, "-d", "postgres"]},
                             "periodSeconds": 3,
                             "failureThreshold": 40
                         },
@@ -1529,30 +1528,12 @@ pub fn render_keycloak_component(
             "Keycloak plan does not carry Keycloak configuration".into(),
         ));
     };
-    let database = plan_linked_target(plan, LinkKind::DatabaseBackend)?;
-    let database_link = plan
-        .relevant_links
-        .iter()
-        .find(|link| link.kind == LinkKind::DatabaseBackend && link.from == plan.component_id)
-        .ok_or_else(|| AdapterError::MissingLink {
-            component: plan.component_id.clone(),
-            link: LinkKind::DatabaseBackend,
-        })?;
-    if !matches!(
-        database_link.binding,
-        Some(DependencyBinding::Database {
-            role: DatabaseRole::Primary
-        })
-    ) || database.backend_id != "postgresql"
-        || database.kind != ComponentKind::Database
-    {
-        return Err(AdapterError::InvalidPlan(format!(
+    let database = linked_postgres_database(plan, DatabaseRole::Primary)?.ok_or_else(|| {
+        AdapterError::InvalidPlan(format!(
             "Keycloak component {:?} requires one primary PostgreSQL binding",
             plan.component_id
-        )));
-    }
-    let database_port = target_port(database, "postgres")?;
-    let database_secret = postgres_secret_name(&database.component_id);
+        ))
+    })?;
     let http_port = target_port(&plan.target_descriptor, "http")?;
     let namespace = instance_namespace(&plan.instance_key);
     let secret_name = format!("{}-credentials", plan.component_id);
@@ -1575,21 +1556,17 @@ pub fn render_keycloak_component(
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
                 "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key),
-                "initContainers": [{
-                    "name": "wait-for-database", "image": PROBER_IMAGE, "imagePullPolicy": "IfNotPresent",
-                    "command": ["sh", "-ec", include_str!("../drivers/wait_for_database.sh"), "wait-for-database", database.component_id, database_port.to_string()],
-                    "securityContext": container_security()
-                }],
+                "initContainers": [database.ensure_container("ensure-database")],
                 "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "args": ["start-dev", "--import-realm"],
                     "env": [
                         {"name": "KC_DB", "value": "postgres"},
-                        {"name": "KC_DB_URL_HOST", "value": database.component_id},
-                        {"name": "KC_DB_URL_PORT", "value": database_port.to_string()},
-                        {"name": "KC_DB_URL_DATABASE", "valueFrom": {"secretKeyRef": {"name": database_secret, "key": "POSTGRES_DB"}}},
-                        {"name": "KC_DB_USERNAME", "valueFrom": {"secretKeyRef": {"name": database_secret, "key": "POSTGRES_USER"}}},
-                        {"name": "KC_DB_PASSWORD", "valueFrom": {"secretKeyRef": {"name": database_secret, "key": "POSTGRES_PASSWORD"}}},
+                        {"name": "KC_DB_URL_HOST", "value": database.host},
+                        {"name": "KC_DB_URL_PORT", "value": database.port.to_string()},
+                        {"name": "KC_DB_URL_DATABASE", "value": database.database},
+                        {"name": "KC_DB_USERNAME", "value": POSTGRES_OWNER},
+                        {"name": "KC_DB_PASSWORD", "valueFrom": {"secretKeyRef": {"name": database.secret, "key": "POSTGRES_PASSWORD"}}},
                         {"name": "KC_HOSTNAME", "value": format!("http://{}:{http_port}", plan.component_id)},
                         {"name": "KC_HOSTNAME_STRICT", "value": "false"},
                         {"name": "KC_HTTP_ENABLED", "value": "true"},
@@ -1854,9 +1831,7 @@ pub fn render_cln_component(
 pub fn render_cdk_component(
     plan: &ComponentPlanContract,
 ) -> Result<RenderedComponent, AdapterError> {
-    if plan.kind != ComponentKind::Mint
-        || !matches!(plan.backend_id.as_str(), "cdk" | "cdk-ldk" | "cdk-bdk")
-    {
+    if plan.kind != ComponentKind::Mint || plan.backend_id != "cdk" {
         return Err(AdapterError::InvalidPlan(format!(
             "backend {:?} with kind {:?} is not a CDK mint runtime",
             plan.backend_id, plan.kind
@@ -1868,11 +1843,7 @@ pub fn render_cdk_component(
         .get("http")
         .copied()
         .ok_or_else(|| AdapterError::InvalidPlan("cdk has no HTTP service port".into()))?;
-    let (("cdk", EffectiveComponentConfig::Cdk(config))
-    | ("cdk-ldk", EffectiveComponentConfig::CdkLdk(config))
-    | ("cdk-bdk", EffectiveComponentConfig::CdkBdk(config))) =
-        (&plan.backend_id[..], &plan.effective_config)
-    else {
+    let EffectiveComponentConfig::Cdk(config) = &plan.effective_config else {
         return Err(AdapterError::InvalidPlan(
             "CDK plan does not carry its matching typed mint configuration".into(),
         ));
@@ -2008,21 +1979,22 @@ fn cdk_runtime_resources(
     secret_name: &str,
     data_name: &str,
 ) -> Result<CdkRuntimeResources, AdapterError> {
-    let database_secret = primary_database_secret(plan)?;
-    let database_config = if database_secret.is_some() {
+    let database = linked_postgres_database(plan, DatabaseRole::Primary)?;
+    let database_config = if database.is_some() {
         "[database]\nengine = \"postgres\"\n\n[database.postgres]\nurl = \"env:CDK_MINTD_POSTGRES_URL\"\ntls_mode = \"disable\"\nmax_connections = 20\nconnection_timeout_seconds = 10\n"
     } else {
         "[database]\nengine = \"sqlite\"\n"
     };
     let mut env = vec![
         json!({"name": "CDK_MINTD_WORK_DIR", "value": "/app/data"}),
-        json!({"name": "CDK_MINTD_DATABASE", "value": if database_secret.is_some() { "postgres" } else { "sqlite" }}),
+        json!({"name": "CDK_MINTD_DATABASE", "value": if database.is_some() { "postgres" } else { "sqlite" }}),
     ];
-    if let Some(database_secret) = &database_secret {
-        env.push(json!({
-            "name": "CDK_MINTD_POSTGRES_URL",
-            "valueFrom": {"secretKeyRef": {"name": database_secret, "key": "DATABASE_URL"}}
-        }));
+    if let Some(database) = &database {
+        env.extend(database.url_env("CDK_MINTD_POSTGRES_URL"));
+    }
+    let (auth_config, auth_database, identity) = cdk_auth_config(plan, config, database.is_some())?;
+    if let Some(auth_database) = &auth_database {
+        env.extend(auth_database.url_env("CDK_MINTD_AUTH_POSTGRES_URL"));
     }
     let mut volume_mounts = vec![
         json!({"name": "config", "mountPath": "/config", "readOnly": true}),
@@ -2037,7 +2009,15 @@ fn cdk_runtime_resources(
     let mut ports = vec![json!({"name": "http", "containerPort": http_port})];
     let grpc_target = processor::grpc_target(plan)?;
     let mut lightning_target = None;
-    let native_config = if let Some(target) = grpc_target {
+    let chain = if config.needs_chain_backend() {
+        let chain = plan_linked_target(plan, LinkKind::ChainBackend)?;
+        Some((chain, target_port(chain, "rpc")?))
+    } else {
+        None
+    };
+    // Sections compose: at most one Lightning path (linked processor, linked
+    // node or embedded LDK), plus embedded BDK on-chain when enabled.
+    let lightning_section = if let Some(target) = grpc_target {
         volume_mounts.push(processor::tls_mount(
             "payment-processor",
             "/payment-processor/tls",
@@ -2047,37 +2027,23 @@ fn cdk_runtime_resources(
             &target.component_id,
             "client",
         ));
-        processor::mint_config(plan, config, http_port, target, database_config)?
-    } else if plan.backend_id == "cdk-ldk" {
-        let chain = plan_linked_target(plan, LinkKind::ChainBackend)?;
-        let chain_rpc = target_port(chain, "rpc")?;
+        Some(processor::payment_backend_config(config, target)?)
+    } else if config.embeds_ldk() {
+        let (chain, chain_rpc) = chain.ok_or_else(|| {
+            AdapterError::InvalidPlan("embedded LDK Node requires a chain backend".into())
+        })?;
         let p2p_port = plan
             .target_descriptor
             .ports
             .get("p2p")
             .copied()
-            .ok_or_else(|| AdapterError::InvalidPlan("cdk-ldk has no P2P service port".into()))?;
+            .ok_or_else(|| {
+                AdapterError::InvalidPlan("embedded LDK Node has no P2P service port".into())
+            })?;
         ports.push(json!({"name": "p2p", "containerPort": p2p_port}));
-        mint_ldk_config(
-            &plan.component_id,
-            http_port,
-            chain,
-            chain_rpc,
-            p2p_port,
-            config,
-            database_config,
-        )
-    } else if plan.backend_id == "cdk-bdk" {
-        let chain = plan_linked_target(plan, LinkKind::ChainBackend)?;
-        let chain_rpc = target_port(chain, "rpc")?;
-        mint_bdk_config(
-            &plan.component_id,
-            http_port,
-            chain,
-            chain_rpc,
-            config,
-            database_config,
-        )
+        Some(ldk_payment_backend_config(
+            chain, chain_rpc, p2p_port, config,
+        ))
     } else {
         let payment_mounts = plan
             .execution_context
@@ -2085,60 +2051,83 @@ fn cdk_runtime_resources(
             .iter()
             .filter(|mount| matches!(mount.name.as_str(), "lnd" | "cln"))
             .collect::<Vec<_>>();
-        let [payment_mount] = payment_mounts.as_slice() else {
+        match payment_mounts.as_slice() {
+            [] => None,
+            [payment_mount] => {
+                let lightning = plan_execution_target(plan, &payment_mount.name)?;
+                lightning_target = Some(lightning);
+                let credential = plan_execution_credential(plan, &payment_mount.name)?;
+                if lightning.backend_id != payment_mount.name
+                    || credential.source_component_id != lightning.component_id
+                {
+                    return Err(AdapterError::InvalidPlan(format!(
+                        "component {:?} compiled payment target and credential identities disagree",
+                        plan.component_id
+                    )));
+                }
+                volume_mounts.push(json!({
+                    "name": payment_mount.name,
+                    "mountPath": payment_mount.mount_path,
+                    "readOnly": payment_mount.read_only
+                }));
+                volumes.push(json!({
+                    "name": payment_mount.name,
+                    "persistentVolumeClaim": {"claimName": credential.claim_name}
+                }));
+                Some(linked_payment_backend_config(
+                    lightning,
+                    &payment_mount.name,
+                    &payment_mount.mount_path,
+                    config,
+                )?)
+            }
+            _ => {
+                return Err(AdapterError::InvalidPlan(format!(
+                    "cdk_simultaneous_payment_backends_not_supported: component {:?} requires at most one compiled native payment backend, found {:?}",
+                    plan.component_id,
+                    payment_mounts
+                        .iter()
+                        .map(|mount| mount.name.as_str())
+                        .collect::<Vec<_>>()
+                )));
+            }
+        }
+    };
+    let onchain_section = if config.embeds_bdk() {
+        let (chain, chain_rpc) = chain.ok_or_else(|| {
+            AdapterError::InvalidPlan("embedded BDK requires a chain backend".into())
+        })?;
+        Some(bdk_onchain_config(chain, chain_rpc, config))
+    } else {
+        None
+    };
+    let payment_section = match (lightning_section, &onchain_section) {
+        (Some(section), _) => section,
+        // CDK requires a payment_backend table; on-chain only mints declare none.
+        (None, Some(_)) => no_lightning_backend_config(config),
+        (None, None) => {
             return Err(AdapterError::InvalidPlan(format!(
-                "cdk_simultaneous_payment_backends_not_supported: component {:?} requires exactly one compiled native payment backend, found {:?}",
-                plan.component_id,
-                payment_mounts
-                    .iter()
-                    .map(|mount| mount.name.as_str())
-                    .collect::<Vec<_>>()
-            )));
-        };
-        let lightning = plan_execution_target(plan, &payment_mount.name)?;
-        lightning_target = Some(lightning);
-        let credential = plan_execution_credential(plan, &payment_mount.name)?;
-        if lightning.backend_id != payment_mount.name
-            || credential.source_component_id != lightning.component_id
-        {
-            return Err(AdapterError::InvalidPlan(format!(
-                "component {:?} compiled payment target and credential identities disagree",
+                "component {:?} has no linked or embedded payment backend",
                 plan.component_id
             )));
         }
-        volume_mounts.push(json!({
-            "name": payment_mount.name,
-            "mountPath": payment_mount.mount_path,
-            "readOnly": payment_mount.read_only
-        }));
-        volumes.push(json!({
-            "name": payment_mount.name,
-            "persistentVolumeClaim": {"claimName": credential.claim_name}
-        }));
-        mint_config(
-            &plan.component_id,
-            http_port,
-            lightning,
-            &payment_mount.name,
-            &payment_mount.mount_path,
-            config,
-            database_config,
-        )?
     };
+    let native_config = format!(
+        "{}{payment_section}{}\n{database_config}{auth_config}",
+        mint_common_config(&plan.component_id, http_port, config),
+        onchain_section
+            .map(|section| format!("\n{section}"))
+            .unwrap_or_default()
+    );
     let mut init_containers = Vec::new();
-    if database_secret.is_some() {
-        let database = plan_linked_target(plan, LinkKind::DatabaseBackend)?;
-        let port = target_port(database, "postgres")?;
-        init_containers.push(json!({
-            "name": "wait-for-database",
-            "image": PROBER_IMAGE,
-            "imagePullPolicy": "IfNotPresent",
-            "command": [
-                "sh", "-ec", include_str!("../drivers/wait_for_database.sh"),
-                "wait-for-database", database.component_id, port.to_string()
-            ],
-            "securityContext": container_security()
-        }));
+    if let Some(database) = &database {
+        init_containers.push(database.ensure_container("ensure-database"));
+    }
+    if let Some(database) = &auth_database {
+        init_containers.push(database.ensure_container("ensure-auth-database"));
+    }
+    if let Some(identity) = identity {
+        init_containers.push(oidc_wait_container(identity)?);
     }
     if let Some(target) = grpc_target {
         init_containers.push(processor::wait_for_processor(plan, target)?);
@@ -2160,9 +2149,7 @@ fn cdk_runtime_resources(
             "securityContext": container_security()
         }));
     }
-    if matches!(plan.backend_id.as_str(), "cdk-ldk" | "cdk-bdk") {
-        let chain = plan_linked_target(plan, LinkKind::ChainBackend)?;
-        let chain_rpc = target_port(chain, "rpc")?;
+    if let Some((chain, chain_rpc)) = chain {
         let readiness_command = format!(
             "auth=$(printf 'proofstorm:%s' \"$(cat /mint-secrets/bitcoin-rpc-password)\" | base64); for attempt in $(seq 1 120); do response=$(wget -q -T 2 -O - --header \"Authorization: Basic $auth\" --header 'Content-Type: application/json' --post-data '{{\"jsonrpc\":\"1.0\",\"id\":\"proofstorm-readiness\",\"method\":\"getblockchaininfo\",\"params\":[]}}' http://{}:{}/ 2>/dev/null) || true; if printf '%s' \"$response\" | grep -q '\"error\":[[:space:]]*null'; then exit 0; fi; sleep 1; done; echo 'Bitcoin RPC dependency did not become ready before CDK wallet initialization' >&2; exit 1",
             chain.component_id, chain_rpc
@@ -2195,46 +2182,75 @@ fn cdk_runtime_resources(
     })
 }
 
-fn primary_database_secret(plan: &ComponentPlanContract) -> Result<Option<String>, AdapterError> {
+/// One database this component owns on a linked `PostgreSQL` server.
+struct PostgresDatabase {
+    host: String,
+    port: u16,
+    database: String,
+    secret: String,
+    image: String,
+}
+
+const POSTGRES_OWNER: &str = "proofstorm";
+
+impl PostgresDatabase {
+    /// The owner password, then a URL expanding it. Kubernetes resolves `$(VAR)`
+    /// only from variables declared earlier in the same list, so keep the order.
+    fn url_env(&self, name: &str) -> [Value; 2] {
+        let password = format!("{name}_PASSWORD");
+        [
+            json!({"name": password, "valueFrom": {"secretKeyRef": {"name": self.secret, "key": "POSTGRES_PASSWORD"}}}),
+            json!({"name": name, "value": format!(
+                "postgresql://{POSTGRES_OWNER}:$({password})@{}:{}/{}",
+                self.host, self.port, self.database
+            )}),
+        ]
+    }
+
+    /// Init step that waits for the server and creates this component's database.
+    fn ensure_container(&self, name: &str) -> Value {
+        json!({
+            "name": name,
+            "image": self.image,
+            "imagePullPolicy": "IfNotPresent",
+            "command": [
+                "sh", "-ec", include_str!("../drivers/ensure_database.sh"),
+                name, self.host, self.port.to_string(), self.database
+            ],
+            "env": [{"name": "PROOFSTORM_POSTGRES_PASSWORD", "valueFrom": {"secretKeyRef": {"name": self.secret, "key": "POSTGRES_PASSWORD"}}}],
+            "securityContext": container_security()
+        })
+    }
+}
+
+/// Resolve the one `PostgreSQL` database bound to this component in `role`.
+fn linked_postgres_database(
+    plan: &ComponentPlanContract,
+    role: DatabaseRole,
+) -> Result<Option<PostgresDatabase>, AdapterError> {
     let links = plan
         .relevant_links
         .iter()
-        .filter(|link| link.kind == LinkKind::DatabaseBackend && link.from == plan.component_id)
-        .collect::<Vec<_>>();
-    if links.iter().any(|link| {
-        matches!(
-            link.binding,
-            Some(DependencyBinding::Database {
-                role: DatabaseRole::Authentication
-            })
-        )
-    }) {
-        return Err(AdapterError::InvalidPlan(format!(
-            "component {:?} requests an authentication database, which backend {:?} has not enabled",
-            plan.component_id, plan.backend_id
-        )));
-    }
-    let primary = links
-        .iter()
         .filter(|link| {
-            matches!(
-                link.binding,
-                Some(DependencyBinding::Database {
-                    role: DatabaseRole::Primary
-                })
-            )
+            link.kind == LinkKind::DatabaseBackend
+                && link.from == plan.component_id
+                && matches!(
+                    &link.binding,
+                    Some(DependencyBinding::Database { role: bound, .. }) if *bound == role
+                )
         })
         .collect::<Vec<_>>();
-    let Some(link) = primary.first() else {
-        return Ok(None);
+    let link = match links.as_slice() {
+        [] => return Ok(None),
+        [link] => *link,
+        _ => {
+            return Err(AdapterError::InvalidPlan(format!(
+                "component {:?} has {} {role:?} database bindings",
+                plan.component_id,
+                links.len()
+            )));
+        }
     };
-    if primary.len() != 1 {
-        return Err(AdapterError::InvalidPlan(format!(
-            "component {:?} has {} primary database bindings",
-            plan.component_id,
-            primary.len()
-        )));
-    }
     let target = plan
         .linked_targets
         .get(&link.id)
@@ -2248,7 +2264,24 @@ fn primary_database_secret(plan: &ComponentPlanContract) -> Result<Option<String
             plan.component_id, link.id
         )));
     }
-    Ok(Some(postgres_secret_name(&target.component_id)))
+    let image = proofstorm_core::default_catalog()
+        .entries
+        .iter()
+        .find(|entry| entry.id == "postgresql" && entry.version == target.version)
+        .map(|entry| entry.image.clone())
+        .ok_or_else(|| {
+            AdapterError::InvalidPlan(format!(
+                "PostgreSQL version {:?} is not installed",
+                target.version
+            ))
+        })?;
+    Ok(Some(PostgresDatabase {
+        host: target.component_id.clone(),
+        port: target_port(target, "postgres")?,
+        database: link.database_name().unwrap_or_default(),
+        secret: postgres_secret_name(&target.component_id),
+        image,
+    }))
 }
 
 fn cache_database_context(
@@ -2263,7 +2296,8 @@ fn cache_database_context(
                 && matches!(
                     link.binding,
                     Some(DependencyBinding::Database {
-                        role: DatabaseRole::Cache
+                        role: DatabaseRole::Cache,
+                        ..
                     })
                 )
         })
@@ -2321,7 +2355,9 @@ pub fn render_nutshell_mint_component(
     let http_port = target_port(&plan.target_descriptor, "http")?;
     let (payment_mount, lightning, credential, lightning_rest_port) =
         nutshell_payment_context(plan)?;
-    let database_secret = primary_database_secret(plan)?;
+    let database = linked_postgres_database(plan, DatabaseRole::Primary)?;
+    // Nutshell keeps its auth ledger separately and may use either engine.
+    let auth_database = linked_postgres_database(plan, DatabaseRole::Authentication)?;
     let cache = cache_database_context(plan)?;
     let authentication = authentication_provider_context(plan)?;
     let oidc_discovery_url = if let Some(authentication) = authentication {
@@ -2355,7 +2391,9 @@ pub fn render_nutshell_mint_component(
         cache.is_some(),
         oidc_discovery_url.as_deref(),
     );
-    environment.insert("MINT_AUTH_DATABASE".into(), "/app/data".into());
+    if auth_database.is_none() {
+        environment.insert("MINT_AUTH_DATABASE".into(), "/app/data".into());
+    }
     let uses_xpay = plan
         .execution_context
         .environment
@@ -2370,7 +2408,7 @@ pub fn render_nutshell_mint_component(
             );
         }
     }
-    if database_secret.is_none() {
+    if database.is_none() {
         environment.insert("MINT_DATABASE".into(), "/app/data".into());
     }
 
@@ -2378,11 +2416,11 @@ pub fn render_nutshell_mint_component(
         "name": "MINT_PRIVATE_KEY",
         "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "MINT_PRIVATE_KEY"}}
     })];
-    if let Some(database_secret) = database_secret {
-        env.push(json!({
-            "name": "MINT_DATABASE",
-            "valueFrom": {"secretKeyRef": {"name": database_secret, "key": "DATABASE_URL"}}
-        }));
+    if let Some(database) = &database {
+        env.extend(database.url_env("MINT_DATABASE"));
+    }
+    if let Some(database) = &auth_database {
+        env.extend(database.url_env("MINT_AUTH_DATABASE"));
     }
     if let Some((cache_secret, _, _)) = &cache {
         env.push(json!({
@@ -2481,6 +2519,18 @@ pub fn render_nutshell_mint_component(
                 )],
                 "securityContext": container_security()
             }),
+        );
+    }
+    if let Some(database) = &database {
+        append_init_container(
+            &mut deployment,
+            database.ensure_container("ensure-database"),
+        );
+    }
+    if let Some(database) = &auth_database {
+        append_init_container(
+            &mut deployment,
+            database.ensure_container("ensure-auth-database"),
         );
     }
     add_nutshell_cache_init_container(&mut deployment, cache);
@@ -3302,84 +3352,142 @@ fn target_port(target: &TargetDescriptorContract, name: &str) -> Result<u16, Ada
     })
 }
 
-fn mint_config(
-    component: &str,
-    http_port: u16,
+/// NUT-21/22 for a CDK mint linked to Keycloak. Endpoint protection keeps
+/// CDK's upstream defaults; only the BAT limit is rendered because its upstream
+/// default (0) refuses every BAT mint. The auth store follows the primary
+/// engine: `SQLite` in the work directory, or a separate linked `PostgreSQL` database.
+fn cdk_auth_config<'a>(
+    plan: &'a ComponentPlanContract,
+    config: &CdkMintConfig,
+    postgres: bool,
+) -> Result<
+    (
+        String,
+        Option<PostgresDatabase>,
+        Option<&'a TargetDescriptorContract>,
+    ),
+    AdapterError,
+> {
+    let identity = authentication_provider_context(plan)?;
+    let auth_database = linked_postgres_database(plan, DatabaseRole::Authentication)?;
+    let Some(identity) = identity else {
+        if auth_database.is_some() {
+            return Err(AdapterError::InvalidPlan(format!(
+                "component {:?} binds an authentication database without an authentication provider",
+                plan.component_id
+            )));
+        }
+        return Ok((String::new(), None, None));
+    };
+    if postgres != auth_database.is_some() {
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} must use a PostgreSQL authentication database exactly when its primary database is PostgreSQL",
+            plan.component_id
+        )));
+    }
+    let mut rendered = format!(
+        "\n[auth]\nauth_enabled = true\nopenid_discovery = \"{}\"\nopenid_client_id = \"cashu-client\"\nmint_max_bat = {}\n",
+        oidc_discovery_url(identity)?,
+        config.auth_max_blind_tokens
+    );
+    if auth_database.is_some() {
+        rendered.push_str("\n[auth_database.postgres]\nurl = \"env:CDK_MINTD_AUTH_POSTGRES_URL\"\ntls_mode = \"disable\"\nmax_connections = 20\nconnection_timeout_seconds = 10\n");
+    }
+    Ok((rendered, auth_database, Some(identity)))
+}
+
+fn oidc_discovery_url(identity: &TargetDescriptorContract) -> Result<String, AdapterError> {
+    Ok(format!(
+        "http://{}:{}/realms/proofstorm/.well-known/openid-configuration",
+        identity.component_id,
+        target_port(identity, "http")?
+    ))
+}
+
+/// The mint fetches OIDC discovery at startup; wait until Keycloak serves it.
+fn oidc_wait_container(identity: &TargetDescriptorContract) -> Result<Value, AdapterError> {
+    Ok(json!({
+        "name": "wait-for-oidc",
+        "image": PROBER_IMAGE,
+        "imagePullPolicy": "IfNotPresent",
+        "command": ["sh", "-ec", format!(
+            "for attempt in $(seq 1 180); do if wget -q -T 2 -O /dev/null {}; then exit 0; fi; sleep 1; done; echo 'OIDC provider did not become ready' >&2; exit 1",
+            oidc_discovery_url(identity)?
+        )],
+        "securityContext": container_security()
+    }))
+}
+
+fn lightning_limits(config: &CdkMintConfig) -> String {
+    format!(
+        "min_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n",
+        config.min_mint_sat, config.max_mint_sat, config.min_melt_sat, config.max_melt_sat
+    )
+}
+
+fn onchain_limits(config: &CdkMintConfig) -> String {
+    format!(
+        "min_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n",
+        config.onchain_min_mint_sat,
+        config.onchain_max_mint_sat,
+        config.onchain_min_melt_sat,
+        config.onchain_max_melt_sat
+    )
+}
+
+fn linked_payment_backend_config(
     lightning: &TargetDescriptorContract,
     mount_name: &str,
     mount_path: &str,
     config: &CdkMintConfig,
-    database_config: &str,
 ) -> Result<String, AdapterError> {
-    let backend = match mount_name {
+    let limits = lightning_limits(config);
+    match mount_name {
         "lnd" => {
             let lightning_rpc = target_port(lightning, "rpc")?;
-            format!(
-                "[payment_backend]\nbackend = \"lnd\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[lnd]\naddress = \"https://{}:{lightning_rpc}\"\ncert_file = \"{mount_path}/tls.cert\"\nmacaroon_file = \"{mount_path}/data/chain/bitcoin/regtest/admin.macaroon\"\n",
-                config.min_mint_sat,
-                config.max_mint_sat,
-                config.min_melt_sat,
-                config.max_melt_sat,
+            Ok(format!(
+                "[payment_backend]\nbackend = \"lnd\"\nunit = \"sat\"\n{limits}\n[lnd]\naddress = \"https://{}:{lightning_rpc}\"\ncert_file = \"{mount_path}/tls.cert\"\nmacaroon_file = \"{mount_path}/data/chain/bitcoin/regtest/admin.macaroon\"\n",
                 lightning.component_id
-            )
+            ))
         }
-        "cln" => format!(
-            "[payment_backend]\nbackend = \"cln\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[cln]\nrpc_path = \"{mount_path}/regtest/lightning-rpc\"\nbolt12 = false\nexpose_private_channels = false\nfee_percent = 0.02\nreserve_fee_min = 2\n",
-            config.min_mint_sat, config.max_mint_sat, config.min_melt_sat, config.max_melt_sat
-        ),
-        backend => {
-            return Err(AdapterError::InvalidPlan(format!(
-                "CDK payment backend {backend:?} has no configuration renderer"
-            )));
-        }
-    };
-    Ok(format!(
-        "{}{}\n{database_config}",
-        mint_common_config(component, http_port, config),
-        backend
-    ))
+        "cln" => Ok(format!(
+            "[payment_backend]\nbackend = \"cln\"\nunit = \"sat\"\n{limits}\n[cln]\nrpc_path = \"{mount_path}/regtest/lightning-rpc\"\nbolt12 = false\nexpose_private_channels = false\nfee_percent = 0.02\nreserve_fee_min = 2\n"
+        )),
+        backend => Err(AdapterError::InvalidPlan(format!(
+            "CDK payment backend {backend:?} has no configuration renderer"
+        ))),
+    }
 }
 
-fn mint_ldk_config(
-    component: &str,
-    http_port: u16,
+fn ldk_payment_backend_config(
     chain: &TargetDescriptorContract,
     chain_rpc: u16,
     p2p_port: u16,
     config: &CdkMintConfig,
-    database_config: &str,
 ) -> String {
-    let common = mint_common_config(component, http_port, config);
     format!(
-        "{common}[payment_backend]\nbackend = \"ldk-node\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[ldk_node]\nfee_percent = 0.04\nreserve_fee_min = 4\nbitcoin_network = \"regtest\"\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"{}\"\nbitcoind_rpc_port = {chain_rpc}\nbitcoind_rpc_user = \"{RPC_USER}\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\nstorage_dir_path = \"/app/data/ldk-node\"\nldk_node_host = \"0.0.0.0\"\nldk_node_port = {p2p_port}\ngossip_source_type = \"p2p\"\nwebserver_host = \"127.0.0.1\"\nwebserver_port = 8091\nldk_node_mnemonic = \"file:/mint-secrets/wallet-mnemonic\"\n\n{database_config}",
-        config.min_mint_sat,
-        config.max_mint_sat,
-        config.min_melt_sat,
-        config.max_melt_sat,
+        "[payment_backend]\nbackend = \"ldk-node\"\nunit = \"sat\"\n{}\n[ldk_node]\nfee_percent = 0.04\nreserve_fee_min = 4\nbitcoin_network = \"regtest\"\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"{}\"\nbitcoind_rpc_port = {chain_rpc}\nbitcoind_rpc_user = \"{RPC_USER}\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\nstorage_dir_path = \"/app/data/ldk-node\"\nldk_node_host = \"0.0.0.0\"\nldk_node_port = {p2p_port}\ngossip_source_type = \"p2p\"\nwebserver_host = \"127.0.0.1\"\nwebserver_port = 8091\nldk_node_mnemonic = \"file:/mint-secrets/ldk-mnemonic\"\n",
+        lightning_limits(config),
         chain.component_id
     )
 }
 
-fn mint_bdk_config(
-    component: &str,
-    http_port: u16,
+fn no_lightning_backend_config(config: &CdkMintConfig) -> String {
+    format!(
+        "[payment_backend]\nbackend = \"none\"\nunit = \"sat\"\n{}",
+        onchain_limits(config)
+    )
+}
+
+fn bdk_onchain_config(
     chain: &TargetDescriptorContract,
     chain_rpc: u16,
     config: &CdkMintConfig,
-    database_config: &str,
 ) -> String {
-    let common = mint_common_config(component, http_port, config);
     format!(
-        "{common}[payment_backend]\nbackend = \"none\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[onchain]\nonchain_backend = \"bdk\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[bdk]\nmnemonic = \"file:/mint-secrets/wallet-mnemonic\"\nnetwork = \"regtest\"\nnum_confs = 1\nmin_receive_amount_sat = {}\nmin_send_amount_sat = 546\nsync_interval_secs = 1\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"{}\"\nbitcoind_rpc_port = {chain_rpc}\nbitcoind_rpc_user = \"{RPC_USER}\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\n\n{database_config}",
-        config.min_mint_sat,
-        config.max_mint_sat,
-        config.min_melt_sat,
-        config.max_melt_sat,
-        config.min_mint_sat,
-        config.max_mint_sat,
-        config.min_melt_sat,
-        config.max_melt_sat,
-        config.min_mint_sat,
+        "[onchain]\nonchain_backend = \"bdk\"\n{}\n[bdk]\nmnemonic = \"file:/mint-secrets/bdk-mnemonic\"\nnetwork = \"regtest\"\nnum_confs = 1\nmin_receive_amount_sat = {}\nmin_send_amount_sat = 546\nsync_interval_secs = 1\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"{}\"\nbitcoind_rpc_port = {chain_rpc}\nbitcoind_rpc_user = \"{RPC_USER}\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\n",
+        onchain_limits(config),
+        config.onchain_min_mint_sat,
         chain.component_id
     )
 }
@@ -3619,8 +3727,6 @@ mod tests {
                 "lnd" => "lnd/0.20/v1",
                 "cln" => "cln/26.06/v1",
                 "cdk" => "cdk-mintd/0.18/v1",
-                "cdk-ldk" => "cdk-mintd-ldk/0.18/v1",
-                "cdk-bdk" => "cdk-mintd-bdk/0.18/v1",
                 "nutshell-wallet" => "nutshell-wallet/0.20/v1",
                 "workspace" => "workspace/0.1/v1",
                 _ => panic!("unknown test implementation {implementation:?}"),
@@ -3765,7 +3871,13 @@ mod tests {
                     "bitcoin-core",
                     ControlClass::Cell,
                 ),
-                component("mint", ComponentKind::Mint, "cdk-ldk", ControlClass::Target),
+                {
+                    let mut mint =
+                        component("mint", ComponentKind::Mint, "cdk", ControlClass::Target);
+                    mint.config
+                        .insert("embedded_lightning".into(), json!("ldk-node"));
+                    mint
+                },
             ],
             links: vec![LinkSpec {
                 id: "mint-chain".into(),
@@ -4580,7 +4692,8 @@ mod tests {
             .iter()
             .find(|plan| plan.component_id == "mint")
             .expect("mint plan");
-        assert_eq!(mint.backend_id, "cdk-ldk");
+        assert_eq!(mint.backend_id, "cdk");
+        assert_eq!(mint.target_descriptor.ports["p2p"], 9_735);
         assert_eq!(mint.execution_context.mounts.len(), 2);
         assert!(mint.credentials.is_empty());
         assert_eq!(mint.linked_targets["mint-chain"].backend_id, "bitcoin-core");
@@ -4608,7 +4721,7 @@ mod tests {
             "bitcoind_rpc_host = \"chain\"",
             "storage_dir_path = \"/app/data/ldk-node\"",
             "ldk_node_port = 9735",
-            "ldk_node_mnemonic = \"file:/mint-secrets/wallet-mnemonic\"",
+            "ldk_node_mnemonic = \"file:/mint-secrets/ldk-mnemonic\"",
             "bitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"",
         ] {
             assert!(config.contains(expected), "missing {expected:?}");
@@ -4654,19 +4767,10 @@ mod tests {
                 unit: "sat".into(),
             }),
         });
-        let lock = resolve_lock(&cell, default_catalog()).expect("both bindings lock exactly");
-        let error = compile_component_plans(
-            "i0123456789012345678",
-            "sha256:ambiguous-revision",
-            &cell,
-            &lock,
-        )
-        .expect_err("current CDK adapter must select one named binding");
-        assert!(
-            error
-                .to_string()
-                .contains("backend_execution_binding_ambiguous")
-        );
+        // Upstream refuses two backends for one (unit, method); so does validation.
+        let error = resolve_lock(&cell, default_catalog())
+            .expect_err("a second bolt11/sat backend is ambiguous");
+        assert!(error.contains("cdk_payment_method_conflict"));
 
         cell.links.pop();
         let lock = resolve_lock(&cell, default_catalog()).expect("single binding lock");

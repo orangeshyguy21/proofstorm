@@ -9,6 +9,7 @@ use std::time::Duration;
 
 pub struct Config {
     pub mint: String,
+    pub implementation: String,
     pub identity: String,
     pub url: String,
     pub username: String,
@@ -23,6 +24,7 @@ impl Config {
     pub fn environment() -> Result<Self> {
         Ok(Self {
             mint: http::required("PROOFSTORM_MINT")?,
+            implementation: http::required("PROOFSTORM_MINT_IMPLEMENTATION")?,
             identity: http::required("PROOFSTORM_IDENTITY_PROVIDER")?,
             url: http::required("PROOFSTORM_MINT_URL")?,
             username: http::required("OIDC_TEST_USERNAME")?,
@@ -32,6 +34,78 @@ impl Config {
         })
     }
 }
+/// Protocol error codes and optional limits differ by mint implementation.
+/// Nutshell uses its own 8xxxx codes; CDK uses the NUT-21/22 spec codes and
+/// reports an over-limit BAT request as a generic amount-range error.
+struct Profile {
+    invalid_bat: i64,
+    invalid_cat: i64,
+    bat_maximum: i64,
+    spent_bat: i64,
+    cat_rate_limit: Option<i64>,
+}
+
+impl Profile {
+    fn of(implementation: &str) -> Result<Self> {
+        match implementation {
+            "nutshell" => Ok(Self {
+                invalid_bat: 81002,
+                invalid_cat: 80002,
+                bat_maximum: 81003,
+                spent_bat: 81002,
+                cat_rate_limit: Some(81004),
+            }),
+            "cdk" => Ok(Self {
+                invalid_bat: 31002,
+                invalid_cat: 30002,
+                bat_maximum: 11006,
+                spent_bat: 31002,
+                cat_rate_limit: None,
+            }),
+            _ => bail!("unsupported mint implementation"),
+        }
+    }
+}
+
+/// A blind-auth protected request that is valid without funds. Each mint keeps
+/// its upstream default protection, so choose from what the mint advertises.
+struct Probe {
+    url: String,
+    body: Value,
+}
+
+impl Probe {
+    fn select(info: &Value, config: &Config) -> Option<Self> {
+        let protected = info["nuts"]["22"]["protected_endpoints"].as_array()?;
+        [
+            ("/v1/mint/quote/bolt11", json!({"amount":1,"unit":"sat"})),
+            ("/v1/restore", json!({"outputs":[]})),
+        ]
+        .into_iter()
+        .find(|(path, _)| {
+            protected
+                .iter()
+                .any(|endpoint| endpoint["method"] == "POST" && endpoint["path"] == *path)
+        })
+        .map(|(path, body)| Self {
+            url: format!("{}{path}", config.url),
+            body,
+        })
+    }
+
+    /// A protected request succeeded with a BAT and returned its normal body.
+    fn accepted(&self, reply: &Reply) -> bool {
+        reply.ok()
+            && if self.url.ends_with("/v1/restore") {
+                reply.value["signatures"].is_array()
+            } else {
+                reply.value["quote"]
+                    .as_str()
+                    .is_some_and(|quote| !quote.is_empty())
+            }
+    }
+}
+
 struct Reply {
     status: StatusCode,
     value: Value,
@@ -234,6 +308,7 @@ async fn conformance(config: &Config) -> Result<Value> {
         "missing_cat_rejected":false,"invalid_cat_code":null,"missing_bat_rejected":false,"invalid_bat_code":null,
         "oidc_login":false,"claims_match":false,"mint_accepted_cat":false,"bat_issued":false,"bat_dleq":false,
         "bat_max_code":null,"rate_limit_code":null,"conformant":false,"failure_stage":null,"failure_status":null,"failure_protocol_code":null});
+    let profile = Profile::of(&config.implementation)?;
     let client = http::client(Duration::from_secs(30))?;
     let info = send(client.get(format!("{}/v1/info", config.url))).await?;
     if !info.ok() {
@@ -257,24 +332,26 @@ async fn conformance(config: &Config) -> Result<Value> {
     if rejected.ok() {
         return Ok(finding(&mut result, "invalid_oidc_password", None));
     }
-    let quote = format!("{}/v1/mint/quote/bolt11", config.url);
+    let Some(probe) = Probe::select(&info.value, config) else {
+        return Ok(finding(&mut result, "protected_endpoint", None));
+    };
     let auth = format!("{}/v1/auth/blind/mint", config.url);
     for (field, stage, url, payload, header, expected) in [
         (
             "missing_bat_rejected",
             "missing_bat",
-            quote.as_str(),
-            json!({"amount":1,"unit":"sat"}),
+            probe.url.as_str(),
+            probe.body.clone(),
             None,
             None,
         ),
         (
             "invalid_bat_code",
             "invalid_bat",
-            quote.as_str(),
-            json!({"amount":1,"unit":"sat"}),
+            probe.url.as_str(),
+            probe.body.clone(),
             Some(("Blind-auth", "authAinvalid")),
-            Some(81002),
+            Some(profile.invalid_bat),
         ),
         (
             "missing_cat_rejected",
@@ -290,7 +367,7 @@ async fn conformance(config: &Config) -> Result<Value> {
             auth.as_str(),
             json!({"outputs":[]}),
             Some(("Clear-auth", "not-a-jwt")),
-            Some(80002),
+            Some(profile.invalid_cat),
         ),
     ] {
         let mut request = client.post(url).json(&payload);
@@ -318,13 +395,15 @@ async fn conformance(config: &Config) -> Result<Value> {
     let keys = AuthKeys::load(&client, config).await?;
     let excessive = session.mint(config, &outputs(&keys, 4)?).await?;
     result["bat_max_code"] = json!(excessive.code());
-    if excessive.ok() || excessive.code() != Some(81003) {
+    if excessive.ok() || excessive.code() != Some(profile.bat_maximum) {
         return Ok(finding(&mut result, "bat_maximum", Some(&excessive)));
     }
     let pending = outputs(&keys, 1)?;
     let accepted = session.mint(config, &pending).await?;
-    result["mint_accepted_cat"] =
-        json!(!matches!(accepted.status.as_u16(), 401 | 403) && accepted.code() != Some(80002));
+    result["mint_accepted_cat"] = json!(
+        !matches!(accepted.status.as_u16(), 401 | 403)
+            && accepted.code() != Some(profile.invalid_cat)
+    );
     if !accepted.ok() {
         return Ok(finding(&mut result, "bat_issuance", Some(&accepted)));
     }
@@ -337,10 +416,13 @@ async fn conformance(config: &Config) -> Result<Value> {
     if result["bat_issued"] != true || result["bat_dleq"] != true {
         return Ok(finding(&mut result, "bat_signature", None));
     }
-    let limited = session.mint(config, &outputs(&keys, 1)?).await?;
-    result["rate_limit_code"] = json!(limited.code());
-    if limited.ok() || limited.code() != Some(81004) {
-        return Ok(finding(&mut result, "cat_rate_limit", Some(&limited)));
+    // Only mints with a CAT rate limit are expected to refuse a second login.
+    if let Some(code) = profile.cat_rate_limit {
+        let limited = session.mint(config, &outputs(&keys, 1)?).await?;
+        result["rate_limit_code"] = json!(limited.code());
+        if limited.ok() || limited.code() != Some(code) {
+            return Ok(finding(&mut result, "cat_rate_limit", Some(&limited)));
+        }
     }
     result["conformant"] = json!(true);
     Ok(result)
@@ -355,27 +437,25 @@ async fn protected(config: &Config, is_replay: bool) -> Result<Value> {
             "bat_count":0,"bat_dleq":false,"spent_bat":null})
     };
     result.as_object_mut().context("invalid result")?.extend(json!({"protected_request":false,"conformant":false,"failure_stage":null,"failure_status":null,"failure_protocol_code":null}).as_object().context("invalid fields")?.clone());
+    let profile = Profile::of(&config.implementation)?;
     let client = http::client(Duration::from_secs(30))?;
-    let quote = format!("{}/v1/mint/quote/bolt11", config.url);
-    if is_replay {
-        let reply = send(
-            client
-                .post(&quote)
-                .json(&json!({"amount":1,"unit":"sat"}))
-                .header(
-                    "Blind-auth",
-                    config.spent_bat.as_ref().context("spent BAT missing")?,
-                ),
-        )
-        .await?;
-        result["spent_bat_replay_code"] = json!(reply.code());
-        if reply.ok() || reply.code() != Some(81002) {
-            return Ok(finding(&mut result, "spent_bat_replay", Some(&reply)));
-        }
-    }
     let info = send(client.get(format!("{}/v1/info", config.url))).await?;
     if !info.ok() {
         return Ok(finding(&mut result, "mint_info", Some(&info)));
+    }
+    let Some(probe) = Probe::select(&info.value, config) else {
+        return Ok(finding(&mut result, "protected_endpoint", None));
+    };
+    if is_replay {
+        let reply = send(client.post(&probe.url).json(&probe.body).header(
+            "Blind-auth",
+            config.spent_bat.as_ref().context("spent BAT missing")?,
+        ))
+        .await?;
+        result["spent_bat_replay_code"] = json!(reply.code());
+        if reply.ok() || reply.code() != Some(profile.spent_bat) {
+            return Ok(finding(&mut result, "spent_bat_replay", Some(&reply)));
+        }
     }
     let Ok(mut session) = Session::discover(&info.value).await else {
         return Ok(finding(&mut result, "oidc_discovery", None));
@@ -406,17 +486,12 @@ async fn protected(config: &Config, is_replay: bool) -> Result<Value> {
     let spent = &proofs[0];
     let reply = send(
         client
-            .post(&quote)
-            .json(&json!({"amount":1,"unit":"sat"}))
+            .post(&probe.url)
+            .json(&probe.body)
             .header("Blind-auth", spent),
     )
     .await?;
-    result["protected_request"] = json!(
-        reply.ok()
-            && reply.value["quote"]
-                .as_str()
-                .is_some_and(|quote| !quote.is_empty())
-    );
+    result["protected_request"] = json!(probe.accepted(&reply));
     if result["protected_request"] != true {
         return Ok(finding(&mut result, "protected_request", Some(&reply)));
     }
@@ -459,6 +534,50 @@ mod tests {
     fn issue(keys: &AuthKeys, secret: &SecretKey, outputs: &[Output]) -> Value {
         json!({"signatures":outputs.iter().map(|output| BlindSignature::new(1_u64.into(),dhke::sign_message(secret,&output.message.blinded_secret).unwrap(),keys.id,&output.message.blinded_secret,secret).unwrap()).collect::<Vec<_>>()})
     }
+    fn config(implementation: &str) -> Config {
+        Config {
+            mint: "mint".into(),
+            implementation: implementation.into(),
+            identity: "identity".into(),
+            url: "http://mint:3338".into(),
+            username: String::new(),
+            password: String::new(),
+            source: None,
+            spent_bat: None,
+        }
+    }
+
+    #[test]
+    fn protected_probe_follows_each_mints_advertised_default_policy() {
+        let info = |paths: &[&str]| json!({"nuts":{"22":{"protected_endpoints":paths.iter().map(|path| json!({"method":"POST","path":path})).collect::<Vec<_>>()}}});
+        // Nutshell protects mint quotes; CDK leaves them open but protects restore.
+        let nutshell = Probe::select(
+            &info(&["/v1/swap", "/v1/mint/quote/bolt11"]),
+            &config("nutshell"),
+        )
+        .unwrap();
+        assert_eq!(nutshell.url, "http://mint:3338/v1/mint/quote/bolt11");
+        let cdk = Probe::select(&info(&["/v1/swap", "/v1/restore"]), &config("cdk")).unwrap();
+        assert_eq!(cdk.url, "http://mint:3338/v1/restore");
+        assert!(Probe::select(&info(&["/v1/swap"]), &config("cdk")).is_none());
+        let reply = |value| Reply {
+            status: StatusCode::OK,
+            value,
+        };
+        assert!(cdk.accepted(&reply(json!({"outputs":[],"signatures":[]}))));
+        assert!(!cdk.accepted(&reply(json!({}))));
+        assert!(nutshell.accepted(&reply(json!({"quote":"q"}))));
+    }
+
+    #[test]
+    fn protocol_profiles_are_explicit_per_implementation() {
+        assert_eq!(Profile::of("nutshell").unwrap().cat_rate_limit, Some(81004));
+        let cdk = Profile::of("cdk").unwrap();
+        assert_eq!((cdk.invalid_bat, cdk.invalid_cat), (31002, 30002));
+        assert!(cdk.cat_rate_limit.is_none());
+        assert!(Profile::of("other").is_err());
+    }
+
     #[test]
     fn blind_auth_verifies_crypto_and_never_transmits_dleq_or_blinding_material() {
         let (keys, secret) = keyset();

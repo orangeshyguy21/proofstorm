@@ -33,13 +33,10 @@ fn prepare(input: &str) -> (std::process::Output, String) {
 fn candidate_mint_builds_copy_complete_workspace_and_keep_upstream_features() {
     // Reproduces the selective COPY instructions at the frozen CDK baseline,
     // which omitted workspace bindings and both dependency lockfiles.
-    for (implementation, features) in [
-        ("cdk", "--features postgres --features prometheus"),
-        ("cdk-bdk", "--features postgres --features prometheus"),
-        (
-            "cdk-ldk",
-            "--features ldk-node --features prometheus --features postgres",
-        ),
+    // Both upstream Dockerfile feature layouts patch into the one CDK recipe.
+    for features in [
+        "--features postgres --features prometheus",
+        "--features ldk-node --features prometheus --features postgres",
     ] {
         let original = format!(
             "FROM nixos/nix:latest AS builder\nWORKDIR /usr/src/app\nCOPY flake.nix ./flake.nix\nCOPY Cargo.toml ./Cargo.toml\nCOPY crates ./crates\nRUN nix develop --extra-experimental-features flakes --command cargo build --release --bin cdk-mintd {features}\nFROM debian:trixie-slim\nCMD [\"cdk-mintd\"]\n"
@@ -56,14 +53,10 @@ fn candidate_mint_builds_copy_complete_workspace_and_keep_upstream_features() {
             "cargo build --locked --release --jobs 1 --features ldk-node,postgres --bin cdk-mintd {features}"
         )));
         assert!(patched.ends_with("FROM debian:trixie-slim\nCMD [\"cdk-mintd\"]\n"));
-        let profile = proofstorm_core::candidate_build_profile(implementation).unwrap();
-        assert_eq!(profile.version, 8);
+        let profile = proofstorm_core::candidate_build_profile("cdk").unwrap();
+        assert_eq!(profile.version, 9);
         assert_eq!(profile.id, "cdk-mint-source");
         assert_eq!(profile.dockerfile, "Dockerfile.ldk-node");
-        assert_eq!(
-            profile,
-            proofstorm_core::candidate_build_profile("cdk").unwrap()
-        );
         assert!(profile.prepare.contains(PREPARE));
         assert!(
             profile

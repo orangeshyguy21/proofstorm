@@ -26,9 +26,10 @@ fn cell_document(postgres_enabled: bool) -> Value {
         "components": [
             {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}},
             {
-                "id": "mint", "kind": "mint", "implementation": "cdk-bdk", "version": "0.18.1",
-                "config_version": "cdk-mintd-bdk/0.18/v1", "control": "target",
+                "id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.1",
+                "config_version": "cdk-mintd/0.18/v1", "control": "target",
                 "config": {
+                    "embedded_onchain": "bdk",
                     "name": "Proofstorm CDK BDK",
                     "description": "Native CDK embedded-BDK NUT-30 stress cell",
                     "description_long": "Agent-authored long-form CDK metadata",
@@ -46,10 +47,10 @@ fn cell_document(postgres_enabled: bool) -> Value {
                     "http_cache_tti_seconds": 45,
                     "max_inputs": 64,
                     "max_outputs": 96,
-                    "min_mint_sat": 1200,
-                    "max_mint_sat": 5000,
-                    "min_melt_sat": 1300,
-                    "max_melt_sat": 6000
+                    "onchain_min_mint_sat": 1200,
+                    "onchain_max_mint_sat": 5000,
+                    "onchain_min_melt_sat": 1300,
+                    "onchain_max_melt_sat": 6000
                 }
             }
         ],
@@ -118,8 +119,8 @@ pub fn run(context: &GateContext, postgres_enabled: bool, stress: bool) -> Resul
         client,
         postgres_enabled,
         stress,
-        context.selected_version("cdk-bdk", "0.18.1"),
-        context.selected_image("cdk-bdk", IMAGE),
+        context.selected_version("cdk", "0.18.1"),
+        context.selected_image("cdk", IMAGE),
     )
 }
 
@@ -154,7 +155,7 @@ fn run_selected(
         json!({"name":INSTANCE,"cell":document,"request_id":"create-cdk-bdk"}),
     )?;
     let published = crate::cell::review(&mut client, &preview)?;
-    let entry = cell::lock_entry(&published, "cdk-bdk")?;
+    let entry = cell::lock_entry(&published, "cdk")?;
     if expect::string(entry, "/version")? != selected_version
         || expect::string(entry, "/image")? != selected_image
     {

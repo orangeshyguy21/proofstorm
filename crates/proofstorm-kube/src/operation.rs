@@ -23,6 +23,8 @@ pub struct AuthenticationConformanceJobSpec<'a> {
     pub mint: &'a str,
     pub identity_provider: &'a str,
     pub mint_image: &'a str,
+    /// Catalog implementation of the mint; selects its protocol error codes.
+    pub mint_implementation: &'a str,
 }
 
 pub struct AuthenticationProtectedSpendJobSpec<'a> {
@@ -31,6 +33,8 @@ pub struct AuthenticationProtectedSpendJobSpec<'a> {
     pub mint: &'a str,
     pub identity_provider: &'a str,
     pub mint_image: &'a str,
+    /// Catalog implementation of the mint; selects its protocol error codes.
+    pub mint_implementation: &'a str,
 }
 
 pub struct AuthenticationReplayJobSpec<'a> {
@@ -39,6 +43,8 @@ pub struct AuthenticationReplayJobSpec<'a> {
     pub mint: &'a str,
     pub identity_provider: &'a str,
     pub mint_image: &'a str,
+    /// Catalog implementation of the mint; selects its protocol error codes.
+    pub mint_implementation: &'a str,
     pub session_secret: &'a str,
     pub source_operation_id: &'a str,
 }
@@ -467,13 +473,15 @@ fn render_authentication_conformance_action(
     if action.spec.capability != Capability::AuthenticationTest {
         return Err(ActionRenderError::Capability);
     }
-    let mint_image = authentication_components(cell, &request.mint, &request.identity_provider)?;
+    let (mint_image, mint_implementation) =
+        authentication_components(cell, &request.mint, &request.identity_provider)?;
     render_authentication_conformance_job(&AuthenticationConformanceJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
         mint: &request.mint,
         identity_provider: &request.identity_provider,
         mint_image,
+        mint_implementation,
     })
     .map_err(ActionRenderError::from)
 }
@@ -486,13 +494,15 @@ fn render_authentication_protected_spend_action(
     if action.spec.capability != Capability::AuthenticationTest {
         return Err(ActionRenderError::Capability);
     }
-    let mint_image = authentication_components(cell, &request.mint, &request.identity_provider)?;
+    let (mint_image, mint_implementation) =
+        authentication_components(cell, &request.mint, &request.identity_provider)?;
     render_authentication_protected_spend_job(&AuthenticationProtectedSpendJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
         mint: &request.mint,
         identity_provider: &request.identity_provider,
         mint_image,
+        mint_implementation,
     })
     .map_err(ActionRenderError::from)
 }
@@ -505,13 +515,15 @@ fn render_authentication_replay_action(
     if action.spec.capability != Capability::AuthenticationTest {
         return Err(ActionRenderError::Capability);
     }
-    let mint_image = authentication_components(cell, &request.mint, &request.identity_provider)?;
+    let (mint_image, mint_implementation) =
+        authentication_components(cell, &request.mint, &request.identity_provider)?;
     render_authentication_replay_job(&AuthenticationReplayJobSpec {
         resource_name: &action.name_any(),
         instance_key: &action.spec.instance_key,
         mint: &request.mint,
         identity_provider: &request.identity_provider,
         mint_image,
+        mint_implementation,
         session_secret: &request.session_secret,
         source_operation_id: &request.source_operation_id,
     })
@@ -522,8 +534,21 @@ fn authentication_components<'a>(
     cell: &'a ProofstormCell,
     mint: &str,
     identity_provider: &str,
-) -> Result<&'a str, ActionRenderError> {
-    let mint_image = locked_component_image(cell, mint, ComponentKind::Mint, "nutshell")?;
+) -> Result<(&'a str, &'static str), ActionRenderError> {
+    // The link check below and the catalog decide whether auth is supported.
+    let implementation = cell
+        .spec
+        .cell
+        .components
+        .iter()
+        .find(|component| component.id == mint)
+        .map_or("nutshell", |component| {
+            match component.implementation.as_str() {
+                "cdk" => "cdk",
+                _ => "nutshell",
+            }
+        });
+    let mint_image = locked_component_image(cell, mint, ComponentKind::Mint, implementation)?;
     locked_component_image(
         cell,
         identity_provider,
@@ -552,7 +577,7 @@ fn authentication_components<'a>(
             "authentication conformance requires exactly one OIDC link from {mint:?} to {identity_provider:?}, found {links}"
         )));
     }
-    Ok(mint_image)
+    Ok((mint_image, implementation))
 }
 
 fn render_native_exec_action(
@@ -681,13 +706,14 @@ fn native_exec_component_context(
             .collect(),
         secret_environment: vec![],
     };
-    if let EffectiveComponentConfig::Postgres(config) = &plan.effective_config {
+    if let EffectiveComponentConfig::Postgres(_) = &plan.effective_config {
         let secret_name = format!("{}-credentials", plan.component_id);
         context.environment.extend([
             ("PGHOST".into(), plan.component_id.clone()),
             ("PGPORT".into(), "5432".into()),
             ("PGUSER".into(), "proofstorm".into()),
-            ("PGDATABASE".into(), config.database_name.clone()),
+            // Maintenance database; linked components own their databases.
+            ("PGDATABASE".into(), "postgres".into()),
         ]);
         context.secret_environment.push(json!({
             "name": "PGPASSWORD",
@@ -1025,6 +1051,7 @@ pub fn render_authentication_conformance_job(
         mint,
         identity_provider,
         mint_image,
+        mint_implementation,
     } = *spec;
     let namespace = instance_namespace(instance_key);
     let mint_url = format!("http://{mint}:3338");
@@ -1036,6 +1063,7 @@ pub fn render_authentication_conformance_job(
         &[],
         vec![
             ("PROOFSTORM_MINT", mint),
+            ("PROOFSTORM_MINT_IMPLEMENTATION", mint_implementation),
             ("PROOFSTORM_IDENTITY_PROVIDER", identity_provider),
             ("PROOFSTORM_MINT_URL", mint_url.as_str()),
         ],
@@ -1101,6 +1129,7 @@ pub fn render_authentication_protected_spend_job(
         mint,
         identity_provider,
         mint_image,
+        mint_implementation,
     } = *spec;
     let namespace = instance_namespace(instance_key);
     let mint_url = format!("http://{mint}:3338");
@@ -1113,6 +1142,7 @@ pub fn render_authentication_protected_spend_job(
         &[],
         vec![
             ("PROOFSTORM_MINT", mint),
+            ("PROOFSTORM_MINT_IMPLEMENTATION", mint_implementation),
             ("PROOFSTORM_IDENTITY_PROVIDER", identity_provider),
             ("PROOFSTORM_MINT_URL", mint_url.as_str()),
         ],
@@ -1160,6 +1190,7 @@ pub fn render_authentication_replay_job(
         mint,
         identity_provider,
         mint_image,
+        mint_implementation,
         session_secret,
         source_operation_id,
     } = *spec;
@@ -1173,6 +1204,7 @@ pub fn render_authentication_replay_job(
         &[],
         vec![
             ("PROOFSTORM_MINT", mint),
+            ("PROOFSTORM_MINT_IMPLEMENTATION", mint_implementation),
             ("PROOFSTORM_IDENTITY_PROVIDER", identity_provider),
             ("PROOFSTORM_MINT_URL", mint_url.as_str()),
             ("PROOFSTORM_SOURCE_OPERATION_ID", source_operation_id),
@@ -1753,6 +1785,7 @@ mod tests {
             mint: "mint",
             identity_provider: "identity",
             mint_image: "nutshell-image",
+            mint_implementation: "nutshell",
         })
         .expect("authentication conformance job");
         let encoded = serde_json::to_value(&job).expect("job JSON");
@@ -1796,6 +1829,7 @@ mod tests {
                 mint: "mint",
                 identity_provider: "identity",
                 mint_image: "nutshell-image",
+                mint_implementation: "nutshell",
             })
             .expect("protected spend job");
         let protected = serde_json::to_value(protected).expect("protected job JSON");
@@ -1816,6 +1850,7 @@ mod tests {
             mint: "mint",
             identity_provider: "identity",
             mint_image: "nutshell-image",
+            mint_implementation: "nutshell",
             session_secret: "op-source-auth-session",
             source_operation_id: "auth-source",
         })

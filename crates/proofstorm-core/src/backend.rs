@@ -420,6 +420,49 @@ pub struct CdkMintConfig {
     pub max_mint_sat: u64,
     pub min_melt_sat: u64,
     pub max_melt_sat: u64,
+    pub embedded_lightning: CdkEmbeddedLightning,
+    pub embedded_onchain: CdkEmbeddedOnchain,
+    pub onchain_min_mint_sat: u64,
+    pub onchain_max_mint_sat: u64,
+    pub onchain_min_melt_sat: u64,
+    pub onchain_max_melt_sat: u64,
+    /// Upstream `mint_max_bat`; its code default of 0 refuses every BAT mint.
+    pub auth_max_blind_tokens: u64,
+}
+
+/// Lightning backend compiled into the CDK daemon itself. External Lightning
+/// is selected by `payment_backend` links instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CdkEmbeddedLightning {
+    None,
+    LdkNode,
+}
+
+/// On-chain backend compiled into the CDK daemon itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CdkEmbeddedOnchain {
+    None,
+    Bdk,
+}
+
+impl CdkMintConfig {
+    #[must_use]
+    pub fn embeds_ldk(&self) -> bool {
+        self.embedded_lightning == CdkEmbeddedLightning::LdkNode
+    }
+
+    #[must_use]
+    pub fn embeds_bdk(&self) -> bool {
+        self.embedded_onchain == CdkEmbeddedOnchain::Bdk
+    }
+
+    /// Embedded backends are reached through the Bitcoin chain link.
+    #[must_use]
+    pub fn needs_chain_backend(&self) -> bool {
+        self.embeds_ldk() || self.embeds_bdk()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -471,8 +514,9 @@ pub struct NutshellMintConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// One `PostgreSQL` server. Its databases are created by the components linked to
+/// it, one per `database_backend` binding (see `LinkSpec::database_name`).
 pub struct PostgresConfig {
-    pub database_name: String,
     pub storage_size: String,
 }
 
@@ -511,10 +555,6 @@ pub enum EffectiveComponentConfig {
     LdkServerProcessor(LdkServerProcessorConfig),
     #[serde(rename = "cdk")]
     Cdk(CdkMintConfig),
-    #[serde(rename = "cdk-ldk")]
-    CdkLdk(CdkMintConfig),
-    #[serde(rename = "cdk-bdk")]
-    CdkBdk(CdkMintConfig),
     #[serde(rename = "nutshell")]
     Nutshell(NutshellMintConfig),
     #[serde(rename = "postgresql")]
@@ -694,7 +734,13 @@ impl BackendContractRegistry {
         let effective = self.resolve_effective_component(&input.component)?;
         let effective_config = EffectiveComponentConfig::try_from_component(&effective)?;
         let service_ports = workspace_service_ports(&effective_config)
+            .or_else(|| cdk_service_ports(&effective_config))
             .unwrap_or_else(|| backend.service_ports.clone());
+        // Embedded CDK backends are an alternative to linked Lightning data.
+        let embedded_payment = matches!(
+            &effective_config,
+            EffectiveComponentConfig::Cdk(config) if config.needs_chain_backend()
+        );
         let mut relevant_links = input.relevant_links.clone();
         relevant_links.sort();
         for link in &relevant_links {
@@ -721,6 +767,7 @@ impl BackendContractRegistry {
             &input.component.id,
             &relevant_links,
             &input.linked_targets,
+            embedded_payment,
         )?;
         let credentials = compile_credential_observations(&execution_mounts, input)?;
         let protocol_probe = backend
@@ -786,14 +833,27 @@ fn workspace_service_ports(config: &EffectiveComponentConfig) -> Option<BTreeMap
     })
 }
 
+/// Embedded LDK Node is the only CDK path that listens for Lightning peers.
+fn cdk_service_ports(config: &EffectiveComponentConfig) -> Option<BTreeMap<String, u16>> {
+    let EffectiveComponentConfig::Cdk(config) = config else {
+        return None;
+    };
+    let mut ports = BTreeMap::from([("http".into(), CDK_HTTP_PORT)]);
+    if config.embeds_ldk() {
+        ports.insert("p2p".into(), CDK_LDK_P2P_PORT);
+    }
+    Some(ports)
+}
+
+const CDK_HTTP_PORT: u16 = 3_338;
+const CDK_LDK_P2P_PORT: u16 = 9_735;
+
 fn require_mint_management_image(input: &ComponentPlanInput) -> Result<(), String> {
-    if matches!(
-        input.lock.catalog_id.as_str(),
-        "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell"
-    ) && !input
-        .lock
-        .features
-        .contains(&crate::CatalogFeature::MintManagementRpc)
+    if matches!(input.lock.catalog_id.as_str(), "cdk" | "nutshell")
+        && !input
+            .lock
+            .features
+            .contains(&crate::CatalogFeature::MintManagementRpc)
     {
         return Err(format!(
             "mint_management_image_required: component {:?} uses a lock from before native management RPC support; resolve a new cell revision (and rebuild old candidates) before upgrading this mint",
@@ -864,6 +924,19 @@ impl EffectiveComponentConfig {
                 max_mint_sat: integer("max_mint_sat")?,
                 min_melt_sat: integer("min_melt_sat")?,
                 max_melt_sat: integer("max_melt_sat")?,
+                embedded_lightning: serde_json::from_value(
+                    required_config_value(component, "embedded_lightning")?.clone(),
+                )
+                .map_err(|_| typed_config_error(component, "embedded_lightning"))?,
+                embedded_onchain: serde_json::from_value(
+                    required_config_value(component, "embedded_onchain")?.clone(),
+                )
+                .map_err(|_| typed_config_error(component, "embedded_onchain"))?,
+                onchain_min_mint_sat: integer("onchain_min_mint_sat")?,
+                onchain_max_mint_sat: integer("onchain_max_mint_sat")?,
+                onchain_min_melt_sat: integer("onchain_min_melt_sat")?,
+                onchain_max_melt_sat: integer("onchain_max_melt_sat")?,
+                auth_max_blind_tokens: integer("auth_max_blind_tokens")?,
             })
         };
         let nutshell = || -> Result<NutshellMintConfig, String> {
@@ -947,24 +1020,10 @@ impl EffectiveComponentConfig {
             })),
             "cdk-ldk-server-processor" => processor::effective_config(component),
             "cdk" => Ok(Self::Cdk(cdk()?)),
-            "cdk-ldk" => Ok(Self::CdkLdk(cdk()?)),
-            "cdk-bdk" => Ok(Self::CdkBdk(cdk()?)),
             "nutshell" => Ok(Self::Nutshell(nutshell()?)),
-            "postgresql" => {
-                let database_name = string("database_name")?;
-                if !is_postgres_identifier(&database_name) {
-                    return Err(config_diagnostic(
-                        "identifier_violation",
-                        component,
-                        "database_name",
-                        "must begin with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, or '_'",
-                    ));
-                }
-                Ok(Self::Postgres(PostgresConfig {
-                    database_name,
-                    storage_size: string("storage_size")?,
-                }))
-            }
+            "postgresql" => Ok(Self::Postgres(PostgresConfig {
+                storage_size: string("storage_size")?,
+            })),
             "redis" => Ok(Self::Redis(RedisConfig {
                 maxmemory_mb: required_config_value(component, "maxmemory_mb")?
                     .as_u64()
@@ -1013,7 +1072,7 @@ fn typed_config_error(component: &ComponentSpec, name: &str) -> String {
     )
 }
 
-fn is_postgres_identifier(value: &str) -> bool {
+pub(crate) fn is_postgres_identifier(value: &str) -> bool {
     value
         .bytes()
         .next()
@@ -1089,20 +1148,6 @@ impl ComponentBackendContract {
                 ));
             }
             validate_config_value(component, name, value, field)?;
-        }
-        if self.id == "postgresql"
-            && let Some(database_name) = component
-                .config
-                .get("database_name")
-                .and_then(Value::as_str)
-            && !is_postgres_identifier(database_name)
-        {
-            return Err(config_diagnostic(
-                "identifier_violation",
-                component,
-                "database_name",
-                "must begin with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, or '_'",
-            ));
         }
         if self.id == "workspace"
             && component
@@ -1379,10 +1424,15 @@ fn resolve_execution_mounts(
     component_id: &str,
     relevant_links: &[LinkSpec],
     linked_targets: &BTreeMap<String, TargetDescriptorContract>,
+    embedded_payment: bool,
 ) -> Result<Vec<ExecutionMountContract>, String> {
     let mut resolved = Vec::new();
     let mut alternative_groups = BTreeMap::<&str, usize>::new();
     for mount in &backend.execution_mounts {
+        // An embedded CDK backend already provides a payment path, so linked
+        // Lightning data becomes optional rather than required.
+        let optional = embedded_payment
+            && matches!(&mount.requirement, ExecutionMountRequirement::AtLeastOne { group } if group == "payment-backend");
         // A network processor supplies its own transport credentials. Native
         // LND/CLN data mounts are only applicable to direct node bindings.
         if backend.id == "cdk"
@@ -1397,7 +1447,9 @@ fn resolve_execution_mounts(
             continue;
         }
         if let ExecutionMountRequirement::AtLeastOne { group } = &mount.requirement {
-            alternative_groups.entry(group).or_default();
+            if !optional {
+                alternative_groups.entry(group).or_default();
+            }
         }
         let source = match &mount.source {
             ExecutionStorageTemplateSource::StatefulData => ExecutionStorageSource::StatefulData,
@@ -1454,7 +1506,9 @@ fn resolve_execution_mounts(
             }
         };
         if let ExecutionMountRequirement::AtLeastOne { group } = &mount.requirement {
-            *alternative_groups.entry(group).or_default() += 1;
+            if !optional {
+                *alternative_groups.entry(group).or_default() += 1;
+            }
         }
         resolved.push(ExecutionMountContract {
             name: mount.name.clone(),
@@ -1726,43 +1780,10 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
             "cdk",
             ComponentKind::Mint,
             "cdk-mintd/0.18/v1",
-            cdk_config_fields(
-                "Proofstorm CDK mint",
-                "Proofstorm regtest CDK mint",
-                1,
-                500_000,
-            ),
-            BTreeMap::from([("http".into(), 3_338)]),
+            cdk_config_fields(),
+            BTreeMap::from([("http".into(), CDK_HTTP_PORT)]),
             "proofstorm/cdk-mint-state/v1",
             service_conditions(true, true),
-        ),
-        contract(
-            "cdk-ldk",
-            ComponentKind::Mint,
-            "cdk-mintd-ldk/0.18/v1",
-            cdk_config_fields(
-                "Proofstorm CDK LDK mint",
-                "Proofstorm regtest CDK LDK mint",
-                1,
-                500_000,
-            ),
-            BTreeMap::from([("http".into(), 3_338), ("p2p".into(), 9_735)]),
-            "proofstorm/cdk-mint-ldk-state/v1",
-            service_conditions(true, false),
-        ),
-        contract(
-            "cdk-bdk",
-            ComponentKind::Mint,
-            "cdk-mintd-bdk/0.18/v1",
-            cdk_config_fields(
-                "Proofstorm CDK BDK mint",
-                "Proofstorm regtest CDK BDK mint",
-                1_000,
-                1_000_000,
-            ),
-            BTreeMap::from([("http".into(), 3_338)]),
-            "proofstorm/cdk-mint-bdk-state/v1",
-            service_conditions(true, false),
         ),
         contract(
             "nutshell",
@@ -1811,26 +1832,15 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
             "postgresql",
             ComponentKind::Database,
             "postgresql/17/v1",
-            BTreeMap::from([
-                (
-                    "database_name".into(),
-                    config_field(
-                        "Database created for the linked primary client",
-                        ConfigValueKind::String,
-                        ConfigDefault::Literal(json!("cdk_mint")),
-                    )
-                    .with_string_bounds(1, 63),
-                ),
-                (
-                    "storage_size".into(),
-                    config_field(
-                        "Persistent database volume size",
-                        ConfigValueKind::String,
-                        ConfigDefault::Literal(json!("1Gi")),
-                    )
-                    .with_enum_values(&["1Gi", "2Gi", "5Gi", "10Gi"]),
-                ),
-            ]),
+            BTreeMap::from([(
+                "storage_size".into(),
+                config_field(
+                    "Persistent database volume size",
+                    ConfigValueKind::String,
+                    ConfigDefault::Literal(json!("1Gi")),
+                )
+                .with_enum_values(&["1Gi", "2Gi", "5Gi", "10Gi"]),
+            )]),
             BTreeMap::from([("postgres".into(), 5_432)]),
             "proofstorm/postgresql-state/v1",
             service_conditions(false, false),
@@ -1945,13 +1955,10 @@ fn config_field(
     }
 }
 
-fn cdk_config_fields(
-    default_name: &str,
-    default_description: &str,
-    default_minimum: u32,
-    default_maximum: u32,
-) -> BTreeMap<String, ConfigFieldContract> {
-    let mut fields = cdk_mint_info_config_fields(default_name, default_description);
+fn cdk_config_fields() -> BTreeMap<String, ConfigFieldContract> {
+    let (default_minimum, default_maximum) = (1, 500_000);
+    let mut fields =
+        cdk_mint_info_config_fields("Proofstorm CDK mint", "Proofstorm regtest CDK mint");
     let integer = |description: &str, default: u32, minimum: u32, maximum: u32| {
         config_field(
             description,
@@ -2029,7 +2036,65 @@ fn cdk_config_fields(
             ),
         ),
     ]));
+    fields.extend(cdk_backend_selection_fields());
     fields
+}
+
+/// Embedded backends and their on-chain limits; linked backends are topology.
+fn cdk_backend_selection_fields() -> BTreeMap<String, ConfigFieldContract> {
+    let integer = |description: &str, default: u32| {
+        config_field(
+            description,
+            ConfigValueKind::Integer,
+            ConfigDefault::Literal(json!(default)),
+        )
+        .with_numeric_bounds(1.0, 10_000_000.0)
+    };
+    BTreeMap::from([
+        (
+            "auth_max_blind_tokens".into(),
+            config_field(
+                "Maximum blind authentication tokens per NUT-22 mint request when an authentication_backend link is present. Endpoint protection uses CDK's upstream defaults",
+                ConfigValueKind::Integer,
+                ConfigDefault::Literal(json!(50)),
+            )
+            .with_numeric_bounds(1.0, 1_000.0),
+        ),
+        (
+            "embedded_lightning".into(),
+            config_field(
+                "Lightning backend compiled into the mint. ldk-node requires a chain_backend link and conflicts with a linked bolt11/sat payment backend; external Lightning uses payment_backend links instead",
+                ConfigValueKind::String,
+                ConfigDefault::Literal(json!("none")),
+            )
+            .with_enum_values(&["none", "ldk-node"]),
+        ),
+        (
+            "embedded_onchain".into(),
+            config_field(
+                "On-chain backend compiled into the mint. bdk requires a chain_backend link and can be combined with any Lightning path",
+                ConfigValueKind::String,
+                ConfigDefault::Literal(json!("none")),
+            )
+            .with_enum_values(&["none", "bdk"]),
+        ),
+        (
+            "onchain_max_melt_sat".into(),
+            integer("Maximum on-chain melt quote amount", 1_000_000),
+        ),
+        (
+            "onchain_max_mint_sat".into(),
+            integer("Maximum on-chain mint quote amount", 1_000_000),
+        ),
+        (
+            "onchain_min_melt_sat".into(),
+            integer("Minimum on-chain melt quote amount", 1_000),
+        ),
+        (
+            "onchain_min_mint_sat".into(),
+            integer("Minimum on-chain mint quote amount", 1_000),
+        ),
+    ])
 }
 
 fn cdk_mint_info_config_fields(
@@ -2530,10 +2595,65 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
         ]),
         "cdk" => BTreeMap::from([
             (
+                "authentication".into(),
+                string(
+                    "NUT-21 clear and NUT-22 blind auth with CDK's default endpoint protection when an authentication_backend link exists",
+                    Policy,
+                ),
+            ),
+            (
+                "authentication_database".into(),
+                string(
+                    "SQLite beside the mint database, or the linked authentication PostgreSQL database when the mint uses PostgreSQL",
+                    Topology,
+                ),
+            ),
+            (
+                "bdk_mnemonic".into(),
+                string(
+                    "Controller-generated BDK seed when embedded BDK is enabled",
+                    Secret,
+                ),
+            ),
+            (
+                "bdk_storage_directory".into(),
+                string("Embedded BDK persistent storage directory", Policy),
+            ),
+            (
+                "chain_backend_credentials".into(),
+                string("Disposable-regtest Bitcoin RPC credentials", Policy),
+            ),
+            (
+                "chain_backend_endpoint".into(),
+                string(
+                    "Linked Bitcoin RPC endpoint for embedded backends",
+                    Topology,
+                ),
+            ),
+            (
+                "confirmation_target".into(),
+                integer("Required on-chain confirmations", Policy),
+            ),
+            (
                 "database_engine".into(),
                 string("Topology-selected SQLite or PostgreSQL engine", Topology),
             ),
             ("database_path".into(), string("Mint database path", Policy)),
+            (
+                "ldk_listen_endpoint".into(),
+                string("Derived embedded LDK P2P endpoint", Topology),
+            ),
+            (
+                "ldk_node_mnemonic".into(),
+                string(
+                    "Controller-generated LDK seed when embedded LDK is enabled",
+                    Secret,
+                ),
+            ),
+            (
+                "ldk_storage_directory".into(),
+                string("Embedded LDK persistent storage directory", Policy),
+            ),
             (
                 "lightning_backend_credentials".into(),
                 string("Linked Lightning credentials", Secret),
@@ -2551,73 +2671,6 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
                 string("Derived mint listen address", Topology),
             ),
             (
-                "max_melt".into(),
-                integer("Proofstorm maximum melt amount", Policy),
-            ),
-            (
-                "max_mint".into(),
-                integer("Proofstorm maximum mint amount", Policy),
-            ),
-            (
-                "min_melt".into(),
-                integer("Proofstorm minimum melt amount", Policy),
-            ),
-            (
-                "min_mint".into(),
-                integer("Proofstorm minimum mint amount", Policy),
-            ),
-            (
-                "mnemonic".into(),
-                string("Controller-generated mint mnemonic", Secret),
-            ),
-            (
-                "public_url".into(),
-                string("Derived mint public URL", Topology),
-            ),
-            (
-                "unit".into(),
-                string("Proofstorm-selected Cashu unit", Policy),
-            ),
-            (
-                "work_directory".into(),
-                string("Mint persistent work directory", Policy),
-            ),
-        ]),
-        "cdk-ldk" => BTreeMap::from([
-            (
-                "chain_backend_endpoint".into(),
-                string("Linked Bitcoin RPC endpoint", Topology),
-            ),
-            (
-                "chain_backend_credentials".into(),
-                string("Disposable-regtest Bitcoin RPC credentials", Policy),
-            ),
-            (
-                "database_engine".into(),
-                string("Topology-selected SQLite or PostgreSQL engine", Topology),
-            ),
-            ("database_path".into(), string("Mint database path", Policy)),
-            (
-                "embedded_lightning_backend".into(),
-                string("Pinned embedded LDK Node backend", Policy),
-            ),
-            (
-                "ldk_listen_endpoint".into(),
-                string("Derived embedded LDK P2P endpoint", Topology),
-            ),
-            (
-                "ldk_node_mnemonic".into(),
-                string("Controller-generated LDK seed", Secret),
-            ),
-            (
-                "ldk_storage_directory".into(),
-                string("Embedded LDK persistent storage directory", Policy),
-            ),
-            (
-                "listen_address".into(),
-                string("Derived mint listen address", Topology),
-            ),
-            (
                 "mint_mnemonic".into(),
                 string("Controller-generated mint mnemonic", Secret),
             ),
@@ -2626,8 +2679,11 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
                 string("Fixed Bitcoin regtest network", Policy),
             ),
             (
-                "payment_methods".into(),
-                string("Embedded BOLT11 and BOLT12 method set", Policy),
+                "payment_backends".into(),
+                string(
+                    "One payment_backend section per linked or embedded Lightning path, plus an onchain section when BDK is embedded",
+                    Topology,
+                ),
             ),
             (
                 "public_url".into(),
@@ -2639,61 +2695,10 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "work_directory".into(),
-                string("Mint and LDK persistent work directory", Policy),
-            ),
-        ]),
-        "cdk-bdk" => BTreeMap::from([
-            (
-                "bdk_mnemonic".into(),
-                string("Controller-generated BDK seed", Secret),
-            ),
-            (
-                "bdk_storage_directory".into(),
-                string("Embedded BDK persistent storage directory", Policy),
-            ),
-            (
-                "chain_backend_endpoint".into(),
-                string("Linked Bitcoin RPC endpoint", Topology),
-            ),
-            (
-                "chain_backend_credentials".into(),
-                string("Disposable-regtest Bitcoin RPC credentials", Policy),
-            ),
-            (
-                "confirmation_target".into(),
-                integer("Required on-chain confirmations", Policy),
-            ),
-            (
-                "database_engine".into(),
-                string("Topology-selected SQLite or PostgreSQL engine", Topology),
-            ),
-            (
-                "listen_address".into(),
-                string("Derived mint listen address", Topology),
-            ),
-            (
-                "mint_mnemonic".into(),
-                string("Controller-generated mint mnemonic", Secret),
-            ),
-            (
-                "network".into(),
-                string("Fixed Bitcoin regtest network", Policy),
-            ),
-            (
-                "payment_methods".into(),
-                string("Embedded on-chain method set", Policy),
-            ),
-            (
-                "public_url".into(),
-                string("Derived mint public URL", Topology),
-            ),
-            (
-                "unit".into(),
-                string("Proofstorm-selected Cashu unit", Policy),
-            ),
-            (
-                "work_directory".into(),
-                string("Mint persistent work directory", Policy),
+                string(
+                    "Mint and embedded backend persistent work directory",
+                    Policy,
+                ),
             ),
         ]),
         "nutshell" => BTreeMap::from([
@@ -2864,6 +2869,13 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
                 string("Controller-generated instance credentials", Secret),
             ),
             (
+                "databases".into(),
+                string(
+                    "One database per incoming database_backend binding, created by the linked component",
+                    Topology,
+                ),
+            ),
+            (
                 "data_directory".into(),
                 string("PostgreSQL persistent data directory", Policy),
             ),
@@ -2999,7 +3011,7 @@ fn contract(
     applicable_conditions: BTreeSet<ComponentConditionType>,
 ) -> ComponentBackendContract {
     config_fields.extend(managed_config_fields(id));
-    if matches!(id, "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell") {
+    if matches!(id, "cdk" | "nutshell") {
         config_fields.insert(
             "management_rpc".into(),
             managed_field(
@@ -3019,17 +3031,19 @@ fn contract(
     }
     let (execution_mounts, execution_environment) = execution_contract(id);
     let (workload_kind, storage_requirements) = observation_contract(id);
-    let config_rules = if matches!(id, "cdk" | "cdk-ldk" | "cdk-bdk") {
-        vec![
-            ConfigRule::LessThanOrEqual {
-                minimum_field: "min_mint_sat".into(),
-                maximum_field: "max_mint_sat".into(),
-            },
-            ConfigRule::LessThanOrEqual {
-                minimum_field: "min_melt_sat".into(),
-                maximum_field: "max_melt_sat".into(),
-            },
+    let config_rules = if id == "cdk" {
+        [
+            ("min_mint_sat", "max_mint_sat"),
+            ("min_melt_sat", "max_melt_sat"),
+            ("onchain_min_mint_sat", "onchain_max_mint_sat"),
+            ("onchain_min_melt_sat", "onchain_max_melt_sat"),
         ]
+        .into_iter()
+        .map(|(minimum, maximum)| ConfigRule::LessThanOrEqual {
+            minimum_field: minimum.into(),
+            maximum_field: maximum.into(),
+        })
+        .collect()
     } else if id == "nutshell" {
         vec![
             ConfigRule::LessThanOrEqual {
@@ -3082,7 +3096,7 @@ fn protocol_probe_contract(backend: &str) -> Option<ProtocolProbeContract> {
             port_name: "http".into(),
             path: "/realms/proofstorm/.well-known/openid-configuration".into(),
         }),
-        "cdk" | "cdk-ldk" | "cdk-bdk" => Some(ProtocolProbeContract::HttpGet {
+        "cdk" => Some(ProtocolProbeContract::HttpGet {
             port_name: "http".into(),
             path: "/v1/info".into(),
         }),
@@ -3131,10 +3145,8 @@ fn observation_contract(
         "bitcoin-core" | "lnd" | "cln" | "postgresql" => {
             (WorkloadControllerKind::StatefulSet, vec![stateful_data()])
         }
-        "cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell" | "nutshell-wallet" | "cdk-cli-wallet"
-        | "cocod-wallet" | "workspace" => {
-            (WorkloadControllerKind::Deployment, vec![component_data()])
-        }
+        "cdk" | "nutshell" | "nutshell-wallet" | "cdk-cli-wallet" | "cocod-wallet"
+        | "workspace" => (WorkloadControllerKind::Deployment, vec![component_data()]),
         _ => (WorkloadControllerKind::Deployment, vec![]),
     }
 }
@@ -3240,16 +3252,6 @@ fn execution_contract(
                         target_implementation: "cln".into(),
                     },
                 ),
-            ],
-            BTreeMap::from([
-                ("CDK_MINTD_WORK_DIR".into(), "/app/data".into()),
-                ("HOME".into(), "/app/data".into()),
-            ]),
-        ),
-        "cdk-ldk" | "cdk-bdk" => (
-            vec![
-                binding("config", "/config", true, Source::ComponentConfig),
-                binding("data", "/app/data", false, Source::ComponentPersistentData),
             ],
             BTreeMap::from([
                 ("CDK_MINTD_WORK_DIR".into(), "/app/data".into()),
@@ -3499,8 +3501,6 @@ mod tests {
                 "cdk-ldk-server-processor" => "cdk-ldk-server-processor/0.1/v1",
                 "cln" => "cln/26.06/v1",
                 "cdk" => "cdk-mintd/0.18/v1",
-                "cdk-ldk" => "cdk-mintd-ldk/0.18/v1",
-                "cdk-bdk" => "cdk-mintd-bdk/0.18/v1",
                 "nutshell" => "nutshell-mint/0.20/v1",
                 "postgresql" => "postgresql/17/v1",
                 "redis" => "redis/8.10/v1",
@@ -3552,11 +3552,10 @@ mod tests {
         assert_eq!(cdk.config["max_inputs"], json!(1_000));
         assert_eq!(cdk.config["max_outputs"], json!(1_000));
 
-        let bdk = registry
-            .resolve_effective_component(&component("mint", "cdk-bdk", ComponentKind::Mint))
-            .expect("default BDK limits");
-        assert_eq!(bdk.config["min_mint_sat"], json!(1_000));
-        assert_eq!(bdk.config["max_mint_sat"], json!(1_000_000));
+        assert_eq!(cdk.config["embedded_lightning"], json!("none"));
+        assert_eq!(cdk.config["embedded_onchain"], json!("none"));
+        assert_eq!(cdk.config["onchain_min_mint_sat"], json!(1_000));
+        assert_eq!(cdk.config["onchain_max_mint_sat"], json!(1_000_000));
 
         let nutshell = registry
             .resolve_effective_component(&component("mint", "nutshell", ComponentKind::Mint))
@@ -3963,26 +3962,49 @@ mod tests {
         assert_eq!(compiled.target_descriptor.ports["rpc"], 18_443);
     }
 
-    #[test]
-    fn compiled_contract_refuses_a_lock_from_an_older_backend_config_contract() {
-        let mut component = component("mint", "cdk", ComponentKind::Mint);
-        component.control = ControlClass::Target;
+    /// The smallest valid CDK cell: embedded BDK against one regtest chain.
+    fn standalone_cdk(name: &str) -> (ComponentSpec, crate::LockEntry) {
+        let mut mint = component("mint", "cdk", ComponentKind::Mint);
+        mint.control = ControlClass::Target;
+        mint.config.insert("embedded_onchain".into(), json!("bdk"));
         let cell = crate::CellSpec {
             api_version: crate::API_VERSION.into(),
-            name: "stale-cdk-lock".into(),
-            components: vec![component.clone()],
-            links: vec![],
+            name: name.into(),
+            components: vec![
+                component("chain", "bitcoin-core", ComponentKind::Bitcoin),
+                mint.clone(),
+            ],
+            links: vec![crate::LinkSpec {
+                id: "mint-chain".into(),
+                kind: crate::LinkKind::ChainBackend,
+                from: "mint".into(),
+                to: "chain".into(),
+                binding: Some(crate::DependencyBinding::Chain {
+                    network: crate::BitcoinNetwork::Regtest,
+                }),
+            }],
             policy: crate::CellPolicy::default(),
         };
-        let mut lock = resolve_lock(&cell, crate::default_catalog()).expect("resolve current lock");
-        lock.entries[0].config_version = "cdk-mintd/0.17/v1".into();
+        let lock = resolve_lock(&cell, crate::default_catalog()).expect("resolve current lock");
+        let entry = lock
+            .entries
+            .into_iter()
+            .find(|entry| entry.component_id == "mint")
+            .expect("mint lock entry");
+        (mint, entry)
+    }
+
+    #[test]
+    fn compiled_contract_refuses_a_lock_from_an_older_backend_config_contract() {
+        let (component, mut entry) = standalone_cdk("stale-cdk-lock");
+        entry.config_version = "cdk-mintd/0.17/v1".into();
 
         let error = default_backend_registry()
             .compile_contract(&ComponentPlanInput {
                 instance_key: "instance-key".into(),
                 revision_digest: "sha256:revision".into(),
                 component,
-                lock: lock.entries[0].clone(),
+                lock: entry,
                 relevant_links: vec![],
                 linked_targets: BTreeMap::new(),
                 linked_state: BTreeMap::new(),
@@ -4032,17 +4054,8 @@ mod tests {
 
     #[test]
     fn management_upgrade_refuses_old_images_before_compiling_workloads() {
-        let mut component = component("mint", "cdk", ComponentKind::Mint);
-        component.control = ControlClass::Target;
-        let cell = crate::CellSpec {
-            api_version: crate::API_VERSION.into(),
-            name: "old-mint-image".into(),
-            components: vec![component.clone()],
-            links: vec![],
-            policy: crate::CellPolicy::default(),
-        };
-        let mut lock = resolve_lock(&cell, crate::default_catalog()).unwrap();
-        lock.entries[0]
+        let (component, mut entry) = standalone_cdk("old-mint-image");
+        entry
             .features
             .remove(&crate::CatalogFeature::MintManagementRpc);
         let error = default_backend_registry()
@@ -4050,7 +4063,7 @@ mod tests {
                 instance_key: "instance-key".into(),
                 revision_digest: "sha256:revision".into(),
                 component,
-                lock: lock.entries[0].clone(),
+                lock: entry,
                 relevant_links: vec![],
                 linked_targets: BTreeMap::new(),
                 linked_state: BTreeMap::new(),
@@ -4091,7 +4104,7 @@ mod tests {
             ("bolt11".into(), target("bolt11-node", "lnd", "0.20.4-beta")),
             ("bolt12".into(), target("bolt12-node", "lnd", "0.20.4-beta")),
         ]);
-        let mounts = resolve_execution_mounts(&backend, "mint", &links, &targets)
+        let mounts = resolve_execution_mounts(&backend, "mint", &links, &targets, false)
             .expect("unselected methods and implementations do not collide");
         assert!(matches!(
             mounts[2].source,
@@ -4104,20 +4117,24 @@ mod tests {
             "cln-bolt11".into(),
             target("cln-bolt11-node", "cln", "26.06.7"),
         )]);
-        let cln_mounts = resolve_execution_mounts(&backend, "mint", &[cln_link], &cln_targets)
-            .expect("CLN is an alternative exact payment-state mount");
+        let cln_mounts =
+            resolve_execution_mounts(&backend, "mint", &[cln_link], &cln_targets, false)
+                .expect("CLN is an alternative exact payment-state mount");
         assert_eq!(cln_mounts[2].name, "cln");
 
-        let error = resolve_execution_mounts(&backend, "mint", &[], &BTreeMap::new())
+        let error = resolve_execution_mounts(&backend, "mint", &[], &BTreeMap::new(), false)
             .expect_err("at least one payment backend is required");
         assert!(error.starts_with("backend_execution_binding_group_missing:"));
+        let embedded = resolve_execution_mounts(&backend, "mint", &[], &BTreeMap::new(), true)
+            .expect("an embedded backend replaces linked Lightning data");
+        assert_eq!(embedded.len(), 2);
 
         links.push(payment("bolt11-secondary", crate::PaymentMethod::Bolt11));
         targets.insert(
             "bolt11-secondary".into(),
             target("bolt11-secondary-node", "lnd", "0.20.4-beta"),
         );
-        let error = resolve_execution_mounts(&backend, "mint", &links, &targets)
+        let error = resolve_execution_mounts(&backend, "mint", &links, &targets, false)
             .expect_err("duplicate exact selectors must refuse");
         assert!(error.starts_with("backend_execution_binding_ambiguous:"));
         assert!(error.contains("bolt11-secondary"));

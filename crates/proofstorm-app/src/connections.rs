@@ -51,7 +51,7 @@ pub fn endpoint(
         })?;
     let authentication = match (component.implementation.as_str(), endpoint) {
         ("bitcoin-core", "rpc") => Authentication::Basic,
-        ("cdk" | "cdk-ldk" | "cdk-bdk" | "nutshell", "http") => Authentication::None,
+        ("cdk" | "nutshell", "http") => Authentication::None,
         _ => {
             return Err(Error::problem(
                 "connection_unsupported",

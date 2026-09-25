@@ -7,6 +7,8 @@ use crate::{
     API_VERSION, CellSpec, ComponentKind, DependencyBinding, LinkKind, LinkSpec, PaymentMethod,
 };
 
+#[path = "cdk_validation.rs"]
+mod cdk;
 #[path = "processor_validation.rs"]
 mod processor;
 
@@ -67,6 +69,7 @@ pub fn validate_cell(cell: &CellSpec) -> ValidationReport {
     validate_links(cell, &ids, &kinds, &mut issues);
     validate_authentication_topology(cell, &mut issues);
     processor::validate_topology(cell, &mut issues);
+    cdk::validate_topology(cell, &mut issues);
 
     ValidationReport::from_issues(issues)
 }
@@ -83,7 +86,8 @@ fn validate_authentication_topology(cell: &CellSpec, issues: &mut Vec<Validation
                         && matches!(
                             link.binding,
                             Some(DependencyBinding::Database {
-                                role: crate::DatabaseRole::Primary
+                                role: crate::DatabaseRole::Primary,
+                                ..
                             })
                         )
                 })
@@ -97,7 +101,7 @@ fn validate_authentication_topology(cell: &CellSpec, issues: &mut Vec<Validation
                 );
             }
         }
-        if component.implementation != "nutshell" {
+        if component.kind != ComponentKind::Mint {
             continue;
         }
         let authentication_links = cell
@@ -112,10 +116,29 @@ fn validate_authentication_topology(cell: &CellSpec, issues: &mut Vec<Validation
                 issues,
                 "duplicate_authentication_provider",
                 format!("/components/{index}"),
-                "Nutshell accepts at most one authentication provider",
+                "a mint accepts at most one authentication provider",
             );
         }
-        if authentication_links == 0 {
+        let authentication_database = cell.links.iter().any(|link| {
+            link.from == component.id
+                && matches!(
+                    link.binding,
+                    Some(DependencyBinding::Database {
+                        role: crate::DatabaseRole::Authentication,
+                        ..
+                    })
+                )
+        });
+        if authentication_database && authentication_links == 0 {
+            issue(
+                issues,
+                "authentication_database_without_provider",
+                format!("/components/{index}"),
+                "an authentication database is only used with an authentication_backend link",
+            );
+        }
+        // The remaining checks cover Nutshell's authored OIDC settings.
+        if component.implementation != "nutshell" || authentication_links == 0 {
             continue;
         }
         if component
@@ -242,25 +265,41 @@ fn validate_database_role(
     previous: &[LinkSpec],
     issues: &mut Vec<ValidationIssue>,
 ) {
-    let Some(DependencyBinding::Database { role }) = link.binding else {
+    let Some(DependencyBinding::Database { role, .. }) = &link.binding else {
         return;
     };
-    if role == crate::DatabaseRole::Authentication {
+    let role = *role;
+    let name = link.database_name().unwrap_or_default();
+    // PostgreSQL folds unquoted identifiers and limits them to 63 bytes.
+    if name.len() > 63 || !crate::backend::is_postgres_identifier(&name) {
         issue(
             issues,
-            "unsupported_database_role",
-            format!("/links/{index}/binding/role"),
-            "authentication databases are reserved for a future CDK auth slice",
+            "invalid_database_name",
+            format!("/links/{index}/binding/database"),
+            "must begin with a lowercase ASCII letter, contain only lowercase ASCII letters, digits or '_', and fit 63 bytes",
         );
-        return;
+    }
+    // Each binding owns one database on its target server.
+    if previous.iter().any(|candidate| {
+        candidate.to == link.to
+            && candidate.kind == LinkKind::DatabaseBackend
+            && candidate.database_name().as_deref() == Some(name.as_str())
+    }) {
+        issue(
+            issues,
+            "duplicate_database_name",
+            format!("/links/{index}/binding/database"),
+            format!("database {name:?} is already bound on {:?}", link.to),
+        );
     }
     let duplicated = previous.iter().any(|candidate| {
         candidate.from == link.from
             && matches!(
-                candidate.binding,
+                &candidate.binding,
                 Some(DependencyBinding::Database {
-                    role: candidate_role
-                }) if candidate_role == role
+                    role: candidate_role,
+                    ..
+                }) if *candidate_role == role
             )
     });
     if duplicated {
@@ -273,7 +312,10 @@ fn validate_database_role(
                 "duplicate_cache_database",
                 "a component can bind exactly one cache database",
             ),
-            crate::DatabaseRole::Authentication => unreachable!(),
+            crate::DatabaseRole::Authentication => (
+                "duplicate_authentication_database",
+                "a component can bind exactly one authentication database",
+            ),
         };
         issue(issues, code, format!("/links/{index}"), message);
     }
@@ -699,6 +741,7 @@ mod tests {
             to: "identity-db".into(),
             binding: Some(DependencyBinding::Database {
                 role: crate::DatabaseRole::Primary,
+                database: None,
             }),
         });
         assert_eq!(validate_cell(&cell), ValidationReport::from_issues(vec![]));
@@ -794,6 +837,49 @@ mod tests {
                 "component_limit_exceeded",
                 "link_limit_exceeded"
             ]
+        );
+    }
+    #[test]
+    fn database_bindings_name_one_valid_database_per_server() {
+        let link = |from: &str, database: Option<&str>| LinkSpec {
+            id: format!("{from}-database"),
+            kind: LinkKind::DatabaseBackend,
+            from: from.into(),
+            to: "database".into(),
+            binding: Some(DependencyBinding::Database {
+                role: crate::DatabaseRole::Primary,
+                database: database.map(str::to_owned),
+            }),
+        };
+        assert_eq!(
+            link("mint-a", None).database_name().as_deref(),
+            Some("mint_a_primary")
+        );
+        assert_eq!(
+            link("mint-a", Some("ledger")).database_name().as_deref(),
+            Some("ledger")
+        );
+        let codes = |links: &[LinkSpec]| {
+            let mut issues = Vec::new();
+            for (index, candidate) in links.iter().enumerate() {
+                validate_database_role(index, candidate, &links[..index], &mut issues);
+            }
+            issues
+                .into_iter()
+                .map(|issue| issue.code)
+                .collect::<Vec<_>>()
+        };
+        assert!(codes(&[link("mint-a", None), link("mint-b", None)]).is_empty());
+        assert_eq!(
+            codes(&[link("mint-a", Some("Bad-Name"))]),
+            ["invalid_database_name"]
+        );
+        assert_eq!(
+            codes(&[
+                link("mint-a", Some("shared")),
+                link("mint-b", Some("shared"))
+            ]),
+            ["duplicate_database_name"]
         );
     }
 }

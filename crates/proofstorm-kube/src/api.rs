@@ -342,6 +342,8 @@ pub enum AuthenticationConformanceFailureStage {
     BatIssuance,
     BatSignature,
     CatRateLimit,
+    /// The mint advertises no blind-auth protected endpoint the driver can probe.
+    ProtectedEndpoint,
 }
 
 /// Secret-free result of minting and spending a valid BAT.
@@ -382,6 +384,9 @@ pub struct AuthenticationReplayResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthenticationSessionFailureStage {
+    MintInfo,
+    ProtectedEndpoint,
+    OidcDiscovery,
     OidcLogin,
     BatIssuance,
     BatSignature,

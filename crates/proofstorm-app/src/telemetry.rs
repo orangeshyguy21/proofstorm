@@ -451,7 +451,10 @@ mod live_relationship_tests {
             .cell
             .components
             .iter()
-            .find(|c| c.implementation == "cdk-ldk")
+            .find(|c| {
+                c.implementation == "cdk"
+                    && c.config.get("embedded_lightning") == Some(&serde_json::json!("ldk-node"))
+            })
             .unwrap();
         let ldk = observations
             .iter()

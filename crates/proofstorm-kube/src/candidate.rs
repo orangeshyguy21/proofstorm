@@ -88,7 +88,7 @@ pub fn render_candidate_build_job(
                 script.push_str("\nPROOFSTORM_MANAGEMENT_EOF\n");
                 script
             }
-            "cdk" | "cdk-ldk" | "cdk-bdk" => format!(
+            "cdk" => format!(
                 "cat > /tmp/management-prefix <<'PROOFSTORM_MANAGEMENT_EOF'\n{}\nPROOFSTORM_MANAGEMENT_EOF\ncat /tmp/management-prefix /workspace/{dockerfile} > /tmp/management-dockerfile\ncat >> /tmp/management-dockerfile <<'PROOFSTORM_MANAGEMENT_EOF'\nCOPY --from=proofstorm-management-client /src/target/release/cdk-mint-cli /usr/local/bin/cdk-mint-cli\nRUN cdk-mint-cli --version\nPROOFSTORM_MANAGEMENT_EOF\nmv /tmp/management-dockerfile /workspace/{dockerfile}",
                 include_str!("../drivers/candidate_cdk_management.Dockerfile"),
                 dockerfile = build.spec.dockerfile,
@@ -383,8 +383,8 @@ mod tests {
         assert!(encoded.contains("breez-sdk-spark==0.17.0"));
         assert!(!encoded.contains(&build.spec.pull_request_url));
         assert!(encoded.contains("mint-cli --help"));
-        for implementation in ["cdk", "cdk-ldk", "cdk-bdk"] {
-            build.spec.implementation = implementation.into();
+        {
+            build.spec.implementation = "cdk".into();
             let job = render_candidate_build_job(&build).expect("CDK candidate");
             let encoded = serde_json::to_string(&job).unwrap();
             assert!(encoded.contains("cargo build --locked --release --bin cdk-mint-cli"));

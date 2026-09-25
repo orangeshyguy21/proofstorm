@@ -12,7 +12,9 @@ pub mod cashu_double_spend;
 pub mod cdk_bdk_stress;
 pub mod cdk_cln;
 pub mod cdk_ldk;
+pub mod cdk_lnd_bdk;
 mod cdk_mint_identity;
+pub mod cdk_oidc;
 pub mod cdk_postgres;
 pub mod cdk_wallet;
 pub mod cocod_wallet;
@@ -56,8 +58,6 @@ pub const NAMES: &[&str] = &[
     "candidate-nutshell",
     "candidate-cdk-modes",
     "candidate-cdk",
-    "candidate-cdk-ldk",
-    "candidate-cdk-bdk",
     "onboarding",
     "gui",
     "cli-progress",
@@ -87,6 +87,8 @@ pub const NAMES: &[&str] = &[
     "cdk-bdk-postgres-stress",
     "cdk-bdk-stress",
     "cdk-bdk-postgres",
+    "cdk-lnd-bdk",
+    "cdk-oidc",
     "cross-implementation-wallet",
     "cdk-mint-identity",
     "native-exec",
@@ -116,8 +118,6 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "candidate-nutshell" => candidates::run(context, "nutshell"),
         "candidate-cdk-modes" => candidates::run_cdk_modes(context),
         "candidate-cdk" => candidates::run(context, "cdk"),
-        "candidate-cdk-ldk" => candidates::run(context, "cdk-ldk"),
-        "candidate-cdk-bdk" => candidates::run(context, "cdk-bdk"),
         "onboarding" => onboarding::run(context),
         "gui" => gui::run(context),
         "cli-progress" => progress::run(context),
@@ -147,6 +147,8 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "cdk-bdk-stress" => cdk_bdk_stress::run(context, crate::postgres::enabled(), true),
         "cdk-bdk-postgres-stress" => cdk_bdk_stress::run(context, true, true),
         "cdk-bdk-postgres" => cdk_bdk_stress::run(context, true, false),
+        "cdk-lnd-bdk" => cdk_lnd_bdk::run(context),
+        "cdk-oidc" => cdk_oidc::run(context),
         "cross-implementation-wallet" => cross_implementation_wallet::run(context),
         "cdk-mint-identity" => cdk_mint_identity::run(context),
         "native-exec" => native_exec::run(context),

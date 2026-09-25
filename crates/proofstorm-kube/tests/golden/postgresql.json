@@ -67,7 +67,6 @@
     "credentials": [],
     "effective_config": {
       "config": {
-        "database_name": "cdk_mint",
         "storage_size": "1Gi"
       },
       "implementation": "postgresql"
@@ -145,7 +144,7 @@
     },
     "relevant_links": [],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:e94c3d7641b68c2679fd98e6358be166da1fd17db6b10bf45837bc46a5bcf63f",
+    "rollout_digest": "sha256:707d141be75b07d5de0290c57596eb2a65c59f4bef467adafa6045fb268a41aa",
     "storage": [
       {
         "claim_name": "data-database-0"
@@ -185,7 +184,7 @@
           "namespace": "proofstorm-i-golden-b2"
         },
         "stringData": {
-          "POSTGRES_DB": "cdk_mint",
+          "POSTGRES_DB": "postgres",
           "POSTGRES_USER": "proofstorm"
         },
         "type": "Opaque"
@@ -255,7 +254,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:e94c3d7641b68c2679fd98e6358be166da1fd17db6b10bf45837bc46a5bcf63f"
+                "proofstorm.dev/rollout-digest": "sha256:707d141be75b07d5de0290c57596eb2a65c59f4bef467adafa6045fb268a41aa"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -335,7 +334,7 @@
                         "-U",
                         "proofstorm",
                         "-d",
-                        "cdk_mint"
+                        "postgres"
                       ]
                     },
                     "failureThreshold": 40,

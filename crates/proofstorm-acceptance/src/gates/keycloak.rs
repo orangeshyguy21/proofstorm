@@ -14,7 +14,7 @@ fn document() -> Value {
     json!({
         "api_version":"proofstorm/v1alpha1", "name":"keycloak-provider",
         "components":[
-            {"id":"identity-db","kind":"database","implementation":"postgresql","version":"17.11","config_version":"postgresql/17/v1","control":"cell","config":{"database_name":"keycloak","storage_size":"2Gi"}},
+            {"id":"identity-db","kind":"database","implementation":"postgresql","version":"17.11","config_version":"postgresql/17/v1","control":"cell","config":{"storage_size":"2Gi"}},
             {"id":"identity","kind":"identity_provider","implementation":"keycloak","version":"25.0.6","config_version":"keycloak/25/v1","control":"cell","config":{"access_token_lifespan_seconds":600}}
         ],
         "links":[{"id":"identity-database","kind":"database_backend","from":"identity","to":"identity-db","binding":{"type":"database","role":"primary"}}],

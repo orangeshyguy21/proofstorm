@@ -120,7 +120,7 @@ mod tests {
         let manifest =
             configuration_coverage_manifest(default_catalog(), default_backend_registry())
                 .expect("coverage manifest");
-        assert_eq!(manifest.entries.len(), 23);
+        assert_eq!(manifest.entries.len(), 18);
         let cdk = manifest
             .entries
             .iter()
@@ -134,12 +134,19 @@ mod tests {
         );
         assert_eq!(
             cdk.support.payment_methods,
-            [PaymentMethod::Bolt11, PaymentMethod::Bolt12].into()
+            [
+                PaymentMethod::Bolt11,
+                PaymentMethod::Bolt12,
+                PaymentMethod::Onchain
+            ]
+            .into()
         );
         assert_eq!(
             cdk.support.payment_backends,
             [
+                "bdk".into(),
                 "cln".into(),
+                "ldk-node".into(),
                 "lnd".into(),
                 "cdk-ldk-server-processor".into()
             ]
@@ -155,10 +162,15 @@ mod tests {
         assert_eq!(payments, ["cln", "lnd", "cdk-ldk-server-processor"].into());
         assert_eq!(
             cdk.support.authentication,
-            [AuthenticationMode::Unauthenticated].into()
+            [
+                AuthenticationMode::Unauthenticated,
+                AuthenticationMode::Nut21Clear,
+                AuthenticationMode::Nut22Blind
+            ]
+            .into()
         );
         assert_eq!(
-            cdk.fields["mnemonic"].classification,
+            cdk.fields["mint_mnemonic"].classification,
             ConfigSettingClass::GeneratedInstanceSecret
         );
         assert_eq!(
@@ -170,20 +182,14 @@ mod tests {
                 .versions
                 .contains("0.20.3")
         );
-        let cdk_ldk = manifest
-            .entries
-            .iter()
-            .find(|entry| entry.implementation == "cdk-ldk")
-            .expect("embedded LDK coverage");
+        assert_eq!(cdk.support.embedded_payment_bindings.len(), 3);
         assert_eq!(
-            cdk_ldk.support.payment_methods,
-            [PaymentMethod::Bolt11, PaymentMethod::Bolt12].into()
-        );
-        assert_eq!(cdk_ldk.support.embedded_payment_bindings.len(), 2);
-        assert!(cdk_ldk.support.payment_bindings.is_empty());
-        assert_eq!(
-            cdk_ldk.fields["ldk_node_mnemonic"].classification,
+            cdk.fields["ldk_node_mnemonic"].classification,
             ConfigSettingClass::GeneratedInstanceSecret
+        );
+        assert_eq!(
+            cdk.fields["embedded_lightning"].classification,
+            ConfigSettingClass::AgentAuthorable
         );
         let nutshell = manifest
             .entries

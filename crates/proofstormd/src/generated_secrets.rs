@@ -19,7 +19,8 @@ pub(super) async fn ensure(secrets: &Api<Secret>, template: &Secret) -> Result<(
             &[
                 "PROOFSTORM_SECRET_KIND",
                 "mint-mnemonic",
-                "wallet-mnemonic",
+                "ldk-mnemonic",
+                "bdk-mnemonic",
                 "bitcoin-rpc-password",
             ],
             cdk_data,
@@ -43,13 +44,7 @@ pub(super) async fn ensure(secrets: &Api<Secret>, template: &Secret) -> Result<(
             keycloak_data,
         ),
         _ => (
-            &[
-                "POSTGRES_USER",
-                "POSTGRES_PASSWORD",
-                "POSTGRES_DB",
-                "DATABASE_URL",
-                "database.toml",
-            ],
+            &["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"],
             postgres_data,
         ),
     };
@@ -117,31 +112,30 @@ fn random_hex(name: &str) -> Result<String, Error> {
         }))
 }
 
+/// The server's owner password only. Linked components build their own URLs
+/// for the databases they create; the password is hex and URL-safe.
 fn postgres_data(template: &Secret) -> Result<BTreeMap<String, String>, Error> {
     let name = template.name_any();
     let template_data = template.string_data.as_ref().ok_or_else(|| {
         Error::SecretContract(format!("Secret template {name:?} has no stringData"))
     })?;
-    let username = template_data.get("POSTGRES_USER").ok_or_else(|| {
-        Error::SecretContract(format!("Secret template {name:?} has no POSTGRES_USER"))
-    })?;
-    let database = template_data.get("POSTGRES_DB").ok_or_else(|| {
-        Error::SecretContract(format!("Secret template {name:?} has no POSTGRES_DB"))
-    })?;
-    let component = component_name(template)?;
-    let password = random_hex(&name)?;
-    let url = format!("postgresql://{username}:{password}@{component}:5432/{database}");
-    let database_config = format!(
-        "\n[database]\nengine = \"postgres\"\n\n[database.postgres]\nurl = {url:?}\ntls_mode = \"disable\"\nmax_connections = 20\nconnection_timeout_seconds = 10\n"
-    );
-    Ok(BTreeMap::from([
-        ("POSTGRES_PASSWORD".into(), password),
-        ("DATABASE_URL".into(), url),
-        ("database.toml".into(), database_config),
-    ]))
+    // The server reads both at startup; refuse an incomplete template.
+    for key in ["POSTGRES_USER", "POSTGRES_DB"] {
+        if !template_data.contains_key(key) {
+            return Err(Error::SecretContract(format!(
+                "Secret template {name:?} has no {key}"
+            )));
+        }
+    }
+    component_name(template)?;
+    Ok(BTreeMap::from([(
+        "POSTGRES_PASSWORD".into(),
+        random_hex(&name)?,
+    )]))
 }
 
-/// Each CDK mint owns independent Cashu signing and payment-wallet seeds.
+/// Each CDK mint owns independent Cashu signing seed and one seed per
+/// embedded wallet, because LDK Node and BDK can run in the same mint.
 fn cdk_data(template: &Secret) -> Result<BTreeMap<String, String>, Error> {
     let name = template.name_any();
     let mnemonic = |purpose: &str| -> Result<String, Error> {
@@ -155,7 +149,8 @@ fn cdk_data(template: &Secret) -> Result<BTreeMap<String, String>, Error> {
     };
     Ok(BTreeMap::from([
         ("mint-mnemonic".into(), mnemonic("mint")?),
-        ("wallet-mnemonic".into(), mnemonic("wallet")?),
+        ("ldk-mnemonic".into(), mnemonic("ldk")?),
+        ("bdk-mnemonic".into(), mnemonic("bdk")?),
     ]))
 }
 

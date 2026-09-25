@@ -135,7 +135,7 @@ fn cli_policy_and_matrix_schedule_each_required_case_once_on_its_native_runner()
 }
 
 #[test]
-fn unsupported_mint_auth_does_not_remove_identity_provider_coverage() {
+fn mint_auth_is_qualified_only_where_declared_and_keeps_identity_provider_coverage() {
     let root = TempDir::new().unwrap();
     let (_, plan) = planned(root.path(), "full");
     let cases = serde_json::to_value(&plan.cases).unwrap();
@@ -151,9 +151,20 @@ fn unsupported_mint_auth_does_not_remove_identity_provider_coverage() {
                     .any(|entry| entry["implementation"] == "postgresql")
         }));
     }
+    // Nutshell does not declare auth (upstream gap); CDK does, via its own gate.
     assert!(!cases.to_string().contains("nutshell-oidc"));
-    assert!(!cases.to_string().contains("nut21_clear"));
-    assert!(!cases.to_string().contains("nut22_blind"));
+    for platform in ["linux/amd64", "linux/arm64"] {
+        let auth = cases
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["platform"] == platform && case["scenario"]["name"] == "cdk-oidc")
+            .collect::<Vec<_>>();
+        assert_eq!(auth.len(), 1, "{platform}");
+        let claims = auth[0]["claims"].to_string();
+        assert!(claims.contains("nut21_clear") && claims.contains("nut22_blind"));
+        assert!(!claims.contains("nutshell"));
+    }
 }
 
 #[test]

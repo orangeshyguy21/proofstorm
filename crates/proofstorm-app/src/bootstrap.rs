@@ -139,7 +139,7 @@ fn kube(installation: &Installation, args: &[&str]) -> Result<String> {
         "--request-timeout=30s",
     ];
     all.extend(args);
-    process::run(
+    process::run_list(
         &installation.home,
         &tool(&installation.home, "kubectl")?,
         &all,

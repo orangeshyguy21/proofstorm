@@ -4,9 +4,8 @@ use super::{
     DependencyBinding, EffectiveComponentConfig, LinkKind, RPC_PASSWORD, RPC_USER,
     RenderedComponent, TargetDescriptorContract, Value, container_security,
     install_component_driver, instance_affinity, instance_namespace, json, labels, metadata,
-    mint_common_config, plan_execution_credential, plan_linked_target, plan_pod_metadata,
-    plan_workload_metadata, pod_security, require_plan_backend, resource, service_from_plan,
-    stateful_set, target_port,
+    plan_execution_credential, plan_linked_target, plan_pod_metadata, plan_workload_metadata,
+    pod_security, require_plan_backend, resource, service_from_plan, stateful_set, target_port,
 };
 use proofstorm_core::PaymentMethod;
 
@@ -199,17 +198,13 @@ pub(super) fn tls_mount(name: &str, path: &str) -> Value {
     json!({"name":name,"mountPath":path,"readOnly":true})
 }
 
-pub(super) fn mint_config(
-    plan: &ComponentPlanContract,
+pub(super) fn payment_backend_config(
     config: &CdkMintConfig,
-    port: u16,
     target: &TargetDescriptorContract,
-    database: &str,
 ) -> Result<String, AdapterError> {
     let grpc_port = target_port(target, "grpc")?;
     Ok(format!(
-        "{}[payment_backend]\nbackend = \"grpcprocessor\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[grpc_processor]\nsupported_units = [\"sat\"]\naddress = \"{}\"\nport = {grpc_port}\ntls_dir = \"/payment-processor/tls\"\nallow_insecure = false\n\n{database}",
-        mint_common_config(&plan.component_id, port, config),
+        "[payment_backend]\nbackend = \"grpcprocessor\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[grpc_processor]\nsupported_units = [\"sat\"]\naddress = \"{}\"\nport = {grpc_port}\ntls_dir = \"/payment-processor/tls\"\nallow_insecure = false\n",
         config.min_mint_sat,
         config.max_mint_sat,
         config.min_melt_sat,
