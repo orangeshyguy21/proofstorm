@@ -121,6 +121,7 @@ pub fn run(context: &GateContext, postgres_enabled: bool, stress: bool) -> Resul
         stress,
         context.selected_version("cdk", "0.18.1"),
         context.selected_image("cdk", IMAGE),
+        context.selected_version("cdk", "0.18.1"),
     )
 }
 
@@ -128,6 +129,7 @@ pub(super) fn run_candidate(
     context: &GateContext,
     client: crate::McpClient,
     receipt: &Value,
+    source_version: &str,
 ) -> Result<()> {
     run_selected(
         context,
@@ -136,6 +138,7 @@ pub(super) fn run_candidate(
         true,
         expect::string(receipt, "/catalog_entry/version")?,
         expect::string(receipt, "/image")?,
+        source_version,
     )
 }
 
@@ -146,6 +149,7 @@ fn run_selected(
     stress: bool,
     selected_version: &str,
     selected_image: &str,
+    expected_binary_version: &str,
 ) -> Result<()> {
     let mut document = context.document(cell_document(postgres_enabled))?;
     document["components"][1]["version"] = json!(selected_version);
@@ -196,7 +200,10 @@ fn run_selected(
         context
             .kubectl
             .exec(namespace, "deployment/mint", &["cdk-mintd", "--version"])?;
-    if !version.contains("0.18.1") {
+    if !version
+        .split_whitespace()
+        .any(|part| part == expected_binary_version)
+    {
         bail!("live mint reports the wrong version: {version:?}");
     }
 
