@@ -144,8 +144,9 @@ results; upgrading the scorer does not rewrite them.
 Preservation hashes only Claude's top-level and per-project MCP server maps,
 normalized as JSON. Other agent files remain byte-exact. Two pre-run Docker
 snapshots, normally five seconds apart, identify already-changing external
-lifecycle fields. A container initially in restart backoff extends observation
-up to a 90-second deadline to witness a restart; timeout fails before runtime
+lifecycle fields. A container in restart backoff or observed mid-restart extends
+observation up to a 90-second deadline until both start time and restart count
+change; timeout fails before runtime
 or model startup. Only observed changes receive exclusions, which are listed in `acceptance.json`. Stable fields, ownership, identities, mounts and
 networks remain strict. No unrelated container is stopped to obtain a pass.
 
