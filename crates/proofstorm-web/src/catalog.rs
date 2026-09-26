@@ -4,8 +4,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 #[component]
-pub fn CatalogHome() -> impl IntoView {
-    let builds = RwSignal::new(false);
+pub fn CatalogHome(builds: RwSignal<bool>) -> impl IntoView {
     view! {
         <nav class="catalog-tabs" aria-label="Catalog pages"><button aria-pressed=move || !builds.get() on:click=move |_| builds.set(false)>"Images"</button><button aria-pressed=move || builds.get() on:click=move |_| builds.set(true)>"Builds"</button></nav>
         <Show when=move || !builds.get()><CatalogPanel /></Show>

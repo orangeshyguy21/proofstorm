@@ -23,6 +23,8 @@ mod model;
 #[cfg(target_arch = "wasm32")]
 mod motion;
 #[cfg(target_arch = "wasm32")]
+mod navigation;
+#[cfg(target_arch = "wasm32")]
 mod relationship_panel;
 mod relationships;
 #[cfg(target_arch = "wasm32")]

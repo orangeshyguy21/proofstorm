@@ -22,8 +22,10 @@ pub fn App() -> impl IntoView {
     crate::freshness::provide_clock();
     crate::gui::provide_launcher();
     crate::connections::provide_connections();
-    let system_open = RwSignal::new(false);
-    let catalog_open = RwSignal::new(false);
+    let route = crate::navigation::Navigation::new();
+    let system_open = route.system;
+    let catalog_open = route.catalog;
+    let catalog_builds = route.builds;
     Effect::new(move |_| {
         if system_open.get() {
             catalog_open.set(false);
@@ -42,9 +44,9 @@ pub fn App() -> impl IntoView {
     let zoom = RwSignal::new(1.0_f64);
     let pan = RwSignal::new((0.0_f64, 0.0_f64));
     let environment = RwSignal::new(None::<EnvironmentView>);
-    let selected = RwSignal::new(String::new());
+    let selected = route.cell;
     let detail = RwSignal::new(None::<EnvironmentCell>);
-    let component = RwSignal::new(String::new());
+    let component = route.component;
     let error = RwSignal::new(None::<String>);
     let connected = RwSignal::new(false);
     crate::freshness::provide_connection(connected, telemetry_error);
@@ -62,6 +64,7 @@ pub fn App() -> impl IntoView {
         let id = selected.get();
         if previous_cell.get_value() != id {
             previous_cell.set_value(id);
+            detail.set(None);
             zoom.set(1.0);
             pan.set((0.0, 0.0));
             history_pages.set(1);
@@ -101,6 +104,7 @@ pub fn App() -> impl IntoView {
                         if let Some(new_cell) = new_cell {
                             id = new_cell;
                             system_open.set(false);
+                            catalog_open.set(false);
                             search.set(String::new());
                         } else if !view.cells.items.iter().any(|cell| cell.id == id) {
                             id = view
@@ -111,6 +115,7 @@ pub fn App() -> impl IntoView {
                                 .unwrap_or_default();
                         }
                         if selected.get_untracked() != id {
+                            route.replace_next();
                             selected.set(id.clone());
                             detail.set(None);
                             component.set(String::new());
@@ -130,7 +135,9 @@ pub fn App() -> impl IntoView {
                                         &component.get_untracked(),
                                     )
                                     .is_none()
+                                        && !component.get_untracked().is_empty()
                                     {
+                                        route.replace_next();
                                         component.set(String::new());
                                     }
                                     detail.set(Some(cell));
@@ -257,7 +264,7 @@ pub fn App() -> impl IntoView {
                     <Show when=move || telemetry_error.get()><div class="notice warning">"Measurements could not refresh. Showing last observed values."</div></Show>
                 </div>
                 <Show when=move || system_open.get()><SystemPanel telemetry selected_cell=selected selected_component=component open=system_open /></Show>
-                <Show when=move || catalog_open.get()><crate::catalog::CatalogHome /></Show>
+                <Show when=move || catalog_open.get()><crate::catalog::CatalogHome builds=catalog_builds /></Show>
                 <Show when=move || !system_open.get() && !catalog_open.get()>
                     <CellPanel cell=detail selected_component=component history_pages zoom pan telemetry drawer />
                     <Show when=move || detail.get().is_none()><div class="empty-state"><span class="empty-mark" aria-hidden="true" inner_html=LOGO_SVG></span><Show when=move || !loaded.get() || !selected.get().is_empty()><h1>"Loading cell…"</h1></Show><Show when=move || loaded.get() && selected.get().is_empty()><crate::gui::EmptyAgentLauncher /></Show></div></Show>
