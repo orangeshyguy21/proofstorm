@@ -50,7 +50,12 @@ pub async fn bootstrap() -> Seed {
     }
     // Remove the bearer fragment from the current history entry before any API work.
     if let Ok(history) = window.history() {
-        let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some("/"));
+        let path = format!(
+            "{}{}",
+            window.location().pathname().unwrap_or_else(|_| "/".into()),
+            window.location().search().unwrap_or_default()
+        );
+        let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&path));
     }
     if let Err(error) = post("/v1/gui/session", &token, json!({})).await {
         seed.error = Some(error);

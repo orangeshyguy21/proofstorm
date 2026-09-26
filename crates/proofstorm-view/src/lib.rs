@@ -9,6 +9,8 @@ use proofstorm_core::{
 };
 mod display;
 pub use display::*;
+mod navigation;
+pub use navigation::AppRoute;
 mod telemetry;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

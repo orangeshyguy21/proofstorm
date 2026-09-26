@@ -209,7 +209,7 @@ pub(crate) fn json(status: StatusCode, value: &impl serde::Serialize) -> Respons
 }
 
 async fn checkout_asset(root: &std::path::Path, path: &str) -> Response<Body> {
-    let name = if path == "/" {
+    let name = if proofstorm_view::AppRoute::parse(path).is_some() {
         "index.html"
     } else {
         path.trim_start_matches('/')
@@ -268,7 +268,7 @@ async fn checkout_asset(root: &std::path::Path, path: &str) -> Response<Body> {
 }
 
 fn asset(path: &str) -> Response<Body> {
-    let name = if path == "/" {
+    let name = if proofstorm_view::AppRoute::parse(path).is_some() {
         "index.html"
     } else {
         path.trim_start_matches('/')
@@ -288,7 +288,7 @@ fn asset(path: &str) -> Response<Body> {
             hyper::header::HeaderValue::from_static("nosniff"),
         );
         response
-    } else if path == "/" {
+    } else if name == "index.html" {
         error(
             StatusCode::SERVICE_UNAVAILABLE,
             "web_assets_missing_run_make_web_then_rebuild",
@@ -416,6 +416,49 @@ fn read_response<T: serde::Serialize>(result: Result<T, crate::Error>) -> Respon
 #[cfg(test)]
 mod checkout_asset_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn page_reload_serves_the_same_shell_as_home() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("index.html"), "app shell").unwrap();
+        for path in [
+            "/catalog",
+            "/catalog/builds",
+            "/system",
+            "/cells/cell-1",
+            "/cells/cell-1/components/mint%2Fdb",
+        ] {
+            let response = checkout_asset(root.path(), path).await;
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                response.headers()["content-type"],
+                "text/html; charset=utf-8"
+            );
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                "app shell"
+            );
+
+            // Embedded bundles use the same fallback, including when no web
+            // build was supplied to the test binary.
+            let home = asset("/");
+            let page = asset(path);
+            assert_eq!(page.status(), home.status(), "{path}");
+            assert_eq!(page.headers(), home.headers(), "{path}");
+            assert_eq!(
+                page.into_body().collect().await.unwrap().to_bytes(),
+                home.into_body().collect().await.unwrap().to_bytes()
+            );
+        }
+        for path in ["/v1/missing", "/missing.js", "/unknown", "/cells/%GG"] {
+            assert_eq!(
+                checkout_asset(root.path(), path).await.status(),
+                StatusCode::NOT_FOUND,
+                "{path}"
+            );
+            assert_eq!(asset(path).status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
 
     #[tokio::test]
     async fn serves_bundled_brand_font_with_font_content_type() {
