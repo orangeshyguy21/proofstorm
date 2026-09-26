@@ -1,5 +1,6 @@
 //! Opt-in O1 benchmark pilot, sharing acceptance's owned runtime lifecycle.
-mod harness;
+mod codex;
+pub mod harness;
 mod negative;
 mod observer;
 mod opencode;
@@ -24,7 +25,7 @@ use std::{
 #[derive(Debug, Clone)]
 pub struct Selection {
     pub model: String,
-    pub executable: PathBuf,
+    pub harness: harness::Harness,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -122,9 +123,7 @@ pub fn run_gate(context: &crate::GateContext, task: &task::Task) -> Result<()> {
         home: context.installation.home.clone(),
         mcp: context.artifacts.mcp.clone(),
         model: selected.model.clone(),
-        harness: harness::Harness::OpenCode {
-            executable: selected.executable.clone(),
-        },
+        harness: selected.harness.clone(),
         task: task.clone(),
     };
     save(&config.work.join("benchmark-context.json"), &json!(config))?;
@@ -345,7 +344,15 @@ const EVIDENCE_FILES: &[&str] = &[
     "prompt.txt",
     "proxy-ready.json",
     "harness-preflight.private.txt",
+    "codex-model.private.json",
+    "codex-config.private.toml",
+    "codex-prompt.private.json",
 ];
+
+/// Called by the parent after reaping the worker, including cancellation/recovery.
+pub fn cleanup_harness_secrets(work: &Path) -> Result<()> {
+    codex::cleanup_auth(work)
+}
 
 fn write_report(work: &Path, task: &task::Task, record: &Value) -> Result<()> {
     use std::fmt::Write as _;

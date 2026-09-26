@@ -1,6 +1,6 @@
 # Operate benchmark development pilot
 
-This Rust pilot gives one headless OpenCode harness two real regtest tasks: O1
+This Rust pilot runs selected models through headless OpenCode or Codex CLIs on two real regtest tasks: O1
 (build, mint, pay, report and remove) and O5 (investigate an unroutable payment,
 report honestly and remove). O1 mints 1,000 sat and melts 100 sat to an independently
 observed LND recipient. It uses existing Bitcoin Core, LND, CDK, and Nutshell
@@ -18,7 +18,7 @@ ready-to-submit document; no model attempts used the 0.4 contract.
 ## Run
 
 Prerequisites: the normal checkout build/runtime dependencies, Docker, a working
-OpenCode installation, and a configured account for the explicitly selected
+installation of the selected harness, and a configured account for the explicitly selected
 model. The pilot uses that account and can incur model charges. Never put
 credentials in command arguments or committed configuration.
 
@@ -42,6 +42,57 @@ extra plugins, MCP servers, and tool permissions. The agent gets only the
 restricted Proofstorm MCP tool set; direct host shell, filesystem, delegation,
 and web tools are denied. Component-native commands remain available through
 `cell_exec`.
+
+For Codex, select the harness and exact Codex model ID instead:
+
+```sh
+.proofstorm-dev/target/debug/proofstorm-acceptance \
+  --checkout-home "$PWD/.proofstorm-dev/state" \
+  --root "$PWD" \
+  --work-dir "$PWD/dev/benchmark-o1-codex-01" \
+  --timeout 1500 \
+  --benchmark-harness codex \
+  --benchmark-codex /absolute/path/to/codex \
+  --benchmark-model gpt-6-astra \
+  benchmark-o1
+```
+
+The Codex adapter requires `exec --json --strict-config --ephemeral --ignore-rules`
+plus `debug models --bundled` and `debug prompt-input`. Its CLI contract was exercised with
+`0.158.0-alpha.2.1` against a local fake model and MCP server; this is not a paid
+O1/O5 qualification or an account-availability claim. Unknown model IDs fail
+before a model request. Bundled catalog membership does not prove account access;
+provider failures remain failed attempts, and no replacement model is selected.
+
+Each Codex attempt owns `agent/` and a private `codex-home/`. Authentication comes
+from an explicit `--benchmark-codex-auth /absolute/path/to/auth.json`, otherwise
+`CODEX_API_KEY`, otherwise the original `$CODEX_HOME/auth.json` (default
+`~/.codex/auth.json`). Only authentication is copied, never user config, MCP
+servers, plugins, trust entries, or keyring state. Keyring-only login requires
+file-based authentication or `CODEX_API_KEY`. The source login is never written;
+the copy is removed on return and by parent cleanup after cancellation. If the
+entire runner is forcibly killed, use the retained run's `--cleanup` recovery.
+
+The controlled Codex profile preserves model identity and base instructions but
+disables host shell, file patching, delegation, plugins, personal skill discovery and experimental
+extra tools. It retains the CLI's code-mode MCP dispatch and uses a read-only
+sandbox. Both the original catalog entry and controlled entry are retained in
+`codex-model.private.json`; the exact configuration is in
+`codex-config.private.toml`. CLI-bundled skill descriptions may still appear;
+`codex-prompt.private.json` retains the diagnostic rendering of model instructions
+and the task prompt. These are benchmark settings, not stock Codex defaults.
+Codex may also expose MCP resource discovery and a user-input tool that cannot
+accept assistance in `exec`. Extra MCP servers or changed proxy commands fail
+preflight. Preflight checks configuration and connects through Codex's diagnostic
+prompt renderer using a separate proxy capture; it is not a model turn and cannot
+consume the scored attempt's proxy identity.
+
+Codex MCP item events are joined to the independent proxy trace, counting each
+call once. Missing or conflicting events cannot earn complete telemetry credit.
+Its JSON stream does not expose every wrapper-only code-mode error, so the tool
+ratio covers observed MCP attempts, not every script evaluation. Token usage is
+retained; unknown cost stays null. Requested model ID is recorded separately from
+provider-resolved identity, which this CLI does not verify.
 
 The adapter sets both the process directory and `PWD`, passes `--dir`, disables
 ancestor project configuration, and uses OpenCode's `--pure` mode. A model-free
@@ -207,13 +258,16 @@ networks remain strict. No unrelated container is stopped to obtain a pass.
 
 ## Scope
 
-This is a two-task development pilot, one harness, and a caller-selected model. Report verified
+This is a two-task development pilot with two CLI adapters and caller-selected models. Report verified
 success first and the composite score second. One attempt does not establish a
 model ranking or a reliability estimate. Model aliases and inherited provider
 configuration limit exact reproducibility. Do not run timed comparisons alongside
 other acceptance workloads.
 
-The release preview still needs a second harness,
-repeated comparable attempts, calibrated targets, and installed CLI integration.
+Compare models first and retain harness/version/settings as metadata; running the
+same model through multiple harnesses is optional. Harness differences can affect
+results and must remain visible. The release preview still needs Claude Code,
+paid Codex task qualification, repeated comparable attempts, calibrated targets,
+and installed CLI integration.
 Bark support and the release reliability gates have separate qualification
 requirements. The benchmark does not certify them.
