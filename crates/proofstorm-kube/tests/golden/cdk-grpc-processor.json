@@ -460,7 +460,7 @@
                   "command": [
                     "sh",
                     "-ec",
-                    "for attempt in $(seq 1 120); do if /opt/proofstorm/driver processor-settings https://processor:50051 /payment-processor/tls; then exit 0; fi; sleep 1; done; echo 'Payment processor dependency did not become ready' >&2; exit 1"
+                    "for attempt in $(seq 1 120); do if /opt/proofstorm/driver processor-settings https://processor:50051 /payment-processor/tls cdk-ldk-server-processor; then exit 0; fi; sleep 1; done; echo 'Payment processor dependency did not become ready' >&2; exit 1"
                   ],
                   "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
                   "name": "wait-for-payment-processor",

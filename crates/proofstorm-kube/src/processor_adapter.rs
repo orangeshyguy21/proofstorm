@@ -180,7 +180,7 @@ pub fn render_processor(plan: &ComponentPlanContract) -> Result<RenderedComponen
             "serviceAccountName":"proofstorm-workload","automountServiceAccountToken":false,"enableServiceLinks":false,"securityContext":pod_security(1000),"affinity":instance_affinity(&plan.instance_key),
             "containers":[{"name":"component","image":plan.execution_context.image,"imagePullPolicy":"IfNotPresent","command":[crate::drivers::DRIVER_PATH,"exec-ldk-processor"],"env":env,"securityContext":container_security(),
                 "ports":[{"name":"grpc","containerPort":port}],
-                "readinessProbe":{"exec":{"command":[crate::drivers::DRIVER_PATH,"processor-settings",format!("https://127.0.0.1:{port}"),"/processor-client/tls"]},"timeoutSeconds":3,"periodSeconds":3},
+                "readinessProbe":{"exec":{"command":[crate::drivers::DRIVER_PATH,"processor-settings",format!("https://127.0.0.1:{port}"),"/processor-client/tls",plan.target_descriptor.backend_id]},"timeoutSeconds":3,"periodSeconds":3},
                 "volumeMounts":[{"name":"ldk-server","mountPath":"/ldk-server","readOnly":true},tls_mount("processor-server","/processor-server/tls"),tls_mount("processor-client","/processor-client/tls")]}],
             "initContainers":[{"name":"wait-for-ldk-server","image":plan.execution_context.image,"command":["sh","-ec",wait],"securityContext":container_security(),"volumeMounts":[{"name":"ldk-server","mountPath":"/ldk-server","readOnly":true},{"name":"proofstorm-driver","mountPath":"/opt/proofstorm","readOnly":true}]}],
             "volumes":[{"name":"ldk-server","persistentVolumeClaim":{"claimName":credentials.claim_name}},tls_volume("processor-server",id,"server"),tls_volume("processor-client",id,"client")]
@@ -219,6 +219,6 @@ pub(super) fn wait_for_processor(
 ) -> Result<Value, AdapterError> {
     let port = target_port(target, "grpc")?;
     Ok(
-        json!({"name":"wait-for-payment-processor","image":plan.execution_context.image,"command":["sh","-ec",format!("for attempt in $(seq 1 120); do if /opt/proofstorm/driver processor-settings https://{}:{port} /payment-processor/tls; then exit 0; fi; sleep 1; done; echo 'Payment processor dependency did not become ready' >&2; exit 1",target.component_id)],"securityContext":container_security(),"volumeMounts":[tls_mount("payment-processor","/payment-processor/tls"),{"name":"proofstorm-driver","mountPath":"/opt/proofstorm","readOnly":true}]}),
+        json!({"name":"wait-for-payment-processor","image":plan.execution_context.image,"command":["sh","-ec",format!("for attempt in $(seq 1 120); do if /opt/proofstorm/driver processor-settings https://{}:{port} /payment-processor/tls {}; then exit 0; fi; sleep 1; done; echo 'Payment processor dependency did not become ready' >&2; exit 1",target.component_id,target.backend_id)],"securityContext":container_security(),"volumeMounts":[tls_mount("payment-processor","/payment-processor/tls"),{"name":"proofstorm-driver","mountPath":"/opt/proofstorm","readOnly":true}]}),
     )
 }

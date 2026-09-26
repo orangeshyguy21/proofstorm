@@ -1,0 +1,23 @@
+# Matched to bark-wallet 0.7.0. No source substitutions or dependency updates.
+FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS build
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler clang cmake libssl-dev libsqlite3-dev libpq-dev pkg-config && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN curl -fsSL https://gitlab.com/ark-bitcoin/bark/-/archive/6188e2d809f193716b2e571274179f069d9c19ca/bark-6188e2d809f193716b2e571274179f069d9c19ca.tar.gz -o /tmp/source.tar.gz \
+    && echo '896b36b7c5e5b1b1cd927b6a3aa3121b69284d596db239704656454c4316b7c8  /tmp/source.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /src \
+    && echo '0b604ecbabf7af73dd5265f1c90a2321900730de21b208d6496bc14616a88ff8  Cargo.lock' | sha256sum -c -
+ENV GIT_HASH=6188e2d809f193716b2e571274179f069d9c19ca SERVER_VERSION=0.7.0-dev
+ENV CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked --mount=type=cache,target=/usr/local/cargo/git,sharing=locked --mount=type=cache,id=proofstorm-bark-server,target=/src/target,sharing=locked \
+    cargo build --locked --release --jobs 1 -p bark-server --bin captaind \
+    && cp target/release/captaind /usr/local/bin/
+
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 libsqlite3-0 libpq5 && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bin/captaind /usr/local/bin/
+COPY --from=build /src/LICENSE /usr/local/share/licenses/bark-server/LICENSE
+COPY --from=build /src/server/captaind.default.toml /usr/local/share/bark/captaind.default.toml
+RUN printf '%s\n' '6188e2d809f193716b2e571274179f069d9c19ca' > /usr/local/share/bark/server-revision
+ENV HOME=/data
+USER 1000:1000
+CMD ["captaind", "--config", "/config/captaind.toml", "start"]

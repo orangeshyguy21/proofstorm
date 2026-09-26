@@ -33,6 +33,7 @@
     clippy::too_many_lines
 )]
 
+pub mod benchmark;
 pub mod cell;
 pub mod client;
 mod diagnostics;

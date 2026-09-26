@@ -160,7 +160,10 @@ fn exercise(context: &GateContext, client: &mut McpClient, namespace: &str) -> R
         RUN,
         "processor",
         "processor-settings",
-        "/opt/proofstorm/driver processor-settings https://127.0.0.1:50051 /processor-client/tls",
+        &format!(
+            "/opt/proofstorm/driver processor-settings https://127.0.0.1:50051 /processor-client/tls {}",
+            proofstorm_core::processor_ids::LDK_PROCESSOR
+        ),
     )?;
     ensure!(
         settings["unit"] == "msat"

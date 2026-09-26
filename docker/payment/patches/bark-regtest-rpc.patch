@@ -1,0 +1,267 @@
+--- a/crates/bark/src/settings.rs
++++ b/crates/bark/src/settings.rs
+@@ -111,6 +111,14 @@
+     #[serde(default = "default_esplora_address")]
+     pub esplora_address: String,
+ 
++    /// Explicit regtest Bitcoin RPC endpoint, mutually exclusive with Esplora.
++    #[serde(default)]
++    pub bitcoind_address: Option<String>,
++
++    /// Private file containing RPC authentication (user:password).
++    #[serde(default)]
++    pub bitcoind_cookiefile: Option<std::path::PathBuf>,
++
+     /// Bitcoin network (mainnet, testnet, signet, regtest)
+     #[serde(default = "default_network")]
+     pub network: String,
+@@ -137,11 +145,11 @@
+ }
+ 
+ fn default_server_address() -> String {
+-    "https://ark.second.tech".to_string()
++    String::new()
+ }
+ 
+ fn default_esplora_address() -> String {
+-    "https://mempool.second.tech/api".to_string()
++    String::new()
+ }
+ 
+ fn default_network() -> String {
+@@ -162,6 +170,8 @@
+             mnemonic: String::new(),
+             server_address: default_server_address(),
+             esplora_address: default_esplora_address(),
++            bitcoind_address: None,
++            bitcoind_cookiefile: None,
+             network: default_network(),
+             data_dir: default_data_dir(),
+             event_poll_interval_ms: default_event_poll_interval_ms(),
+@@ -171,6 +181,59 @@
+ }
+ 
+ impl BackendConfig {
++    /// Validate before opening wallet storage or contacting any service.
++    pub fn validate_chain_source(&self) -> Result<()> {
++        if self.server_address.trim().is_empty() {
++            bail!("BARK_SERVER_ADDRESS must be explicitly configured");
++        }
++        let esplora = !self.esplora_address.trim().is_empty();
++        let rpc = self.bitcoind_address.is_some();
++        if esplora == rpc {
++            bail!("configure exactly one of BARK_ESPLORA_ADDRESS and BARK_BITCOIND_ADDRESS");
++        }
++        if rpc {
++            if self.network != "regtest" {
++                bail!("the Bitcoin RPC profile requires regtest");
++            }
++            if self
++                .bitcoind_address
++                .as_ref()
++                .is_none_or(|value| value.trim().is_empty())
++            {
++                bail!("BARK_BITCOIND_ADDRESS must not be empty");
++            }
++            if self
++                .bitcoind_cookiefile
++                .as_ref()
++                .is_none_or(|path| !path.is_absolute())
++            {
++                bail!("BARK_BITCOIND_COOKIEFILE must be an absolute private credential file path");
++            }
++        } else if self.bitcoind_cookiefile.is_some() {
++            bail!("RPC credentials require BARK_BITCOIND_ADDRESS");
++        }
++        Ok(())
++    }
++
++    /// Build the wallet configuration without implicit public chain endpoints.
++    pub fn wallet_config(&self, network: bitcoin::Network) -> Result<bark::Config> {
++        self.validate_chain_source()?;
++        if self.bitcoind_address.is_some() && network != bitcoin::Network::Regtest {
++            bail!("the Bitcoin RPC wallet must use regtest");
++        }
++        Ok(bark::Config {
++            server_address: self.server_address.clone(),
++            esplora_address: (!self.esplora_address.trim().is_empty())
++                .then(|| self.esplora_address.clone()),
++            bitcoind_address: self.bitcoind_address.clone(),
++            bitcoind_cookiefile: self.bitcoind_cookiefile.clone(),
++            bitcoind_user: None,
++            bitcoind_pass: None,
++            bitcoind_zmq_address: None,
++            ..bark::Config::network_default(network)
++        })
++    }
++
+     /// The methods this backend should advertise, validated.
+     ///
+     /// An empty configuration means "everything supported" — advertising
+@@ -276,6 +339,7 @@
+     }
+ 
+     fn validate(&self) -> Result<()> {
++        self.bark.validate_chain_source()?;
+         if self.bark.event_poll_interval_ms == 0 {
+             bail!("BARK_EVENT_POLL_INTERVAL_MS must be greater than zero");
+         }
+@@ -309,7 +373,104 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    fn rpc_config() -> BackendConfig {
++        BackendConfig {
++            server_address: "http://bark-server:3535".into(),
++            bitcoind_address: Some("http://chain:18443".into()),
++            bitcoind_cookiefile: Some("/chain-auth/rpc.cookie".into()),
++            network: "regtest".into(),
++            payment_methods: vec!["bolt11".into()],
++            ..BackendConfig::default()
++        }
++    }
++
++    #[test]
++    fn rpc_has_no_implicit_esplora_and_retains_private_auth_path() {
++        let config = rpc_config();
++        let wallet = config.wallet_config(bitcoin::Network::Regtest).unwrap();
++        assert!(wallet.esplora_address.is_none());
++        assert_eq!(wallet.bitcoind_address, config.bitcoind_address);
++        assert_eq!(wallet.bitcoind_cookiefile, config.bitcoind_cookiefile);
++        assert!(wallet.bitcoind_user.is_none());
++        assert!(wallet.bitcoind_pass.is_none());
++        assert!(wallet.bitcoind_zmq_address.is_none());
++        assert_eq!(
++            config.advertised_methods().unwrap(),
++            vec![AdvertisedMethod::Bolt11]
++        );
++    }
+ 
++    #[test]
++    fn chain_source_configuration_fails_closed() {
++        assert!(BackendConfig::default().validate_chain_source().is_err());
++        for mutation in [
++            "both",
++            "neither",
++            "no-auth",
++            "relative-auth",
++            "empty-rpc",
++            "mainnet",
++            "no-server",
++        ] {
++            let mut config = rpc_config();
++            match mutation {
++                "both" => config.esplora_address = "http://esplora:3000".into(),
++                "neither" => config.bitcoind_address = None,
++                "no-auth" => config.bitcoind_cookiefile = None,
++                "relative-auth" => config.bitcoind_cookiefile = Some("rpc.cookie".into()),
++                "empty-rpc" => config.bitcoind_address = Some(" ".into()),
++                "mainnet" => config.network = "mainnet".into(),
++                "no-server" => config.server_address.clear(),
++                _ => unreachable!(),
++            }
++            assert!(
++                config.wallet_config(bitcoin::Network::Regtest).is_err(),
++                "{mutation}"
++            );
++        }
++        assert!(rpc_config()
++            .wallet_config(bitcoin::Network::Bitcoin)
++            .is_err());
++    }
++
++    #[test]
++    fn explicit_esplora_remains_available_without_rpc_credentials() {
++        let mut config = rpc_config();
++        config.bitcoind_address = None;
++        config.bitcoind_cookiefile = None;
++        config.esplora_address = "http://esplora:3000".into();
++        let wallet = config.wallet_config(bitcoin::Network::Regtest).unwrap();
++        assert_eq!(wallet.esplora_address, Some(config.esplora_address));
++        assert!(wallet.bitcoind_address.is_none());
++        assert!(wallet.bitcoind_cookiefile.is_none());
++    }
++
++    #[test]
++    fn rpc_file_configuration_reaches_wallet_config() {
++        let figment = Figment::from(Serialized::defaults(Config::default())).merge(Toml::string(
++            r#"
++            [bark]
++            server_address = "http://bark-server:3535"
++            bitcoind_address = "http://chain:18443"
++            bitcoind_cookiefile = "/chain-auth/rpc.cookie"
++            network = "regtest"
++            payment_methods = ["bolt11"]
++        "#,
++        ));
++        let config = extract_config(figment).unwrap();
++        config.validate().unwrap();
++        let wallet = config
++            .bark
++            .wallet_config(bitcoin::Network::Regtest)
++            .unwrap();
++        assert!(wallet.esplora_address.is_none());
++        assert_eq!(
++            wallet.bitcoind_address.as_deref(),
++            Some("http://chain:18443")
++        );
++    }
++
+     fn config_with(methods: &[&str]) -> BackendConfig {
+         BackendConfig {
+             payment_methods: methods.iter().map(|m| m.to_string()).collect(),
+@@ -370,10 +531,17 @@
+     #[test]
+     fn validation_rejects_an_unknown_method_at_startup() {
+         let config = Config {
+-            bark: config_with(&["lightning"]),
++            bark: BackendConfig {
++                payment_methods: vec!["lightning".into()],
++                ..rpc_config()
++            },
+             ..Config::default()
+         };
+-        assert!(config.validate().is_err());
++        assert!(config
++            .validate()
++            .unwrap_err()
++            .to_string()
++            .contains("lightning"));
+     }
+ 
+     #[test]
+--- a/crates/bark/src/backend.rs
++++ b/crates/bark/src/backend.rs
+@@ -920,6 +920,7 @@
+     /// Create a new Bark backend with initialized wallet
+     pub async fn new(config: &BackendConfig) -> anyhow::Result<Self> {
+         info!("Initializing Bark backend");
++        config.validate_chain_source()?;
+ 
+         if config.event_poll_interval_ms == 0 {
+             anyhow::bail!("BARK_EVENT_POLL_INTERVAL_MS must be greater than zero");
+@@ -944,11 +945,7 @@
+         let network = Self::parse_network(&config.network)?;
+ 
+         // Build bark config
+-        let bark_config = bark::Config {
+-            server_address: config.server_address.clone(),
+-            esplora_address: Some(config.esplora_address.clone()),
+-            ..bark::Config::network_default(network)
+-        };
++        let bark_config = config.wallet_config(network)?;
+ 
+         // Create data directory if it doesn't exist
+         let data_dir = PathBuf::from(&config.data_dir);
+--- a/crates/bark/tests/regtest.rs
++++ b/crates/bark/tests/regtest.rs
+@@ -82,6 +82,8 @@
+         mnemonic: mnemonic.to_string(),
+         server_address: ark_url.to_string(),
+         esplora_address: esplora_url.to_string(),
++        bitcoind_address: None,
++        bitcoind_cookiefile: None,
+         network: "regtest".to_string(),
+         data_dir: datadir.as_ref().to_string_lossy().into_owned(),
+         event_poll_interval_ms: POLL_INTERVAL.as_millis() as u64,

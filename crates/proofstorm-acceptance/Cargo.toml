@@ -27,6 +27,7 @@ tokio = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 rusqlite.workspace = true
+rcgen = "0.13.2"
 
 [lints]
 workspace = true

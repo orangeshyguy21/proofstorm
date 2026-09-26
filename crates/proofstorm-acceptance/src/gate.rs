@@ -13,6 +13,7 @@ pub const CONTROL_NAMESPACE: &str = "proofstorm-system";
 /// Everything a gate needs: where the server is, a private database, and a
 /// kubectl bound to the cell cluster.
 pub struct GateContext {
+    pub benchmark: Option<crate::benchmark::Selection>,
     pub(crate) qualification_observer: Option<crate::qualification::Observer>,
     pub qualification: Option<proofstorm_qualification::Case>,
     pub root: PathBuf,
@@ -91,6 +92,7 @@ impl GateContext {
         Ok(Self {
             qualification_observer: None,
             qualification: None,
+            benchmark: None,
             root: root.to_path_buf(),
             kubectl: Kubectl::for_installation(&installation)?,
             run_id,
