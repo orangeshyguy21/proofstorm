@@ -111,6 +111,7 @@ pub const NAMES: &[&str] = &[
 /// Dispatch a gate by the name passed to `just e2e`.
 pub fn run(name: &str, context: &GateContext) -> Result<()> {
     match name {
+        "benchmark-o1" => crate::benchmark::run_gate(context),
         "benchmark-oracle" => crate::benchmark::reference::run(context),
         "qualification" => crate::qualification::run(context),
         "smoke" => smoke::run(context),

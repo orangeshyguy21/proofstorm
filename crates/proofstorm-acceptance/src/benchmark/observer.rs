@@ -75,15 +75,15 @@ fn identifier(value: &Value, key: &str) -> Result<String> {
     );
     Ok(id.into())
 }
-fn holdings(kube: &Kubectl, ns: &str) -> Result<Value> {
+fn holdings(task: &super::task::Task, kube: &Kubectl, ns: &str) -> Result<Value> {
     let value: Value = serde_json::from_str(&kube.exec(
         ns,
-        "deployment/wallet",
+        &format!("deployment/{}", task.component("nutshell-wallet", 0)),
         &[
             "/opt/proofstorm/driver",
             "holdings",
             "nutshell-wallet",
-            "wallet",
+            task.component("nutshell-wallet", 0),
         ],
     )?)?;
     let rows = value["mints"]
@@ -91,12 +91,13 @@ fn holdings(kube: &Kubectl, ns: &str) -> Result<Value> {
         .context("holdings mints missing")?;
     let selected: Vec<_> = rows
         .iter()
-        .filter(|r| r["mint_url"] == "http://mint:3338")
+        .filter(|r| r["mint_url"] == task.mint_url())
         .collect();
     ensure!(selected.len() == 1, "expected exactly one mint holding");
     Ok(selected[0].clone())
 }
 pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Result<Value> {
+    let task = &config.task;
     let stage = args["stage"].as_str().context("stage required")?;
     ensure!(matches!(stage, "funded" | "paid"), "unknown checkpoint");
     let path = config.work.join(format!("{stage}.json"));
@@ -104,7 +105,7 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
         !path.exists(),
         "checkpoint already retained; continue with the next task step"
     );
-    let runtime = cell::status(client, "benchmark-o1")?;
+    let runtime = cell::status(client, &task.cell_name)?;
     ensure!(
         runtime["phase"] == "ready",
         "cell must be ready at checkpoint"
@@ -113,23 +114,28 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
         .as_str()
         .context("namespace missing")?;
     let document =
-        cell::read_document(client, &json!({"name":"benchmark-o1"}), "configuration", "")?;
-    let lock = cell::read_document(client, &json!({"name":"benchmark-o1"}), "lock", "")?;
+        cell::read_document(client, &json!({"name":task.cell_name}), "configuration", "")?;
+    let lock = cell::read_document(client, &json!({"name":task.cell_name}), "lock", "")?;
     let installation = proofstorm_app::installation::Installation::load(&config.home)?;
     let kube = Kubectl::for_installation(&installation)?;
-    let wallet = holdings(&kube, ns)?;
-    let mut forward = http::PortForward::open(&kube, ns, "service/mint", 3338)?;
+    let wallet = holdings(task, &kube, ns)?;
+    let mut forward = http::PortForward::open(
+        &kube,
+        ns,
+        &format!("service/{}", task.component("cdk", 0)),
+        3338,
+    )?;
     let quote = identifier(args, "mint_quote_id")?;
     let mint = http::get_json_retrying(&mut forward, &format!("/v1/mint/quote/bolt11/{quote}"), 5)?;
     let receive: Value = serde_json::from_str(&kube.exec(
         ns,
-        "deployment/wallet",
+        &format!("deployment/{}", task.component("nutshell-wallet", 0)),
         &[
             "env",
             "HOME=/wallet",
-            "PROOFSTORM_WALLET=wallet",
-            "PROOFSTORM_MINT=mint",
-            "PROOFSTORM_EXPECTED_MINT_URL=http://mint:3338",
+            &format!("PROOFSTORM_WALLET={}", task.component("nutshell-wallet", 0)),
+            &format!("PROOFSTORM_MINT={}", task.component("cdk", 0)),
+            &format!("PROOFSTORM_EXPECTED_MINT_URL={}", task.mint_url()),
             "PROOFSTORM_OBSERVATION_ROLE=payment_receive",
             &format!("PROOFSTORM_MINT_QUOTE_ID={quote}"),
             "/opt/proofstorm/driver",
@@ -161,7 +167,7 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
         );
         let receiver: Value = serde_json::from_str(&kube.exec(
             ns,
-            "statefulset/payer-lnd",
+            &format!("statefulset/{}", task.component("lnd", 1)),
             &[
                 "lncli",
                 "--lnddir=/home/lnd/.lnd",
@@ -177,13 +183,13 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
             .context("receiver invoice missing")?;
         let wallet_melt: Value = serde_json::from_str(&kube.exec(
             ns,
-            "deployment/wallet",
+            &format!("deployment/{}", task.component("nutshell-wallet", 0)),
             &[
                 "env",
                 "HOME=/wallet",
-                "PROOFSTORM_WALLET=wallet",
-                "PROOFSTORM_MINT=mint",
-                "PROOFSTORM_EXPECTED_MINT_URL=http://mint:3338",
+                &format!("PROOFSTORM_WALLET={}", task.component("nutshell-wallet", 0)),
+                &format!("PROOFSTORM_MINT={}", task.component("cdk", 0)),
+                &format!("PROOFSTORM_EXPECTED_MINT_URL={}", task.mint_url()),
                 &format!("PROOFSTORM_INVOICE={invoice}"),
                 "/opt/proofstorm/driver",
                 "quote",
@@ -199,7 +205,7 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
         ] {
             let value: Value = serde_json::from_str(&kube.exec(
                 ns,
-                "statefulset/payer-lnd",
+                &format!("statefulset/{}", task.component("lnd", 1)),
                 &[
                     "lncli",
                     "--lnddir=/home/lnd/.lnd",
@@ -213,66 +219,50 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
     }
     save(&path, &evidence)?;
     Ok(
-        json!({"retained":true,"stage":stage,"next":if stage=="funded" {"melt 100 sat to payer-lnd"} else {"remove the cell, wait for verified closure, then give the final JSON report"}}),
+        json!({"retained":true,"stage":stage,"next":if stage=="funded" {format!("melt {} sat to {}",task.amounts.melt_sat,task.component("lnd",1))} else {"remove the cell, wait for verified closure, then give the final JSON report".to_owned()}}),
     )
 }
 
-pub fn assertions(funded: &Value, paid: &Value) -> Value {
+pub fn assertions(task: &super::task::Task, funded: &Value, paid: &Value) -> Value {
     let components = paid["document"]["components"].as_array();
-    let requested = [
-        ("chain", "bitcoin-core", "31.1"),
-        ("mint-lnd", "lnd", "0.21.3-beta"),
-        ("payer-lnd", "lnd", "0.21.3-beta"),
-        ("mint", "cdk", "0.18.1"),
-        ("wallet", "nutshell-wallet", "0.21.0"),
-    ];
-    let components_ok = components.is_some_and(|c| {
-        c.len() == 5
-            && requested.iter().all(|(id, implementation, version)| {
-                c.iter().any(|x| {
-                    x["id"] == *id
-                        && x["implementation"] == *implementation
-                        && x["version"] == *version
+    let components_ok = components.is_some_and(|actual| {
+        actual.len() == task.components.len()
+            && task.components.iter().all(|expected| {
+                actual.iter().any(|component| {
+                    ["id", "implementation", "version", "config_version"]
+                        .iter()
+                        .all(|key| component[*key] == expected[*key])
                 })
             })
     });
-    let links = paid["document"]["links"].as_array();
-    let bindings = links.is_some_and(|l| {
-        l.len() == 3
-            && ["mint-lnd", "payer-lnd"].iter().all(|id| {
-                l.iter().any(|x| {
-                    x["from"] == *id
-                        && x["to"] == "chain"
-                        && x["kind"] == "chain_backend"
-                        && x["binding"]["network"] == "regtest"
+    let bindings = paid["document"]["links"].as_array().is_some_and(|actual| {
+        actual.len() == task.links.len()
+            && task.links.iter().all(|expected| {
+                actual.iter().any(|link| {
+                    ["from", "to", "kind", "binding"]
+                        .iter()
+                        .all(|key| link[*key] == expected[*key])
                 })
-            })
-            && l.iter().any(|x| {
-                x["from"] == "mint"
-                    && x["to"] == "mint-lnd"
-                    && x["kind"] == "payment_backend"
-                    && x["binding"]["method"] == "bolt11"
-                    && x["binding"]["unit"] == "sat"
             })
     });
     let mint = funded["mint_quote"]["state"] == "ISSUED"
-        && funded["mint_quote"]["amount"] == 1000
+        && funded["mint_quote"]["amount"] == task.amounts.mint_sat
         && funded["wallet_receive"]["state"] == "ISSUED"
         && funded["wallet_receive"]["quote_id"] == funded["claims"]["mint_quote_id"]
-        && funded["wallet"]["balance_sat"] == 1000
+        && funded["wallet"]["balance_sat"] == task.amounts.mint_sat
         && funded["wallet"]["reserved_sat"] == 0;
     let receiver = paid["recipient"]["settled"] == true
-        && paid["recipient"]["amt_paid_sat"] == "100"
+        && sat_string(&paid["recipient"]["amt_paid_sat"], task.amounts.melt_sat)
         && paid["recipient"]["r_hash"] == paid["claims"]["payment_hash"];
     let melt = paid["mint_melt"]["state"] == "PAID"
-        && paid["mint_melt"]["amount"] == 100
+        && paid["mint_melt"]["amount"] == task.amounts.melt_sat
         && paid["mint_melt"]["quote"] == paid["claims"]["melt_quote_id"]
         && paid["wallet_melt"]["state"] == "PAID"
-        && paid["wallet_melt"]["amount_sat"] == 100
+        && paid["wallet_melt"]["amount_sat"] == task.amounts.melt_sat
         && paid["wallet_melt"]["quote_id"] == paid["claims"]["melt_quote_id"];
     let after = paid["wallet"]["balance_sat"].as_u64();
-    let accounting = single_payment_flow(funded, paid)
-        && after.is_some_and(|n| (890..=900).contains(&n))
+    let accounting = single_payment_flow(task, funded, paid)
+        && after.is_some_and(|n| task.remaining().contains(&n))
         && paid["wallet"]["reserved_sat"] == 0
         && mint
         && melt
@@ -280,10 +270,15 @@ pub fn assertions(funded: &Value, paid: &Value) -> Value {
     json!({"components":components_ok,"bindings":bindings,"mint_settled":mint,
         "recipient_settled":receiver&&melt,"accounting":accounting,
         "evidence":mint&&melt&&receiver&&funded["runtime"]["instance_key"].is_string()&&funded["runtime"]["instance_key"]==paid["runtime"]["instance_key"]&&funded["document"]==paid["document"],
-        "report":paid["claims"]["minted_sat"]==1000&&paid["claims"]["paid_sat"]==100&&after.is_some()&&paid["claims"]["remaining_sat"]==paid["wallet"]["balance_sat"]})
+        "report":paid["claims"]["minted_sat"]==task.amounts.mint_sat&&paid["claims"]["paid_sat"]==task.amounts.melt_sat&&after.is_some()&&paid["claims"]["remaining_sat"]==paid["wallet"]["balance_sat"]})
 }
 
-fn single_payment_flow(funded: &Value, paid: &Value) -> bool {
+fn sat_string(value: &Value, amount: u64) -> bool {
+    let expected = amount.to_string();
+    value.as_str() == Some(expected.as_str())
+}
+
+fn single_payment_flow(task: &super::task::Task, funded: &Value, paid: &Value) -> bool {
     let Some(payments) = paid["payer_payments"]["payments"].as_array() else {
         return false;
     };
@@ -307,11 +302,11 @@ fn single_payment_flow(funded: &Value, paid: &Value) -> bool {
     }
     let settled: Vec<_> = invoices.iter().filter(|v| v["settled"] == true).collect();
     payments[0]["status"] == "SUCCEEDED"
-        && payments[0]["value_sat"] == "1000"
+        && sat_string(&payments[0]["value_sat"], task.amounts.mint_sat)
         && funded["mint_quote"]["request"].is_string()
         && payments[0]["payment_request"] == funded["mint_quote"]["request"]
         && settled.len() == 1
-        && settled[0]["amt_paid_sat"] == "100"
+        && sat_string(&settled[0]["amt_paid_sat"], task.amounts.melt_sat)
         && settled[0]["r_hash"] == paid["claims"]["payment_hash"]
 }
 
@@ -327,7 +322,8 @@ mod tests {
             home: directory.path().into(),
             mcp: "unused".into(),
             model: "fixture".into(),
-            opencode: "unused".into(),
+            harness: super::super::harness::Harness::Reference,
+            task: super::super::task::o1().clone(),
         };
         let event = |id: &str| json!({"kind":"end","tool":"cell_exec","success":true,"response":{"result":{"structuredContent":{"operation_id":id}}}});
         save(
@@ -344,11 +340,7 @@ mod tests {
         Ok(())
     }
     fn fixture() -> (Value, Value) {
-        let components=[("chain","bitcoin-core","31.1"),("mint-lnd","lnd","0.21.3-beta"),("payer-lnd","lnd","0.21.3-beta"),("mint","cdk","0.18.1"),("wallet","nutshell-wallet","0.21.0")].map(|(id,implementation,version)|json!({"id":id,"implementation":implementation,"version":version}));
-        let document = json!({"components":components,"links":[
-            {"from":"mint-lnd","to":"chain","kind":"chain_backend","binding":{"network":"regtest"}},
-            {"from":"payer-lnd","to":"chain","kind":"chain_backend","binding":{"network":"regtest"}},
-            {"from":"mint","to":"mint-lnd","kind":"payment_backend","binding":{"method":"bolt11","unit":"sat"}}]});
+        let document = super::super::task::o1().document();
         let funded = json!({"document":document,"runtime":{"instance_key":"original"},"claims":{"mint_quote_id":"aa"},"mint_quote":{"amount":1000,"state":"ISSUED","request":"invoice"},"wallet_receive":{"state":"ISSUED","quote_id":"aa"},"wallet":{"balance_sat":1000,"reserved_sat":0}});
         let paid = json!({"document":document,"runtime":{"instance_key":"original"},"claims":{"mint_quote_id":"aa","melt_quote_id":"bb","payment_hash":"cc","minted_sat":1000,"paid_sat":100,"remaining_sat":900},"mint_melt":{"amount":100,"state":"PAID","quote":"bb"},"wallet_melt":{"state":"PAID","amount_sat":100,"quote_id":"bb"},"recipient":{"settled":true,"amt_paid_sat":"100","r_hash":"cc"},"wallet":{"balance_sat":900,"reserved_sat":0},"payer_payments":{"payments":[{"status":"SUCCEEDED","value_sat":"1000","payment_request":"invoice"}]},"recipient_invoices":{"invoices":[{"settled":true,"amt_paid_sat":"100","r_hash":"cc"}]}});
         (funded, paid)
@@ -357,7 +349,7 @@ mod tests {
     fn good_payment_and_independent_bad_controls() {
         let (funded, paid) = fixture();
         assert!(
-            assertions(&funded, &paid)
+            assertions(super::super::task::o1(), &funded, &paid)
                 .as_object()
                 .unwrap()
                 .values()
@@ -389,14 +381,32 @@ mod tests {
         ] {
             let mut bad = paid.clone();
             *bad.pointer_mut(pointer).unwrap() = value;
-            assert_eq!(assertions(&funded, &bad)[assertion], false, "{pointer}");
+            assert_eq!(
+                assertions(super::super::task::o1(), &funded, &bad)[assertion],
+                false,
+                "{pointer}"
+            );
         }
         assert!(
-            assertions(&Value::Null, &Value::Null)
+            assertions(super::super::task::o1(), &Value::Null, &Value::Null)
                 .as_object()
                 .unwrap()
                 .values()
                 .all(|v| v == false)
         );
+    }
+
+    #[test]
+    fn task_topology_and_derived_fee_window_control_the_oracle() {
+        let (funded, mut paid) = fixture();
+        let mut task = super::super::task::o1().clone();
+        paid["wallet"]["balance_sat"] = json!(890);
+        assert_eq!(assertions(&task, &funded, &paid)["accounting"], true);
+        task.amounts.maximum_fee_sat = 9;
+        assert_eq!(assertions(&task, &funded, &paid)["accounting"], false);
+        task.components[0]["config_version"] = json!("different");
+        assert_eq!(assertions(&task, &funded, &paid)["components"], false);
+        task.links[0]["binding"]["network"] = json!("other");
+        assert_eq!(assertions(&task, &funded, &paid)["bindings"], false);
     }
 }

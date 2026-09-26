@@ -3,39 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const VERSION: &str = "o1-70-15-15/0.3";
-pub const TARGET_SECONDS: f64 = 300.0;
-pub const DEADLINE_SECONDS: u64 = 1200;
-pub const ASSERTIONS: [(&str, u32); 10] = [
-    ("components", 10),
-    ("bindings", 10),
-    ("mint_settled", 10),
-    ("recipient_settled", 15),
-    ("accounting", 10),
-    ("terminal", 10),
-    ("evidence", 10),
-    ("report", 10),
-    ("autonomy", 5),
-    ("agent_cleanup", 10),
-];
-
 pub fn task() -> Value {
-    let operational: Vec<_> = ASSERTIONS
-        .iter()
-        .filter_map(|(id, _)| (*id != "report").then_some(*id))
-        .collect();
-    let mut required = operational.clone();
-    required.push("report_valid");
-    json!({"id":"O1","version":"0.3","suite":"operate","scorer":VERSION,
-        "profile":"opencode-mcp-pilot","target_seconds":TARGET_SECONDS,
-        "deadline_seconds":DEADLINE_SECONDS,"timing_calibrated":false,
-        "mint_sat":1000,"melt_sat":100,"max_total_fee_sat":10,
-        "payment_flow":"One successful 1000-sat payer funding payment and one settled 100-sat recipient invoice. No offsetting mint/melt cycles. Retain terminal operation evidence before removal.",
-        "assertions":ASSERTIONS,"required":required,"operational_required":operational,
-        "report_rule":"Exactly one JSON object earns reporting points. One trailing JSON object after prose may validate structured claims but earns no reporting points. Missing, ambiguous, duplicate-key, or incorrect claims fail report validation. Prose semantics are not graded.",
-        "environment_rule":"Runner cleanup and preservation must both pass. Invalid or unknown environment yields null accepted score, not a model failure. Task outcome and diagnostic points remain visible.",
-        "tool_rule":"All failures count. Successful calls deduplicated by tool and semantic arguments; request IDs excluded. At most 3 successful observations per identical read/wait. Discovery capped at 3 per tool. Report calls capped at 1. No expected-negative tool calls in O1.",
-        "quality_note":"Nine operational assertions and correct structured claims are required. JSON-only report formatting is worth 7 quality points but is not an operational completion gate."})
+    json!(super::task::o1())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +28,7 @@ fn semantic(value: &Value) -> Value {
     }
 }
 
-pub fn counts(calls: &[Call]) -> Value {
+pub fn counts(task: &super::task::Task, calls: &[Call]) -> Value {
     let (mut raw_success, mut failures, mut scored, mut pending) = (0_u32, 0_u32, 0_u32, 0_u32);
     let mut seen = BTreeMap::<String, u32>::new();
     let mut ids = BTreeSet::new();
@@ -95,7 +64,7 @@ pub fn counts(calls: &[Call]) -> Value {
                 } else {
                     1
                 };
-                if super::allowed(&call.tool) && *count <= limit {
+                if task.allowed(&call.tool) && *count <= limit {
                     scored += 1;
                 }
             }
@@ -110,6 +79,7 @@ pub fn counts(calls: &[Call]) -> Value {
 }
 
 pub fn grade(
+    task: &super::task::Task,
     observations: &Value,
     calls: &[Call],
     elapsed: Option<f64>,
@@ -117,31 +87,45 @@ pub fn grade(
     cleanup: bool,
     preservation: Option<bool>,
 ) -> Value {
-    let assertions: BTreeMap<_, _> = ASSERTIONS
+    let assertions: BTreeMap<_, _> = task
+        .assertions
         .iter()
-        .map(|(key, _)| (*key, observations[*key] == true))
+        .map(|(key, _)| (key.as_str(), observations[key] == true))
         .collect();
-    let diagnostic: u32 = ASSERTIONS
+    let diagnostic: u32 = task
+        .assertions
         .iter()
-        .filter(|(key, _)| assertions[key])
+        .filter(|(key, _)| assertions[key.as_str()])
         .map(|(_, p)| p)
         .sum();
-    let calls = counts(calls);
+    let calls = counts(task, calls);
     let timing = elapsed.filter(|t| t.is_finite() && *t >= 0.0);
-    let within_deadline =
-        timing.is_none_or(|t| t <= f64::from(u32::try_from(DEADLINE_SECONDS).unwrap()));
-    let task_success = assertions
+    let within_deadline = timing.is_none_or(|t| t <= f64::from(task.deadline_seconds));
+    let task_success = task
+        .operational_required
         .iter()
-        .all(|(key, pass)| *key == "report" || *pass)
+        .all(|key| observations[key] == true)
         && outcome == "completed"
         && within_deadline;
     let report_valid = observations["report_valid"] == true;
     let environment_valid = cleanup && preservation == Some(true);
     let valid_completion = task_success && report_valid;
-    let tool_points = calls["success_ratio"].as_f64().map(|r| 15.0 * r);
-    let time_points =
-        timing.map(|t| 15.0 * ((1200.0 - t) / (1200.0 - TARGET_SECONDS)).clamp(0.0, 1.0));
-    let quality = f64::from(diagnostic) * 70.0 / 100.0;
+    let tool_points = calls["success_ratio"]
+        .as_f64()
+        .map(|r| f64::from(task.score_weights[1]) * r);
+    let time_points = timing.map(|t| {
+        f64::from(task.score_weights[2])
+            * ((f64::from(task.deadline_seconds) - t)
+                / (f64::from(task.deadline_seconds) - task.target_seconds))
+                .clamp(0.0, 1.0)
+    });
+    let quality = f64::from(diagnostic) * f64::from(task.score_weights[0])
+        / f64::from(
+            task.assertions
+                .iter()
+                .map(|(_, weight)| weight)
+                .sum::<u32>(),
+        );
     let telemetry = calls["complete"] == true && timing.is_some();
     let task_score = if valid_completion {
         if telemetry {
@@ -181,7 +165,7 @@ pub fn grade(
     if !telemetry {
         reasons.push("scoring_telemetry_incomplete");
     }
-    json!({"scorer":VERSION,"task_hash":proofstorm_core::digest_json(&task()),
+    json!({"scorer":task.scorer,"task_hash":proofstorm_core::digest_json(task),
         "assertions":assertions,"diagnostic_score":diagnostic,
         "task_success":task_success,"report_valid":report_valid,"report_format":observations["report_format"] == true,
         "environment_valid":environment_valid,"accepted_success":if environment_valid {Some(valid_completion)} else {None},
@@ -194,10 +178,14 @@ pub fn grade(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn counts(calls: &[Call]) -> Value {
+        super::counts(super::super::task::o1(), calls)
+    }
     fn good() -> Value {
-        let mut value: Value = ASSERTIONS
+        let mut value: Value = super::super::task::o1()
+            .assertions
             .iter()
-            .map(|(id, _)| ((*id).to_owned(), json!(true)))
+            .map(|(id, _)| (id.to_owned(), json!(true)))
             .collect();
         value["report_valid"] = json!(true);
         value["report_format"] = json!(true);
@@ -210,7 +198,15 @@ mod tests {
         outcome: &str,
         cleanup: bool,
     ) -> Value {
-        super::grade(observations, calls, elapsed, outcome, cleanup, Some(true))
+        super::grade(
+            super::super::task::o1(),
+            observations,
+            calls,
+            elapsed,
+            outcome,
+            cleanup,
+            Some(true),
+        )
     }
     fn call(id: u64, success: Option<bool>) -> Call {
         Call {
@@ -234,7 +230,7 @@ mod tests {
             grade(&good(), &calls, Some(1200.0), "completed", true)["time_points"],
             0.0
         );
-        for (id, _) in ASSERTIONS {
+        for (id, _) in &super::super::task::o1().assertions {
             if id == "report" {
                 continue;
             }
@@ -268,7 +264,15 @@ mod tests {
         assert_eq!(result["accepted_score"], 93.0);
         assert_eq!(result["quality_points"], 63.0);
         for preservation in [Some(false), None] {
-            let result = super::grade(&obs, &calls, Some(300.0), "completed", true, preservation);
+            let result = super::grade(
+                super::super::task::o1(),
+                &obs,
+                &calls,
+                Some(300.0),
+                "completed",
+                true,
+                preservation,
+            );
             assert_eq!(result["task_success"], true);
             assert_eq!(result["task_score"], 93.0);
             assert_eq!(result["status"], "invalid_environment");

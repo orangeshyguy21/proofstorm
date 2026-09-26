@@ -72,8 +72,12 @@ pub fn serve(path: &Path) -> Result<()> {
                 let tools = listed["tools"]
                     .as_array_mut()
                     .context("tool discovery missing")?;
-                tools.retain(|tool| tool["name"].as_str().is_some_and(super::allowed));
-                tools.push(json!({"name":"benchmark_checkpoint","description":"Retain independent O1 payment observations BEFORE cleanup. Call funded after minting 1000 sat, then paid after melting 100 sat. Each successful checkpoint is immutable. This is a report submission, not a payment tool.","inputSchema":{
+                tools.retain(|tool| {
+                    tool["name"]
+                        .as_str()
+                        .is_some_and(|name| config.task.allowed(name))
+                });
+                tools.push(json!({"name":"benchmark_checkpoint","description":format!("Retain independent {} payment observations BEFORE cleanup. Call funded after minting {} sat, then paid after melting {} sat. Each successful checkpoint is immutable. This is a report submission, not a payment tool.",config.task.id,config.task.amounts.mint_sat,config.task.amounts.melt_sat),"inputSchema":{
                     "type":"object","additionalProperties":false,"properties":{
                         "stage":{"type":"string","enum":["funded","paid"]},"mint_quote_id":{"type":"string"},
                         "melt_quote_id":{"type":"string"},"payment_hash":{"type":"string"},
@@ -92,12 +96,15 @@ pub fn serve(path: &Path) -> Result<()> {
                     &json!({"kind":"start","id":id,"tool":tool,"arguments":args,"at_unix_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis()}),
                 )?;
                 let result = (|| -> Result<Value> {
-                    ensure!(super::allowed(tool), "tool outside benchmark profile");
+                    ensure!(config.task.allowed(tool), "tool outside benchmark profile");
                     if let Some(name) = args.get("name") {
-                        ensure!(name == "benchmark-o1", "cell outside benchmark scope");
+                        ensure!(
+                            name.as_str() == Some(config.task.cell_name.as_str()),
+                            "cell outside benchmark scope"
+                        );
                     }
                     if matches!(tool, "cell_plan" | "cell_up" | "cell_exec" | "cell_remove") {
-                        ensure!(args["name"] == "benchmark-o1", "cell name required");
+                        ensure!(args["name"] == config.task.cell_name, "cell name required");
                     }
                     if tool == "benchmark_checkpoint" {
                         let observed = observer::checkpoint(&config, &mut observer, args)?;

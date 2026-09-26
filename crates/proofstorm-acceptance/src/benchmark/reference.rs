@@ -1,5 +1,5 @@
 //! Live known-good grader control. Never reported as a model attempt.
-use super::{Context, events, observer, opencode, read, save};
+use super::{Context, events, observe_final, observer, read, save};
 use crate::{GateContext, McpClient, cell, native};
 use anyhow::{Context as _, Result, ensure};
 use serde_json::json;
@@ -12,7 +12,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         home: context.installation.home.clone(),
         mcp: context.artifacts.mcp.clone(),
         model: "reference-control".into(),
-        opencode: "unused".into(),
+        harness: super::harness::Harness::Reference,
+        task: super::task::o1().clone(),
     };
     let path = config.work.join("benchmark-context.json");
     save(&path, &json!(config))?;
@@ -20,42 +21,46 @@ pub fn run(context: &GateContext) -> Result<()> {
     crate::client::clear_runtime_environment(&mut command);
     command.arg("--benchmark-proxy").arg(path);
     let mut client = McpClient::from_command(command, "benchmark-reference-control")?;
-    let components = [
-        ("chain","bitcoin","bitcoin-core","31.1","bitcoin-core/31/v1","cell"),
-        ("mint-lnd","lightning","lnd","0.21.3-beta","lnd/0.20/v1","cell"),
-        ("payer-lnd","lightning","lnd","0.21.3-beta","lnd/0.20/v1","cell"),
-        ("mint","mint","cdk","0.18.1","cdk-mintd/0.18/v1","target"),
-        ("wallet","wallet","nutshell-wallet","0.21.0","nutshell-wallet/0.20/v1","cell")
-    ].map(|(id,kind,implementation,version,config_version,control)|json!({"id":id,"kind":kind,"implementation":implementation,"version":version,"config_version":config_version,"control":control,"config":if id=="mint" {json!({"input_fee_ppk":0})} else {json!({})}}));
-    let document = json!({"api_version":"proofstorm/v1alpha1","name":"benchmark-o1","components":components,"links":[
-        {"id":"mint-chain","kind":"chain_backend","from":"mint-lnd","to":"chain","binding":{"type":"chain","network":"regtest"}},
-        {"id":"payer-chain","kind":"chain_backend","from":"payer-lnd","to":"chain","binding":{"type":"chain","network":"regtest"}},
-        {"id":"mint-backend","kind":"payment_backend","from":"mint","to":"mint-lnd","binding":{"type":"payment","method":"bolt11","unit":"sat"}}
-    ],"policy":{"allow":[],"limits":{"max_components":8,"max_links":8,"max_config_bytes":16384}}});
+    let task = &config.task;
+    let document = task.document();
     client.call(
         "cell_up",
-        json!({"name":"benchmark-o1","request_id":"reference-create","cell":document}),
+        json!({"name":&task.cell_name,"request_id":"reference-create","cell":document}),
     )?;
-    cell::wait_ready_recorded(context, &mut client, "benchmark-o1")?;
+    cell::wait_ready_recorded(context, &mut client, &task.cell_name)?;
     native::bootstrap(
         &mut client,
-        "benchmark-o1",
+        &task.cell_name,
         "",
         "bootstrap",
-        "chain",
-        "mint-lnd",
-        "payer-lnd",
+        task.component("bitcoin-core", 0),
+        task.component("lnd", 0),
+        task.component("lnd", 1),
         2_000_000,
         1_000_000,
         500_000,
     )?;
-    let mut session = native::Session::new(&mut client, "benchmark-o1", "");
-    session.nutshell_initialize("wallet", "mint", "initialize-wallet")?;
-    let quote = session.nutshell_invoice("wallet", "mint", "mint-quote", 1000)?;
-    let invoice =
-        session.nutshell_invoice_projection("wallet", "mint", "mint-invoice", &quote, 1000)?;
+    let mut session = native::Session::new(&mut client, &task.cell_name, "");
+    session.nutshell_initialize(
+        task.component("nutshell-wallet", 0),
+        task.component("cdk", 0),
+        "initialize-wallet",
+    )?;
+    let quote = session.nutshell_invoice(
+        task.component("nutshell-wallet", 0),
+        task.component("cdk", 0),
+        "mint-quote",
+        task.amounts.mint_sat,
+    )?;
+    let invoice = session.nutshell_invoice_projection(
+        task.component("nutshell-wallet", 0),
+        task.component("cdk", 0),
+        "mint-invoice",
+        &quote,
+        task.amounts.mint_sat,
+    )?;
     session.projected(
-        "payer-lnd",
+        task.component("lnd", 1),
         "fund-mint",
         &format!(
             "{} payinvoice --force --json {}",
@@ -68,34 +73,44 @@ pub fn run(context: &GateContext) -> Result<()> {
         ),
         &json!({"mode":"json_fields","fields":["status","value_sat"]}),
     )?;
-    session.nutshell_claim("wallet", "mint", "claim", &quote, 1000)?;
+    session.nutshell_claim(
+        task.component("nutshell-wallet", 0),
+        task.component("cdk", 0),
+        "claim",
+        &quote,
+        task.amounts.mint_sat,
+    )?;
     session.client.call(
         "benchmark_checkpoint",
         json!({"stage":"funded","mint_quote_id":quote}),
     )?;
     let invoice = session.projected(
-        "payer-lnd",
+        task.component("lnd", 1),
         "recipient-invoice",
-        &format!("{} addinvoice --amt=100", native::LND),
+        &format!("{} addinvoice --amt={}", native::LND, task.amounts.melt_sat),
         &json!({"mode":"lnd_invoice"}),
     )?;
     let melt = session.nutshell_melt(
-        "wallet",
-        "mint",
+        task.component("nutshell-wallet", 0),
+        task.component("cdk", 0),
         "melt",
         invoice["payment_request"]
             .as_str()
             .context("recipient invoice")?,
-        100,
+        task.amounts.melt_sat,
     )?;
-    let remaining = session.nutshell_balance("wallet", "mint", "remaining")?;
-    session.client.call("benchmark_checkpoint",json!({"stage":"paid","mint_quote_id":quote,"melt_quote_id":melt["quote_id"],"payment_hash":invoice["payment_hash"],"minted_sat":1000,"paid_sat":100,"remaining_sat":remaining}))?;
+    let remaining = session.nutshell_balance(
+        task.component("nutshell-wallet", 0),
+        task.component("cdk", 0),
+        "remaining",
+    )?;
+    session.client.call("benchmark_checkpoint",json!({"stage":"paid","mint_quote_id":quote,"melt_quote_id":melt["quote_id"],"payment_hash":invoice["payment_hash"],"minted_sat":task.amounts.mint_sat,"paid_sat":task.amounts.melt_sat,"remaining_sat":remaining}))?;
     session
         .client
-        .call("cell_remove", json!({"name":"benchmark-o1"}))?;
-    cell::wait_closed(session.client, "benchmark-o1")?;
-    let report = json!({"success":true,"minted_sat":1000,"paid_sat":100,"remaining_sat":remaining,"cleanup":true});
-    opencode::observe_final(
+        .call("cell_remove", json!({"name":&task.cell_name}))?;
+    cell::wait_closed(session.client, &task.cell_name)?;
+    let report = json!({"success":true,"minted_sat":task.amounts.mint_sat,"paid_sat":task.amounts.melt_sat,"remaining_sat":remaining,"cleanup":true});
+    observe_final(
         &config,
         &super::report::Report::parse(&report.to_string()),
         false,
@@ -114,23 +129,21 @@ pub fn run(context: &GateContext) -> Result<()> {
     paid["payer_payments"]["payments"]
         .as_array_mut()
         .context("payment list")?
-        .push(json!({"status":"SUCCEEDED","value_sat":"100","payment_request":"extra"}));
+        .push(json!({"status":"SUCCEEDED","value_sat":task.amounts.melt_sat.to_string(),"payment_request":"extra"}));
     ensure!(
-        observer::assertions(&funded, &paid)["accounting"] == false,
+        observer::assertions(task, &funded, &paid)["accounting"] == false,
         "offsetting cycle control was accepted"
     );
     let prose = super::report::Report::parse(&format!("Payment completed.\n{report}"));
     ensure!(
-        !prose.format_valid && prose.consistent(true, Some(remaining)),
+        !prose.format_valid && prose.consistent(task, true, Some(remaining)),
         "report format and claims were conflated"
     );
-    let wrong = super::report::Report::parse(
-        &report
-            .to_string()
-            .replace("\"paid_sat\":100", "\"paid_sat\":101"),
-    );
+    let mut wrong = report.clone();
+    wrong["paid_sat"] = json!(task.amounts.melt_sat + 1);
+    let wrong = super::report::Report::parse(&wrong.to_string());
     ensure!(
-        !wrong.consistent(true, Some(remaining)),
+        !wrong.consistent(task, true, Some(remaining)),
         "incorrect report accepted"
     );
     save(

@@ -71,8 +71,8 @@ The shared driver accepts an explicit profile:
 It sends protocol `4.0.0`, authenticates both peers, and requires `sat`, BOLT11,
 no BOLT12, no on-chain settings, and an empty custom-method map. This checks the
 actual protobuf fields, including methods CDK would otherwise register silently.
-The existing three-argument command retains its LDK profile; it is not auto-detected
-from the response. Both profiles reject extra rails. Timeout and reply-size bounds
+The catalog profile argument is required; it is not auto-detected from the
+response. Both profiles reject extra rails. Timeout and reply-size bounds
 are unchanged. This profile selector does not enable Bark in the catalog, topology
 validator or renderer.
 

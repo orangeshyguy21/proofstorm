@@ -1,5 +1,5 @@
 //! Reconcile harness tool events with the MCP boundary, counting wrappers once.
-use super::score::Call;
+use super::super::score::Call;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 

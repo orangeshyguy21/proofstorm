@@ -1,12 +1,14 @@
 //! Opt-in O1 benchmark pilot, sharing acceptance's owned runtime lifecycle.
+mod harness;
 mod observer;
 mod opencode;
 pub mod proxy;
 pub mod reference;
 mod report;
 pub mod score;
-mod telemetry;
+pub mod task;
 use anyhow::{Context as _, Result, ensure};
+use report::Report;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::Digest;
@@ -18,6 +20,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Debug, Clone)]
+pub struct Selection {
+    pub model: String,
+    pub executable: PathBuf,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Context {
     pub root: PathBuf,
@@ -25,32 +33,8 @@ pub struct Context {
     pub home: PathBuf,
     pub mcp: PathBuf,
     pub model: String,
-    pub opencode: PathBuf,
-}
-
-pub fn allowed(name: &str) -> bool {
-    matches!(
-        name,
-        "catalog_list"
-            | "catalog_entry_read"
-            | "catalog_config_schema_read"
-            | "cell_plan"
-            | "cell_read"
-            | "cell_search"
-            | "cell_up"
-            | "cell_inspect"
-            | "cell_wait"
-            | "cell_exec"
-            | "cell_remove"
-            | "cell_component_status_list"
-            | "cell_inventory_list"
-            | "operation_status"
-            | "operation_wait"
-            | "operation_read"
-            | "operation_cancel"
-            | "activity_search"
-            | "benchmark_checkpoint"
-    )
+    pub harness: harness::Harness,
+    pub task: task::Task,
 }
 
 pub fn read(path: &Path) -> Result<Value> {
@@ -126,14 +110,21 @@ fn calls(events: &[Value]) -> Result<Vec<score::Call>> {
     Ok(calls.into_values().collect())
 }
 
-pub fn run_gate(context: &crate::GateContext, model: &str, opencode: &Path) -> Result<()> {
+pub fn run_gate(context: &crate::GateContext) -> Result<()> {
+    let selected = context
+        .benchmark
+        .as_ref()
+        .context("benchmark harness selection required")?;
     let config = Context {
         root: context.root.clone(),
         work: context.work().into(),
         home: context.installation.home.clone(),
         mcp: context.artifacts.mcp.clone(),
-        model: model.into(),
-        opencode: opencode.into(),
+        model: selected.model.clone(),
+        harness: harness::Harness::OpenCode {
+            executable: selected.executable.clone(),
+        },
+        task: task::o1().clone(),
     };
     save(&config.work.join("benchmark-context.json"), &json!(config))?;
     save(&config.work.join("benchmark-task.json"), &score::task())?;
@@ -146,7 +137,18 @@ pub fn run_gate(context: &crate::GateContext, model: &str, opencode: &Path) -> R
             "checkout_registration":read(&config.home.join("checkout-artifacts.json")).ok()
         }),
     )?;
-    let result = opencode::run(&config);
+    let result = (|| -> Result<()> {
+        let outcome = harness::run(&config)?;
+        let report = Report::parse(&outcome.final_text);
+        save(&config.work.join("agent-final.json"), &json!(report.claims))?;
+        save(&config.work.join("agent-report.json"), &json!(report))?;
+        observe_final(
+            &config,
+            &report,
+            outcome.outcome != "completed" || outcome.unauthorized,
+        )
+    })();
+
     if let Err(error) = &result {
         let mut attempt = read(&config.work.join("benchmark-attempt.json")).unwrap_or(json!({}));
         attempt["outcome"] = json!(if attempt["outcome"] == "completed" {
@@ -161,6 +163,58 @@ pub fn run_gate(context: &crate::GateContext, model: &str, opencode: &Path) -> R
         )?;
     }
     result
+}
+
+fn observe_final(config: &Context, report: &Report, errors: bool) -> Result<()> {
+    let funded = read(&config.work.join("funded.json")).unwrap_or(Value::Null);
+    let paid = read(&config.work.join("paid.json")).unwrap_or(Value::Null);
+    let mut observations = observer::assertions(&config.task, &funded, &paid);
+    observations["autonomy"] = json!(!errors);
+    let consistent = report.consistent(
+        &config.task,
+        observations["report"] == true,
+        paid["wallet"]["balance_sat"].as_u64(),
+    );
+    observations["report_valid"] = json!(consistent);
+    observations["report_format"] = json!(report.format_valid);
+    observations["report"] = json!(consistent && report.format_valid);
+    let events = events(&config.work)?;
+    observations["terminal"] = json!(observer::terminal_assertion(config, &events));
+    save(
+        &config.work.join("benchmark-observations.json"),
+        &observations,
+    )?;
+    // A verified close must have been observed by the agent. Runner emergency cleanup earns no credit.
+    let closed = events.iter().rev().find(|v| {
+        v["kind"] == "end"
+            && (v["tool"] == "cell_remove"
+                || (v["tool"] == "cell_wait" && v["arguments"]["target_phase"] == "closed"))
+            && v["success"] == true
+            && observer::content(v)["teardown_receipt"]["verified_absent"] == true
+    });
+    let close = closed.map_or(Value::Null, observer::content);
+    let ns = close["teardown_receipt"]["instance_namespace"].as_str();
+    let mut absent = false;
+    if let Some(ns) = ns {
+        let install = proofstorm_app::installation::Installation::load(&config.home)?;
+        let kube = crate::Kubectl::for_installation(&install)?;
+        let namespaces = kube.get_json(&["get", "namespaces"])?;
+        save(&config.work.join("cleanup-observation.json"), &namespaces)?;
+        absent = namespaces["items"]
+            .as_array()
+            .is_some_and(|items| items.iter().all(|item| item["metadata"]["name"] != ns));
+    }
+    observations["agent_cleanup"] = json!(
+        (close["reached"] == true || close["complete"] == true)
+            && close["teardown_receipt"]["verified_absent"] == true
+            && absent
+            && (paid.is_null() || close["instance_key"] == paid["runtime"]["instance_key"])
+    );
+    save(
+        &config.work.join("benchmark-observations.json"),
+        &observations,
+    )?;
+    Ok(())
 }
 
 /// Verify the original evidence before regrading. No model or payment calls.
@@ -199,54 +253,31 @@ pub fn finalize(work: &Path) -> Result<Value> {
     }
     let acceptance = read(&work.join("acceptance.json"))?;
     let observations = read(&work.join("benchmark-observations.json")).unwrap_or(json!({}));
-    let task = read(&work.join("benchmark-task.json")).unwrap_or(score::task());
+    let task = read(&work.join("benchmark-task.json"))?;
     ensure!(
         task == score::task(),
         "task/scorer changed; use the original scorer for this attempt"
     );
-    let transcript = fs::read_to_string(work.join("harness.jsonl")).unwrap_or_default();
-    let mut transcript_rows = Vec::new();
-    let mut transcript_complete = !transcript.is_empty();
-    for line in transcript.lines() {
-        match serde_json::from_str(line) {
-            Ok(row) => transcript_rows.push(row),
-            Err(_) => transcript_complete = false,
-        }
-    }
-    let captured = events(work).and_then(|rows| calls(&rows));
-    let telemetry_error = captured.as_ref().err().map(ToString::to_string);
-    let captured = captured.unwrap_or_else(|_| {
-        vec![score::Call {
-            id: 1,
-            tool: "telemetry_gap".into(),
-            arguments: Value::Null,
-            success: None,
-            elapsed_ms: 0,
-        }]
-    });
-    let (mut normalized, unauthorized) = telemetry::reconcile(captured, &transcript_rows);
-    if !transcript_complete {
-        let id = normalized
-            .iter()
-            .map(|call| call.id)
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .context("call ID overflow")?;
-        normalized.push(score::Call {
-            id,
-            tool: "telemetry_gap".into(),
-            arguments: Value::Null,
-            success: None,
-            elapsed_ms: 0,
-        });
-    }
+    let config: Context = serde_json::from_value(read(&work.join("benchmark-context.json"))?)?;
+    ensure!(
+        json!(config.task) == task,
+        "context task differs from retained contract"
+    );
+    let outcome = harness::retained(&config.harness, work)?;
+    save(&work.join("harness-outcome.json"), &json!(outcome))?;
+    attempt["outcome"] = json!(outcome.outcome);
+    attempt["elapsed_seconds"] = json!(outcome.elapsed_seconds);
+    attempt["usage"] = outcome.usage;
+    let normalized = outcome.calls;
+    let unauthorized = outcome.unauthorized;
+    let telemetry_error = outcome.telemetry_error;
     let mut observations = observations;
     save(&work.join("normalized-calls.json"), &json!(normalized))?;
     if unauthorized {
         observations["autonomy"] = json!(false);
     }
     let mut record = score::grade(
+        &config.task,
         &observations,
         &normalized,
         attempt["elapsed_seconds"].as_f64(),
@@ -263,7 +294,7 @@ pub fn finalize(work: &Path) -> Result<Value> {
         && let Some(usage) = fields.remove("usage")
     {
         fields.insert("usage_steps".into(), json!(usage.as_array().map(Vec::len)));
-        fields.insert("usage_evidence".into(), json!("benchmark-attempt.json"));
+        fields.insert("usage_evidence".into(), json!("harness-outcome.json"));
     }
     record["attempt"] = attempt_summary;
     record["runner_cleanup"] = json!(acceptance["cleanup"] == "passed");
@@ -277,7 +308,7 @@ pub fn finalize(work: &Path) -> Result<Value> {
     }
     record["evidence_sha256"] = json!(evidence);
     save(&work.join("benchmark-result.json"), &record)?;
-    write_report(work, &record)?;
+    write_report(work, &config.task, &record)?;
     Ok(record)
 }
 
@@ -292,6 +323,7 @@ const EVIDENCE_FILES: &[&str] = &[
     "paid.json",
     "events.jsonl",
     "normalized-calls.json",
+    "harness-outcome.json",
     "harness.jsonl",
     "harness.stderr",
     "tools.json",
@@ -308,7 +340,7 @@ const EVIDENCE_FILES: &[&str] = &[
     "harness-preflight.private.txt",
 ];
 
-fn write_report(work: &Path, record: &Value) -> Result<()> {
+fn write_report(work: &Path, task: &task::Task, record: &Value) -> Result<()> {
     use std::fmt::Write as _;
     let number = |value: &Value| {
         value
@@ -316,7 +348,7 @@ fn write_report(work: &Path, record: &Value) -> Result<()> {
             .map_or_else(|| "unscored".to_owned(), |n| format!("{n:.2}"))
     };
     let summary = format!(
-        "# O1 benchmark development pilot\n\nStatus: {}. Accepted score: {} / 100.\n\nOperational task complete: {}. Structured claims valid: {}. JSON-only format: {}.\n\nEnvironment valid: {}. Runner cleanup: {}. Preservation: {}.\n\nDiagnostic quality: {} / 100; quality points: {} / 70; tool points: {} / 15; time points: {} / 15. Task score before environment validation: {} / 100.\n\nTool calls: {} successes, {} failures, {} pending; {} successful calls excluded from scoring.\n\nElapsed seconds: {}. Agent cleanup: {}.\n\nInvalid environments are excluded from model comparisons; a diagnostic task score is not an accepted score. This single-task pilot is not a model ranking. Time targets remain uncalibrated. See benchmark-result.json and private retained evidence.\n",
+        "# {task_id} benchmark development pilot\n\nStatus: {}. Accepted score: {} / 100.\n\nOperational task complete: {}. Structured claims valid: {}. JSON-only format: {}.\n\nEnvironment valid: {}. Runner cleanup: {}. Preservation: {}.\n\nDiagnostic quality: {} / 100; quality points: {} / {quality_weight}; tool points: {} / {tool_weight}; time points: {} / {time_weight}. Task score before environment validation: {} / 100.\n\nTool calls: {} successes, {} failures, {} pending; {} successful calls excluded from scoring.\n\nElapsed seconds: {}. Agent cleanup: {}.\n\nInvalid environments are excluded from model comparisons; a diagnostic task score is not an accepted score. This single-task pilot is not a model ranking. Time targets remain uncalibrated. See benchmark-result.json and private retained evidence.\n",
         record["status"].as_str().unwrap_or("unknown"),
         number(&record["accepted_score"]),
         record["task_success"],
@@ -336,6 +368,10 @@ fn write_report(work: &Path, record: &Value) -> Result<()> {
         record["tools"]["excluded_successes"],
         number(&record["elapsed_seconds"]),
         record["assertions"]["agent_cleanup"],
+        task_id = task.id,
+        quality_weight = task.score_weights[0],
+        tool_weight = task.score_weights[1],
+        time_weight = task.score_weights[2],
     );
     let mut assertions = String::new();
     if let Some(values) = record["assertions"].as_object() {
@@ -375,7 +411,22 @@ mod tests {
             &json!({"cleanup":"passed","preservation":"passed"}),
         )?;
         save(&work.path().join("benchmark-task.json"), &score::task())?;
+        save(
+            &work.path().join("benchmark-context.json"),
+            &json!(Context {
+                root: work.path().into(),
+                work: work.path().into(),
+                home: work.path().into(),
+                mcp: "unused".into(),
+                model: "test".into(),
+                harness: harness::Harness::OpenCode {
+                    executable: "unused".into()
+                },
+                task: task::o1().clone()
+            }),
+        )?;
         let original = finalize(work.path())?;
+
         assert_eq!(original, regrade(work.path())?);
         save(&work.path().join("paid.json"), &json!({}))?;
         assert!(regrade(work.path()).is_err());
@@ -398,6 +449,46 @@ mod tests {
         assert!(finalize(work.path()).is_err());
         assert_eq!(fs::read_to_string(path)?, "original result");
         assert!(!work.path().join("normalized-calls.json").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn every_task_dimension_is_guarded_before_regrade_writes() -> Result<()> {
+        let work = tempfile::tempdir()?;
+        save(&work.path().join("acceptance.json"), &json!({}))?;
+        let original = score::task();
+        for (pointer, changed) in [
+            ("/prompt", json!("different instructions")),
+            ("/cell_name", json!("different-cell")),
+            ("/components/0/version", json!("other")),
+            ("/components/0/config_version", json!("other")),
+            ("/links/0/to", json!("other")),
+            ("/policy/limits/max_components", json!(9)),
+            ("/allowed_tools/0", json!("unrestricted")),
+            ("/amounts/mint_sat", json!(2000)),
+            ("/amounts/maximum_fee_sat", json!(11)),
+            ("/deadline_seconds", json!(1201)),
+            ("/target_seconds", json!(301)),
+            ("/assertions/0/1", json!(11)),
+            ("/report_schema/properties/success/const", json!(false)),
+        ] {
+            let mut altered = original.clone();
+            *altered
+                .pointer_mut(pointer)
+                .context("task fixture pointer")? = changed;
+            assert_ne!(
+                proofstorm_core::digest_json(&original),
+                proofstorm_core::digest_json(&altered)
+            );
+            save(&work.path().join("benchmark-task.json"), &altered)?;
+            fs::write(work.path().join("benchmark-result.json"), "unchanged")?;
+            assert!(finalize(work.path()).is_err(), "{pointer}");
+            assert_eq!(
+                fs::read_to_string(work.path().join("benchmark-result.json"))?,
+                "unchanged"
+            );
+            assert!(!work.path().join("normalized-calls.json").exists());
+        }
         Ok(())
     }
 }

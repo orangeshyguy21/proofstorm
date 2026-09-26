@@ -19,7 +19,7 @@ CARGO_TARGET_DIR=.proofstorm-dev/target cargo build --locked -p proofstorm-accep
 .proofstorm-dev/target/debug/proofstorm-acceptance \
   --checkout-home "$PWD/.proofstorm-dev/state" \
   --root "$PWD" \
-  --work-dir "$PWD/dev/benchmark-o1-kimi-01" \
+  --work-dir "$PWD/dev/benchmark-o1-kimi-v04-01" \
   --timeout 1500 \
   --benchmark-model kimi-code-plan-global/kimi-for-coding \
   --benchmark-opencode /absolute/path/to/opencode \
@@ -49,7 +49,7 @@ receipt:
 
 ```sh
 .proofstorm-dev/target/debug/proofstorm-acceptance \
-  --cleanup "$PWD/dev/benchmark-o1-kimi-01"
+  --cleanup "$PWD/dev/benchmark-o1-kimi-v04-01"
 ```
 
 Cleanup recovery does not grant credit for agent cleanup. A run without a final
@@ -79,7 +79,7 @@ retains terminal operation evidence immediately before the first removal request
 because cell teardown deletes those records. Either a verified `cell_wait` or a
 completed `cell_remove` receipt can demonstrate closure.
 
-Scorer `o1-70-15-15/0.3` computes:
+Scorer `o1-70-15-15/0.4` computes:
 
 - **Quality (70):** 70% of the weighted assertion score. Nine operational
   assertions are required. Correct JSON-only reporting contributes seven points;
@@ -120,11 +120,15 @@ Regrade without a model or runtime:
 
 ```sh
 .proofstorm-dev/target/debug/proofstorm-acceptance \
-  --benchmark-grade "$PWD/dev/benchmark-o1-kimi-01"
+  --benchmark-grade "$PWD/dev/benchmark-o1-kimi-v04-01"
 ```
 
 Regrading verifies retained evidence hashes and requires the original task/scorer
-contract. Hashes detect accidental evidence changes; they are not a signature or
+contract. One Rust `Task` defines the prompt, cell scope, component/config versions,
+links, amounts and fee bound, allowed tools, timing, assertion weights and report
+schema. Its complete serialized value is hashed and checked before regrading;
+the remaining-balance window is derived from its amounts and maximum fee.
+Hashes detect accidental evidence changes; they are not a signature or
 a defense against someone rewriting both evidence and its manifest.
 
 The `benchmark-oracle` acceptance gate runs a Rust reference flow through the
@@ -133,8 +137,17 @@ an offsetting-payment counterexample with live observations. It is a grader
 control, not a model attempt, and has no model score. Run it with the same
 checkout/root options and a fresh work directory; omit benchmark model options.
 The 0.1 and 0.2 attempts remain retained and cannot be regraded with the changed
-0.3 task contract. Keep the original runner for offline reproduction of older
+0.4 task contract. The 0.3 runner is retained separately; no model attempts used
+that contract. Keep the original runner for offline reproduction of older
 results; upgrading the scorer does not rewrite them.
+
+Preservation hashes only Claude's top-level and per-project MCP server maps,
+normalized as JSON. Other agent files remain byte-exact. Two pre-run Docker
+snapshots, normally five seconds apart, identify already-changing external
+lifecycle fields. A container initially in restart backoff extends observation
+up to a 90-second deadline to witness a restart; timeout fails before runtime
+or model startup. Only observed changes receive exclusions, which are listed in `acceptance.json`. Stable fields, ownership, identities, mounts and
+networks remain strict. No unrelated container is stopped to obtain a pass.
 
 ## Scope
 

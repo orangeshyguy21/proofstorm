@@ -2922,6 +2922,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "cashu",
+ "proofstorm-core",
  "prost",
  "rcgen",
  "reqwest",

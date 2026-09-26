@@ -63,8 +63,8 @@ impl FromStr for Profile {
 
     fn from_str(value: &str) -> Result<Self> {
         match value {
-            "cdk-ldk-server-processor" => Ok(Self::LdkServer),
-            "cdk-bark-processor" => Ok(Self::Bark),
+            proofstorm_core::processor_ids::LDK_PROCESSOR => Ok(Self::LdkServer),
+            proofstorm_core::processor_ids::BARK_PROCESSOR => Ok(Self::Bark),
             _ => anyhow::bail!("unknown payment processor profile"),
         }
     }
@@ -90,13 +90,6 @@ impl Profile {
         );
         Ok(())
     }
-}
-
-/// Perform a bounded, mutually authenticated `GetSettings` call without payment mutations.
-/// # Errors
-/// Rejects non-TLS endpoints, missing credentials, protocol mismatch and failed RPCs.
-pub async fn settings(address: &str, tls: &Path) -> Result<Settings> {
-    settings_for(address, tls, Profile::LdkServer).await
 }
 
 /// Perform the same authenticated handshake for an explicitly selected profile.

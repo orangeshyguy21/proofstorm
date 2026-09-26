@@ -45,16 +45,59 @@ impl Report {
         }
     }
 
-    pub fn consistent(&self, checkpoint_valid: bool, remaining: Option<u64>) -> bool {
+    pub fn consistent(
+        &self,
+        task: &super::task::Task,
+        checkpoint_valid: bool,
+        remaining: Option<u64>,
+    ) -> bool {
         checkpoint_valid
             && self.claims.as_ref().is_some_and(|c| {
-                c.success
-                    && c.minted_sat == 1000
-                    && c.paid_sat == 100
+                matches_schema(&serde_json::json!(c), &task.report_schema)
                     && Some(c.remaining_sat) == remaining
-                    && c.cleanup
             })
     }
+}
+
+// The task's small report schema supports exact properties, scalar types,
+// constants and integer bounds. Fail closed rather than accepting unknown types.
+fn matches_schema(claims: &serde_json::Value, schema: &serde_json::Value) -> bool {
+    let Some(properties) = schema["properties"].as_object() else {
+        return false;
+    };
+    let Some(required) = schema["required"].as_array() else {
+        return false;
+    };
+    schema["type"] == "object"
+        && schema["additionalProperties"] == false
+        && claims
+            .as_object()
+            .is_some_and(|values| values.keys().all(|key| properties.contains_key(key)))
+        && required
+            .iter()
+            .all(|key| key.as_str().is_some_and(|key| claims.get(key).is_some()))
+        && properties.iter().all(|(key, rule)| {
+            let Some(value) = claims.get(key) else {
+                return false;
+            };
+            let valid_type = match rule["type"].as_str() {
+                Some("boolean") => value.is_boolean(),
+                Some("integer") => value.as_u64().is_some(),
+                _ => false,
+            };
+            valid_type
+                && rule.get("const").is_none_or(|expected| expected == value)
+                && rule.get("minimum").is_none_or(|min| {
+                    min.as_u64()
+                        .zip(value.as_u64())
+                        .is_some_and(|(min, value)| value >= min)
+                })
+                && rule.get("maximum").is_none_or(|max| {
+                    max.as_u64()
+                        .zip(value.as_u64())
+                        .is_some_and(|(max, value)| value <= max)
+                })
+        })
 }
 
 #[cfg(test)]
@@ -66,12 +109,14 @@ mod tests {
     #[test]
     fn prose_loses_format_credit_without_erasing_valid_claims() {
         let strict = Report::parse(GOOD);
-        assert!(strict.format_valid && strict.consistent(true, Some(899)));
+        assert!(
+            strict.format_valid && strict.consistent(super::super::task::o1(), true, Some(899))
+        );
         let prose = Report::parse(&format!("Payment completed.\n\n{GOOD}"));
         assert!(!prose.format_valid);
-        assert!(prose.consistent(true, Some(899)));
-        assert!(!prose.consistent(true, Some(900)));
-        assert!(!prose.consistent(false, Some(899)));
+        assert!(prose.consistent(super::super::task::o1(), true, Some(899)));
+        assert!(!prose.consistent(super::super::task::o1(), true, Some(900)));
+        assert!(!prose.consistent(super::super::task::o1(), false, Some(899)));
     }
 
     #[test]
@@ -86,7 +131,10 @@ mod tests {
             "{}".into(),
             "success".into(),
         ] {
-            assert!(!Report::parse(&text).consistent(true, Some(899)), "{text}");
+            assert!(
+                !Report::parse(&text).consistent(super::super::task::o1(), true, Some(899)),
+                "{text}"
+            );
         }
     }
 }

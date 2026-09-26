@@ -1,4 +1,5 @@
 //! Domain contracts shared by every Proofstorm interface.
+pub mod processor_ids;
 
 mod backend;
 mod candidate;
