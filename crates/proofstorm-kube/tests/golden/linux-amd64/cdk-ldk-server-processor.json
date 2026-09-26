@@ -359,7 +359,8 @@
                         "/opt/proofstorm/driver",
                         "processor-settings",
                         "https://127.0.0.1:50051",
-                        "/processor-client/tls"
+                        "/processor-client/tls",
+                        "cdk-ldk-server-processor"
                       ]
                     },
                     "periodSeconds": 3,

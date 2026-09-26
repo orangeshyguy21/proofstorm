@@ -11,6 +11,54 @@ use std::{
     time::{Duration, Instant},
 };
 
+const LIFECYCLE_FIELDS: [&str; 4] = ["running", "restarting", "started", "restarts"];
+
+/// Normally two observations five seconds apart. A container already in Docker
+/// restart backoff gets a bounded chance to demonstrate its next restart. No
+/// exemption is inferred from the flag alone, and no resource is modified.
+pub fn baseline(
+    checkout_home: Option<&Path>,
+    mut record: impl FnMut(usize, &Value) -> Result<()>,
+) -> Result<(Value, Value)> {
+    let first = snapshot(checkout_home)?;
+    record(0, &first)?;
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut excluded = serde_json::Map::new();
+    for index in 1.. {
+        std::thread::sleep(Duration::from_secs(5));
+        let current = snapshot(checkout_home)?;
+        record(index, &current)?;
+        let changes = exclusions(&first, &current, None)?;
+        for (id, fields) in changes.as_object().context("exclusions map")? {
+            let entry = excluded.entry(id.clone()).or_insert(json!([]));
+            let retained = entry.as_array_mut().context("excluded fields")?;
+            for field in fields.as_array().context("excluded fields")? {
+                if !retained.contains(field) {
+                    retained.push(field.clone());
+                }
+            }
+        }
+        if !awaiting_restart(&first, &current) {
+            return Ok((current, Value::Object(excluded)));
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "preexisting restarting container did not complete baseline observation; no runtime or model started"
+        );
+    }
+    unreachable!("unbounded iterator returns or reaches deadline")
+}
+
+fn awaiting_restart(first: &Value, current: &Value) -> bool {
+    first["containers"].as_object().is_some_and(|containers| {
+        containers.iter().any(|(id, value)| {
+            value["restarting"] == true
+                && value["restarts"] == current["containers"][id]["restarts"]
+                && value["started"] == current["containers"][id]["started"]
+        })
+    })
+}
+
 fn docker(args: &[&str]) -> Result<String> {
     use std::io::{Read, Seek, SeekFrom};
     let mut output = tempfile::tempfile()?;
@@ -42,10 +90,121 @@ fn docker(args: &[&str]) -> Result<String> {
 }
 
 fn configuration(path: &Path) -> Result<Value> {
-    if !path.try_exists()? {
+    let claude = path.file_name().is_some_and(|name| name == ".claude.json");
+    let exists = path.try_exists()?;
+    if !exists && !claude {
         return Ok(Value::Null);
     }
-    Ok(json!(format!("{:x}", Sha256::digest(fs::read(path)?))))
+    let bytes = if exists {
+        fs::read(path)?
+    } else {
+        b"{}".to_vec()
+    };
+    let bytes = if claude {
+        serde_json::to_vec(&claude_mcp_configuration(&serde_json::from_slice(&bytes)?)?)?
+    } else {
+        bytes
+    };
+    Ok(json!(format!("{:x}", Sha256::digest(bytes))))
+}
+
+// Claude updates session metadata independently. Attach can only change these
+// MCP maps; empty project entries are equivalent to absent entries.
+fn claude_mcp_configuration(config: &Value) -> Result<Value> {
+    fn servers(value: Option<&Value>) -> Result<Value> {
+        match value {
+            None => Ok(json!({})),
+            Some(Value::Object(map)) => Ok(canonical(&json!(map))),
+            _ => anyhow::bail!("Claude MCP configuration is not an object"),
+        }
+    }
+    ensure!(config.is_object(), "Claude configuration is not an object");
+    let mut projects = BTreeMap::new();
+    if let Some(value) = config.get("projects") {
+        for (path, project) in value
+            .as_object()
+            .context("Claude projects is not an object")?
+        {
+            ensure!(project.is_object(), "Claude project is not an object");
+            let mcp = servers(project.get("mcpServers"))?;
+            if mcp != json!({}) {
+                projects.insert(path, mcp);
+            }
+        }
+    }
+    Ok(json!({"mcpServers":servers(config.get("mcpServers"))?,"projects":projects}))
+}
+
+fn canonical(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => json!(
+            map.iter()
+                .map(|(key, value)| (key, canonical(value)))
+                .collect::<BTreeMap<_, _>>()
+        ),
+        Value::Array(values) => Value::Array(values.iter().map(canonical).collect()),
+        other => other.clone(),
+    }
+}
+
+/// Only lifecycle fields observed changing before the run can be excluded.
+/// Ownership, identities, mounts, networks and stable lifecycle fields stay strict.
+pub fn exclusions(first: &Value, second: &Value, run_owner: Option<&str>) -> Result<Value> {
+    let mut excluded = serde_json::Map::new();
+    for (id, old) in first["containers"]
+        .as_object()
+        .context("container inventory missing")?
+    {
+        let Some(new) = second["containers"].get(id) else {
+            continue;
+        };
+        if run_owner.is_some_and(|owner| {
+            old["owner"].as_str() == Some(owner) || new["owner"].as_str() == Some(owner)
+        }) {
+            continue;
+        }
+        let fields: Vec<_> = LIFECYCLE_FIELDS
+            .into_iter()
+            .filter(|field| {
+                old.get(*field).is_some() && new.get(*field).is_some() && old[*field] != new[*field]
+            })
+            .collect();
+        if !fields.is_empty() {
+            excluded.insert(id.clone(), json!(fields));
+        }
+    }
+    let excluded = Value::Object(excluded);
+    verify_with_exclusions(first, second, &excluded)?;
+    Ok(excluded)
+}
+
+pub fn verify_with_exclusions(before: &Value, after: &Value, excluded: &Value) -> Result<()> {
+    fn normalize(snapshot: &Value, excluded: &Value) -> Result<Value> {
+        let mut result = snapshot.clone();
+        for (id, fields) in excluded
+            .as_object()
+            .context("invalid preservation exclusions")?
+        {
+            for field in fields.as_array().context("invalid excluded fields")? {
+                let field = field.as_str().context("invalid excluded field")?;
+                ensure!(
+                    LIFECYCLE_FIELDS.contains(&field),
+                    "cannot exclude resource identity or configuration"
+                );
+                // A missing container/field must remain detectable, not be fabricated.
+                if let Some(container) = result["containers"]
+                    .get_mut(id)
+                    .and_then(Value::as_object_mut)
+                {
+                    if let Some(value) = container.get_mut(field) {
+                        *value = Value::Null;
+                    }
+                }
+            }
+        }
+        Ok(result)
+    }
+    verify(&normalize(before, excluded)?, &normalize(after, excluded)?)
 }
 
 pub fn snapshot(checkout_home: Option<&Path>) -> Result<Value> {
@@ -56,7 +215,7 @@ pub fn snapshot(checkout_home: Option<&Path>) -> Result<Value> {
             "--type",
             "container",
             "--format",
-            r#"{"id":{{json .Id}},"running":{{json .State.Running}},"started":{{json .State.StartedAt}},"restarts":{{json .RestartCount}},"mounts":{{json .Mounts}},"networks":{{json .NetworkSettings.Networks}}}"#,
+            r#"{"id":{{json .Id}},"owner":{{json (index .Config.Labels "proofstorm.dev/installation")}},"running":{{json .State.Running}},"restarting":{{json .State.Restarting}},"started":{{json .State.StartedAt}},"restarts":{{json .RestartCount}},"mounts":{{json .Mounts}},"networks":{{json .NetworkSettings.Networks}}}"#,
             id,
         ])?)?;
         // Mount ordering is not part of identity.
@@ -150,6 +309,133 @@ fn differences(before: &Value, after: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn claude_session_metadata_is_ignored_but_every_mcp_map_is_preserved() {
+        let before = json!({"mcpServers":{"global":{"command":"proofstorm","env":{"B":"2","A":"1"}}},"projects":{"/one":{"mcpServers":{"local":{"args":["a","b"]}},"lastSessionId":"old"}},"numStartups":1});
+        let mut after = before.clone();
+        after["numStartups"] = json!(2);
+        after["projects"]["/one"]["lastSessionId"] = json!("new");
+        after["projects"]["/new-session"] = json!({"mcpServers":{},"lastCost":3});
+        assert_eq!(
+            claude_mcp_configuration(&before).unwrap(),
+            claude_mcp_configuration(&after).unwrap()
+        );
+        for pointer in [
+            "/mcpServers/global/command",
+            "/projects/~1one/mcpServers/local/args",
+        ] {
+            let mut changed = after.clone();
+            *changed.pointer_mut(pointer).unwrap() = json!("changed");
+            assert_ne!(
+                claude_mcp_configuration(&before).unwrap(),
+                claude_mcp_configuration(&changed).unwrap()
+            );
+        }
+        after["projects"]["/new-session"]["mcpServers"] = json!({"new":{"command":"other"}});
+        assert_ne!(
+            claude_mcp_configuration(&before).unwrap(),
+            claude_mcp_configuration(&after).unwrap()
+        );
+        assert!(claude_mcp_configuration(&json!({"projects":[]})).is_err());
+        assert!(claude_mcp_configuration(&json!({"mcpServers":"invalid"})).is_err());
+    }
+
+    #[test]
+    fn claude_hash_is_normalized_while_other_files_remain_byte_exact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".claude.json");
+        let empty = configuration(&path).unwrap();
+        fs::write(&path, r#"{"numStartups":1,"projects":{"/new":{}}}"#).unwrap();
+        assert_eq!(empty, configuration(&path).unwrap());
+        fs::write(
+            &path,
+            r#"{"mcpServers":{"b":{},"a":{"env":{"X":"1","Y":"2"}}},"numStartups":1}"#,
+        )
+        .unwrap();
+        let before = configuration(&path).unwrap();
+        fs::write(
+            &path,
+            r#"{ "numStartups":2,"mcpServers":{"a":{"env":{"Y":"2","X":"1"}},"b":{}}}"#,
+        )
+        .unwrap();
+        assert_eq!(before, configuration(&path).unwrap());
+        let other = dir.path().join("config.toml");
+        fs::write(&other, "first").unwrap();
+        let before = configuration(&other).unwrap();
+        fs::write(&other, "second").unwrap();
+        assert_ne!(before, configuration(&other).unwrap());
+    }
+
+    fn inventory(restarts: u64, started: &str) -> Value {
+        json!({"containers":{"external":{"id":"external","owner":null,"running":true,"restarts":restarts,"started":started,"mounts":["volume"],"networks":{"net":{}}},"stable":{"id":"stable","restarts":0,"started":"original"}},"networks":["net"],"volumes":["volume"],"configuration_sha256":{}})
+    }
+
+    #[test]
+    fn only_preobserved_external_lifecycle_drift_is_excluded() {
+        let first = inventory(1, "first");
+        let before = inventory(2, "second");
+        let excluded = exclusions(&first, &before, None).unwrap();
+        assert_eq!(excluded, json!({"external":["started","restarts"]}));
+        let after = inventory(9, "later");
+        verify_with_exclusions(&before, &after, &excluded).unwrap();
+        for pointer in [
+            "/containers/external/id",
+            "/containers/external/owner",
+            "/containers/external/mounts",
+            "/containers/external/networks",
+            "/containers/external/running",
+            "/containers/stable/restarts",
+            "/volumes",
+            "/networks",
+        ] {
+            let mut changed = after.clone();
+            *changed.pointer_mut(pointer).unwrap() = json!("drift");
+            assert!(
+                verify_with_exclusions(&before, &changed, &excluded).is_err(),
+                "{pointer}"
+            );
+        }
+        let mut missing = after.clone();
+        missing["containers"]
+            .as_object_mut()
+            .unwrap()
+            .remove("external");
+        assert!(verify_with_exclusions(&before, &missing, &excluded).is_err());
+        assert!(verify_with_exclusions(&before, &after, &json!({"external":["mounts"]})).is_err());
+    }
+
+    #[test]
+    fn stable_and_owned_resources_never_gain_exclusions() {
+        let first = inventory(1, "first");
+        assert_eq!(exclusions(&first, &first, None).unwrap(), json!({}));
+        assert!(verify_with_exclusions(&first, &inventory(2, "second"), &json!({})).is_err());
+        let mut owned = first.clone();
+        owned["containers"]["external"]["owner"] = json!("this-run");
+        let mut changed = owned.clone();
+        changed["containers"]["external"]["restarts"] = json!(2);
+        assert!(exclusions(&owned, &changed, Some("this-run")).is_err());
+        let mut structural = first.clone();
+        structural["containers"]["external"]["mounts"] = json!([]);
+        assert!(exclusions(&first, &structural, None).is_err());
+    }
+
+    #[test]
+    fn restart_backoff_needs_an_observed_transition_not_an_inferred_exemption() {
+        let mut first = inventory(1, "first");
+        first["containers"]["external"]["restarting"] = json!(true);
+        assert!(awaiting_restart(&first, &first));
+        assert_eq!(exclusions(&first, &first, None).unwrap(), json!({}));
+        let mut next = first.clone();
+        next["containers"]["external"]["restarts"] = json!(2);
+        next["containers"]["external"]["started"] = json!("second");
+        assert!(!awaiting_restart(&first, &next));
+        assert_eq!(
+            exclusions(&first, &next, None).unwrap(),
+            json!({"external":["started","restarts"]})
+        );
+        first["containers"]["external"]["restarting"] = json!(false);
+        assert!(!awaiting_restart(&first, &first));
+    }
     #[test]
     fn drift_is_reported_not_repaired_or_ignored() {
         let before = json!({"containers":{"id":{"restarts":0}},"configuration_sha256":{"config":"original"}});

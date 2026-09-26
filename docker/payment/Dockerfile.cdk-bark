@@ -1,0 +1,24 @@
+# Experimental processor build; catalog publication requires full native qualification.
+FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS build
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler clang cmake libssl-dev libsqlite3-dev libpq-dev pkg-config patch && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN curl -fsSL https://codeload.github.com/cashubtc/cdk-payment-processors/tar.gz/fe468cad486157683eddbc0df4ff87ba71b6c0a3 -o /tmp/source.tar.gz \
+    && echo '236d4caa1c1e1643ba8b9f40c7af4c478f1afddf09be86520317a5951e4073e9  /tmp/source.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /src
+COPY docker/payment/patches/bark-regtest-rpc.patch /tmp/bark-regtest-rpc.patch
+RUN echo 'abc3f967d754cdf5e484bf434ef52fa216dfb37cdcbb8fd896477e5c7b40321c  /tmp/bark-regtest-rpc.patch' | sha256sum -c - \
+    && patch --batch --fuzz=0 -p1 < /tmp/bark-regtest-rpc.patch \
+    && echo 'b68c8b98aaf7399f97e45062f2f291b50ae381754387b6c87a54ea6affd06691  crates/bark/Cargo.lock' | sha256sum -c -
+ENV CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked --mount=type=cache,target=/usr/local/cargo/git,sharing=locked --mount=type=cache,target=/src/crates/bark/target,sharing=locked \
+    cargo test --locked --release --jobs 1 --manifest-path crates/bark/Cargo.toml --lib \
+    && cargo build --locked --release --jobs 1 --manifest-path crates/bark/Cargo.toml \
+    && cp crates/bark/target/release/cdk-payment-processor-bark /usr/local/bin/
+
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 libsqlite3-0 libpq5 && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bin/cdk-payment-processor-bark /usr/local/bin/
+RUN printf '%s\n' 'fe468cad486157683eddbc0df4ff87ba71b6c0a3' > /usr/local/share/processor-revision \
+    && printf '%s\n' 'abc3f967d754cdf5e484bf434ef52fa216dfb37cdcbb8fd896477e5c7b40321c' > /usr/local/share/processor-patch-sha256
+USER 1000:1000
+CMD ["cdk-payment-processor-bark"]

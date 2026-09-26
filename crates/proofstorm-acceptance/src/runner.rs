@@ -19,6 +19,8 @@ use std::{
 };
 
 pub struct Selection {
+    pub benchmark_model: Option<String>,
+    pub benchmark_opencode: PathBuf,
     pub qualification: Option<(PathBuf, String)>,
     pub checkout_home: Option<PathBuf>,
     pub bundle: Option<PathBuf>,
@@ -37,6 +39,12 @@ impl Selection {
     }
 
     fn arguments(&self, command: &mut Command) {
+        if let Some(model) = &self.benchmark_model {
+            command.arg("--benchmark-model").arg(model);
+            command
+                .arg("--benchmark-opencode")
+                .arg(&self.benchmark_opencode);
+        }
         if let Some((plan, case)) = &self.qualification {
             command
                 .arg("--qualification-plan")
@@ -196,6 +204,14 @@ pub fn worker(selection: &Selection, root: &Path, home: &Path, name: &str) -> Re
         context.qualification_observer = Some(crate::qualification::Observer::new(case.clone()));
         context.qualification = Some(case);
     }
+    context.benchmark =
+        selection
+            .benchmark_model
+            .as_ref()
+            .map(|model| crate::benchmark::Selection {
+                model: model.clone(),
+                executable: selection.benchmark_opencode.clone(),
+            });
     let result = gates::run(name, &context).and_then(|()| {
         if let Some(observer) = &context.qualification_observer {
             observer.finish()?;
@@ -490,8 +506,21 @@ pub fn run(
     let mut report =
         json!({"format_version":1,"work":work,"setup":"not_run","gates":[],"cleanup":"not_run"});
     save(&work, &report)?;
-    let before = crate::preservation::snapshot(selection.checkout_home.as_deref())?;
+    // The new installation has not been initialized yet, so none of these
+    // preexisting resources can belong to this run. Never adopt existing state.
+    let mut samples = Vec::new();
+    let (before, exclusions) =
+        crate::preservation::baseline(selection.checkout_home.as_deref(), |index, value| {
+            let name = format!("preservation-before-{index:02}.json");
+            private_json(&work.join(&name), value)?;
+            samples.push(name);
+            Ok(())
+        })?;
     private_json(&work.join("preservation-before.json"), &before)?;
+    report["preservation_baseline_samples"] = json!(samples);
+    report["preservation_exclusions"] = exclusions.clone();
+    report["preservation_config_scope"] = json!({"claude":"top-level and project mcpServers; normalized JSON","other_configuration":"whole-file sha256"});
+    save(&work, &report)?;
     let operation = (|| -> Result<()> {
         if let Some((plan, case)) = &qualification {
             private_json(
@@ -631,7 +660,7 @@ pub fn run(
     let preservation = (|| -> Result<()> {
         let after = crate::preservation::snapshot(selection.checkout_home.as_deref())?;
         private_json(&work.join("preservation-after.json"), &after)?;
-        crate::preservation::verify(&before, &after)
+        crate::preservation::verify_with_exclusions(&before, &after, &exclusions)
     })();
     let mut report: Value = serde_json::from_slice(&fs::read(work.join("acceptance.json"))?)?;
     report["preservation"] = json!(if preservation.is_ok() {
@@ -713,6 +742,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let work = root.path().join("must-not-exist");
         let selection = Selection {
+            benchmark_model: None,
+            benchmark_opencode: "opencode".into(),
             qualification: None,
             checkout_home: None,
             bundle: None,

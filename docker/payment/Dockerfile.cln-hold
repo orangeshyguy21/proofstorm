@@ -1,0 +1,23 @@
+# Hold 0.3.3 on Proofstorm's existing, digest-pinned CLN 26.06.7 image.
+FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS build
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler clang cmake libssl-dev libsqlite3-dev libpq-dev pkg-config && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN curl -fsSL https://codeload.github.com/BoltzExchange/hold/tar.gz/af0055b132f3b9f24d0b1d478a15005fcf8f014f -o /tmp/source.tar.gz \
+    && echo '0f225fe33c5640339ba0163751056df78e2ba0af9649febf1f0a6616cd9237c4  /tmp/source.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /src \
+    && echo '4fde8fb58711f547f470d4ddc94b8ff9a0527f4384dab7e2b3139158292dd930  Cargo.lock' | sha256sum -c -
+ENV CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked --mount=type=cache,target=/usr/local/cargo/git,sharing=locked --mount=type=cache,id=proofstorm-cln-hold,target=/src/target,sharing=locked \
+    cargo build --locked --release --jobs 1 \
+    && cp target/release/hold /usr/local/bin/
+
+FROM docker.io/elementsproject/lightningd@sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 libsqlite3-0 && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bin/hold /usr/local/bin/hold
+COPY --from=build /src/LICENSE /usr/local/share/licenses/hold/LICENSE
+RUN printf '%s\n' 'af0055b132f3b9f24d0b1d478a15005fcf8f014f' > /usr/local/share/hold-revision
+ENV HOME=/data
+USER 1000:1000
+ENTRYPOINT ["lightningd"]
+CMD ["--conf=/config/lightning.conf"]

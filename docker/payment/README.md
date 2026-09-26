@@ -1,5 +1,8 @@
 # LDK Server payment processor
 
+The separate [Bark build foundation](BARK.md) documents the pinned RPC patch and
+capability checks under development; it is not yet an installed component.
+
 The first external CDK payment processor profile uses three independently
 controlled components:
 

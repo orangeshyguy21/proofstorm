@@ -9,7 +9,7 @@ description = "Shared native protocol and passive observation drivers for compon
 [features]
 default = ["runtime"]
 observation = ["dep:anyhow", "dep:rusqlite", "dep:serde_json"]
-runtime = ["observation", "dep:serde", "dep:reqwest", "dep:tokio", "dep:tempfile", "dep:tonic", "dep:tonic-prost", "dep:prost", "dep:cashu", "dep:base64", "dep:sha2"]
+runtime = ["dep:proofstorm-core", "observation", "dep:serde", "dep:reqwest", "dep:tokio", "dep:tempfile", "dep:tonic", "dep:tonic-prost", "dep:prost", "dep:cashu", "dep:base64", "dep:sha2"]
 
 [[bin]]
 name = "proofstorm-driver"
@@ -17,6 +17,7 @@ path = "src/main.rs"
 required-features = ["runtime"]
 
 [dependencies]
+proofstorm-core = { path = "../proofstorm-core", optional = true }
 anyhow = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }

@@ -5,6 +5,7 @@ use super::{
     StorageBackend, SupportLifecycle, catalog_entry_with_lifecycle, dependency, payment_binding,
     runtime_endpoint, support_matrix,
 };
+use crate::processor_ids::LDK_PROCESSOR;
 
 pub const LDK_SERVER_VERSION: &str = "0.1.0-50fe752";
 pub const LDK_PROCESSOR_VERSION: &str = "0.1.0-fe468ca";
@@ -70,7 +71,7 @@ pub(super) fn extend(
     ));
     entries.push(catalog_entry_with_lifecycle(
         amd64,
-        "cdk-ldk-server-processor",
+        LDK_PROCESSOR,
         backends,
         ComponentKind::PaymentProcessor,
         "CDK gRPC payment processor backed by LDK Server",
@@ -116,7 +117,7 @@ pub(super) fn extend(
     for entry in entries.iter_mut() {
         let encoded = match entry.id.as_str() {
             "ldk-server" => include_str!("../../../docker/payment/ldk-server-provenance.json"),
-            "cdk-ldk-server-processor" => {
+            LDK_PROCESSOR => {
                 include_str!("../../../docker/payment/cdk-ldk-server-provenance.json")
             }
             _ => continue,
@@ -141,10 +142,10 @@ pub(super) fn extend(
         entry
             .support_matrix
             .payment_backends
-            .insert("cdk-ldk-server-processor".into());
+            .insert(LDK_PROCESSOR.into());
         entry.compatible_dependencies.push(dependency(
             LinkKind::PaymentBackend,
-            "cdk-ldk-server-processor",
+            LDK_PROCESSOR,
             &[LDK_PROCESSOR_VERSION],
         ));
         for method in [PaymentMethod::Bolt11, PaymentMethod::Bolt12] {
@@ -154,7 +155,7 @@ pub(super) fn extend(
                 .insert(payment_binding(
                     method,
                     "sat",
-                    "cdk-ldk-server-processor",
+                    LDK_PROCESSOR,
                     &[LDK_PROCESSOR_VERSION],
                 ));
         }
@@ -176,13 +177,13 @@ pub(super) fn endpoints(implementation: &str) -> Option<Vec<CatalogRuntimeEndpoi
                 "Pinned upstream revision 50fe7523be3529d86bfee0dfc35df9a52aca7310. Native entrypoint: ldk-server-cli --config /config/config.toml --base-url 127.0.0.1:3536. The CLI reads its API key and TLS certificate from private /data storage. Use amounts with explicit sat/msat suffixes. Native CLI controls include funding, peers, channels, BOLT11/BOLT12, payment status, and held invoices. Verify asynchronous payments against recipient state. Keep credentials out of command arguments and public output.",
             ],
         )]),
-        "cdk-ldk-server-processor" => Some(vec![runtime_endpoint(
+        LDK_PROCESSOR => Some(vec![runtime_endpoint(
             "component",
             "payment_processor",
             &["component_logs", "reachability_oracle"],
-            &[
-                "Pinned upstream revision fe468cad486157683eddbc0df4ff87ba71b6c0a3, CDK payment protocol 4.0.0. Requires bolt11/sat and bolt12/sat links to one LDK Server; CDK mints use the same two bindings to this component. The backend reports msat internally; the supported mint contract is sat with CDK conversion. The linked LDK node owns durable payment history; the live event stream does not replay payments missed during an outage. After reconnect, check original Cashu mint and melt quotes to reconcile them against durable LDK payment history. GetSettings: /opt/proofstorm/driver processor-settings https://127.0.0.1:50051 /processor-client/tls. Mint/processor transport requires mutual TLS. No MPP support.",
-            ],
+            &[&format!(
+                "Pinned upstream revision fe468cad486157683eddbc0df4ff87ba71b6c0a3, CDK payment protocol 4.0.0. Requires bolt11/sat and bolt12/sat links to one LDK Server; CDK mints use the same two bindings to this component. The backend reports msat internally; the supported mint contract is sat with CDK conversion. The linked LDK node owns durable payment history; the live event stream does not replay payments missed during an outage. After reconnect, check original Cashu mint and melt quotes to reconcile them against durable LDK payment history. GetSettings: /opt/proofstorm/driver processor-settings https://127.0.0.1:50051 /processor-client/tls {LDK_PROCESSOR}. Mint/processor transport requires mutual TLS. No MPP support."
+            )],
         )]),
         _ => None,
     }

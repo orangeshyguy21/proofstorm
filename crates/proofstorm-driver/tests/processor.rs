@@ -1,9 +1,12 @@
 #![cfg(feature = "runtime")]
-use proofstorm_driver::processor::{Bolt11Settings, Bolt12Settings, Empty, Settings, settings};
+use proofstorm_driver::processor::{
+    Bolt11Settings, Bolt12Settings, Empty, OnchainSettings, Profile, Settings, settings_for,
+};
 use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
 };
 use std::{
+    collections::BTreeMap,
     convert::Infallible,
     fs,
     sync::{
@@ -108,17 +111,31 @@ impl tonic::server::UnaryService<Empty> for Mint {
                     "x".repeat(65_536)
                 } else if mode == "wrong-unit" {
                     "usd".into()
+                } else if mode.starts_with("bark") {
+                    "sat".into()
                 } else {
                     "msat".into()
                 },
-                bolt11: Some(Bolt11Settings {
+                bolt11: (mode != "bark-missing-bolt11").then_some(Bolt11Settings {
                     mpp: false,
                     amountless: true,
                     invoice_description: true,
                 }),
-                bolt12: (mode != "missing-method").then_some(Bolt12Settings {
-                    amountless: true,
-                    invoice_description: true,
+                bolt12: (mode == "bark-extra-bolt12"
+                    || (!mode.starts_with("bark") && mode != "missing-method"))
+                    .then_some(Bolt12Settings {
+                        amountless: true,
+                        invoice_description: true,
+                    }),
+                custom: if mode.ends_with("custom") {
+                    [("arkoor".into(), "{}".into())].into()
+                } else {
+                    BTreeMap::new()
+                },
+                onchain: mode.ends_with("onchain").then_some(OnchainSettings {
+                    confirmations: 1,
+                    min_receive_amount_sat: 1,
+                    min_send_amount_sat: 1,
                 }),
             }))
         })
@@ -199,18 +216,44 @@ impl Running {
 }
 
 #[tokio::test]
+async fn cli_requires_an_explicit_catalog_profile_before_contacting_the_processor() {
+    let credentials = Credentials::new("127.0.0.1");
+    let server = Running::new(&credentials, "ok").await;
+    let address = server.address.clone();
+    let directory = credentials.directory.path().to_path_buf();
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_proofstorm-driver"))
+            .args(["processor-settings", &address])
+            .arg(directory)
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(server.calls.load(Ordering::SeqCst), 0);
+    server.finish().await;
+}
+
+#[tokio::test]
 async fn processor_handshake_authenticates_both_peers_and_sends_the_protocol_version() {
     let credentials = Credentials::new("127.0.0.1");
     let server = Running::new(&credentials, "ok").await;
     let path = credentials.directory.path();
-    let response = settings(&server.address, path).await.unwrap();
+    let response = settings_for(&server.address, path, Profile::LdkServer)
+        .await
+        .unwrap();
     assert_eq!(response.unit, "msat");
     assert!(response.bolt11.unwrap().amountless);
     assert!(response.bolt12.is_some());
     assert!(
-        settings(&server.address.replacen("https://", "http://", 1), path)
-            .await
-            .is_err()
+        settings_for(
+            &server.address.replacen("https://", "http://", 1),
+            path,
+            Profile::LdkServer
+        )
+        .await
+        .is_err()
     );
     let unrelated = Credentials::new("127.0.0.1");
     fs::copy(
@@ -219,13 +262,21 @@ async fn processor_handshake_authenticates_both_peers_and_sends_the_protocol_ver
     )
     .unwrap();
     assert!(
-        settings(&server.address, unrelated.directory.path())
-            .await
-            .is_err()
+        settings_for(
+            &server.address,
+            unrelated.directory.path(),
+            Profile::LdkServer
+        )
+        .await
+        .is_err()
     );
     fs::copy(path.join("server.pem"), path.join("client.pem")).unwrap();
     fs::copy(path.join("server.key"), path.join("client.key")).unwrap();
-    assert!(settings(&server.address, path).await.is_err());
+    assert!(
+        settings_for(&server.address, path, Profile::LdkServer)
+            .await
+            .is_err()
+    );
     assert_eq!(server.calls.load(Ordering::SeqCst), 1);
     server.finish().await;
 }
@@ -235,9 +286,13 @@ async fn processor_checks_server_identity_and_rpc_failures() {
     let credentials = Credentials::new("wrong.example");
     let server = Running::new(&credentials, "ok").await;
     assert!(
-        settings(&server.address, credentials.directory.path())
-            .await
-            .is_err()
+        settings_for(
+            &server.address,
+            credentials.directory.path(),
+            Profile::LdkServer
+        )
+        .await
+        .is_err()
     );
     assert_eq!(server.calls.load(Ordering::SeqCst), 0);
     server.finish().await;
@@ -248,16 +303,59 @@ async fn processor_checks_server_identity_and_rpc_failures() {
         "stall",
         "wrong-unit",
         "missing-method",
+        "ldk-extra-custom",
+        "ldk-extra-onchain",
     ] {
         let server = Running::new(&credentials, mode).await;
         let start = Instant::now();
         assert!(
-            settings(&server.address, credentials.directory.path())
-                .await
-                .is_err()
+            settings_for(
+                &server.address,
+                credentials.directory.path(),
+                Profile::LdkServer
+            )
+            .await
+            .is_err()
         );
         assert!(start.elapsed() < Duration::from_secs(3));
         assert_eq!(server.calls.load(Ordering::SeqCst), 1);
         server.finish().await;
     }
+}
+
+#[tokio::test]
+async fn bark_profile_requires_sat_and_only_bolt11_over_the_authenticated_wire() {
+    let credentials = Credentials::new("127.0.0.1");
+    let path = credentials.directory.path();
+    for mode in [
+        "bark",
+        "ok",
+        "wrong-unit",
+        "bark-missing-bolt11",
+        "bark-extra-bolt12",
+        "bark-extra-custom",
+        "bark-extra-onchain",
+    ] {
+        let server = Running::new(&credentials, mode).await;
+        let result = settings_for(&server.address, path, Profile::Bark).await;
+        assert_eq!(result.is_ok(), mode == "bark", "{mode}: {result:?}");
+        if mode == "bark" {
+            // The legacy command still selects LDK; it cannot auto-detect Bark.
+            assert!(
+                settings_for(&server.address, path, Profile::LdkServer)
+                    .await
+                    .is_err()
+            );
+        }
+        server.finish().await;
+    }
+    assert_eq!(
+        "cdk-bark-processor".parse::<Profile>().unwrap(),
+        Profile::Bark
+    );
+    assert_eq!(
+        "cdk-ldk-server-processor".parse::<Profile>().unwrap(),
+        Profile::LdkServer
+    );
+    assert!("unknown".parse::<Profile>().is_err());
 }

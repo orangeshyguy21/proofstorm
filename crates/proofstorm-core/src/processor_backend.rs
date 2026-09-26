@@ -90,7 +90,7 @@ pub(super) fn contracts() -> Vec<ComponentBackendContract> {
     let mut conditions = service_conditions(true, true);
     conditions.remove(&ComponentConditionType::StorageReady);
     let mut processor = contract(
-        "cdk-ldk-server-processor",
+        crate::processor_ids::LDK_PROCESSOR,
         ComponentKind::PaymentProcessor,
         "cdk-ldk-server-processor/0.1/v1",
         BTreeMap::from([

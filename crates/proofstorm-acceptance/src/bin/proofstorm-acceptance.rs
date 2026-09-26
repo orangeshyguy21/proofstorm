@@ -13,6 +13,17 @@ use std::{
 #[derive(Parser)]
 #[command(about = "Run live gates in a new, owned Proofstorm installation")]
 struct Arguments {
+    /// Opt-in O1 pilot model, in `OpenCode` provider/model form.
+    #[arg(long)]
+    benchmark_model: Option<String>,
+    /// Headless `OpenCode` executable for the opt-in pilot.
+    #[arg(long, default_value = "opencode")]
+    benchmark_opencode: PathBuf,
+    /// Rescore retained O1 evidence without contacting a model or runtime.
+    #[arg(long)]
+    benchmark_grade: Option<PathBuf>,
+    #[arg(long, hide = true)]
+    benchmark_proxy: Option<PathBuf>,
     /// Catalog-derived qualification plan for a single isolated case.
     #[arg(long, requires = "qualification_case")]
     qualification_plan: Option<PathBuf>,
@@ -51,6 +62,13 @@ struct Arguments {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Arguments::parse();
+    if let Some(path) = args.benchmark_proxy {
+        return proofstorm_acceptance::benchmark::proxy::serve(&path);
+    }
+    if let Some(path) = args.benchmark_grade {
+        println!("{}", proofstorm_acceptance::benchmark::regrade(&path)?);
+        return Ok(());
+    }
     if args.list {
         for name in gates::NAMES {
             println!("{name}");
@@ -58,9 +76,15 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     if let Some(work) = args.cleanup {
-        return runner::cleanup(&work);
+        let result = runner::cleanup(&work);
+        if work.join("benchmark-task.json").exists() {
+            println!("{}", proofstorm_acceptance::benchmark::finalize(&work)?);
+        }
+        return result;
     }
     let selection = runner::Selection {
+        benchmark_model: args.benchmark_model,
+        benchmark_opencode: args.benchmark_opencode,
         qualification: args.qualification_plan.zip(args.qualification_case),
         checkout_home: args.checkout_home,
         bundle: args.bundle,
@@ -73,6 +97,17 @@ async fn main() -> Result<()> {
         args.gates
     };
     runner::validate_gates(&names)?;
+    let benchmark = names.iter().any(|n| n == "benchmark-o1");
+    if benchmark {
+        anyhow::ensure!(
+            names.len() == 1 && selection.benchmark_model.is_some(),
+            "benchmark-o1 requires --benchmark-model and its own run"
+        );
+        anyhow::ensure!(
+            args.work_dir.is_some() || args.worker_home.is_some(),
+            "benchmark requires --work-dir to retain every attempt"
+        );
+    }
     if let Some(home) = args.worker_home {
         anyhow::ensure!(names.len() == 1, "worker requires exactly one gate");
         return runner::worker(&selection, &root, &home, &names[0]);
@@ -89,14 +124,22 @@ async fn main() -> Result<()> {
         signal.store(true, Ordering::SeqCst);
     });
     tokio::task::spawn_blocking(move || {
-        runner::run(
+        let result = runner::run(
             &selection,
             &root,
             args.work_dir.as_deref(),
             &names,
             args.timeout,
             &cancelled,
-        )
+        );
+        if benchmark
+            && let Some(work) = &args.work_dir
+            && work.join("acceptance.json").exists()
+        {
+            let score = proofstorm_acceptance::benchmark::finalize(work)?;
+            println!("{}", serde_json::to_string_pretty(&score)?);
+        }
+        result
     })
     .await?
 }

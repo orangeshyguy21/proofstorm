@@ -1,7 +1,7 @@
 //! Read-only CDK payment-processor handshake (protocol 4.0.0).
 use anyhow::{Context, Result};
 use serde::Serialize;
-use std::{path::Path, time::Duration};
+use std::{collections::BTreeMap, path::Path, str::FromStr, time::Duration};
 use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -26,6 +26,16 @@ pub struct Bolt12Settings {
 }
 
 #[derive(Clone, PartialEq, prost::Message, Serialize)]
+pub struct OnchainSettings {
+    #[prost(uint32, tag = "1")]
+    pub confirmations: u32,
+    #[prost(uint64, tag = "2")]
+    pub min_receive_amount_sat: u64,
+    #[prost(uint64, tag = "3")]
+    pub min_send_amount_sat: u64,
+}
+
+#[derive(Clone, PartialEq, prost::Message, Serialize)]
 pub struct Settings {
     #[prost(string, tag = "1")]
     pub unit: String,
@@ -33,12 +43,59 @@ pub struct Settings {
     pub bolt11: Option<Bolt11Settings>,
     #[prost(message, optional, tag = "3")]
     pub bolt12: Option<Bolt12Settings>,
+    #[prost(btree_map = "string, string", tag = "4")]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub custom: BTreeMap<String, String>,
+    #[prost(message, optional, tag = "5")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub onchain: Option<OnchainSettings>,
 }
 
-/// Perform a bounded, mutually authenticated `GetSettings` call without payment mutations.
+/// Exact capability profiles, independent of mint-side sat conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Profile {
+    LdkServer,
+    Bark,
+}
+
+impl FromStr for Profile {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            proofstorm_core::processor_ids::LDK_PROCESSOR => Ok(Self::LdkServer),
+            proofstorm_core::processor_ids::BARK_PROCESSOR => Ok(Self::Bark),
+            _ => anyhow::bail!("unknown payment processor profile"),
+        }
+    }
+}
+
+impl Profile {
+    /// Check the complete advertised rail set before CDK registers it.
+    /// # Errors
+    /// Rejects missing, extra, or incompatible payment methods and units.
+    pub fn validate(self, settings: &Settings) -> Result<()> {
+        let (unit, bolt12) = match self {
+            Self::LdkServer => ("msat", true),
+            Self::Bark => ("sat", false),
+        };
+        anyhow::ensure!(
+            settings.unit == unit
+                && settings.bolt11.is_some()
+                && settings.bolt12.is_some() == bolt12
+                && settings.custom.is_empty()
+                && settings.onchain.is_none(),
+            "payment processor settings do not match {self:?}: expected {unit}, BOLT11{} and no other rails",
+            if bolt12 { ", BOLT12" } else { "" }
+        );
+        Ok(())
+    }
+}
+
+/// Perform the same authenticated handshake for an explicitly selected profile.
 /// # Errors
-/// Rejects non-TLS endpoints, missing credentials, protocol mismatch and failed RPCs.
-pub async fn settings(address: &str, tls: &Path) -> Result<Settings> {
+/// Rejects non-TLS endpoints, invalid credentials, failed RPCs and wrong capabilities.
+pub async fn settings_for(address: &str, tls: &Path, profile: Profile) -> Result<Settings> {
     anyhow::ensure!(
         address.starts_with("https://"),
         "processor readiness requires TLS"
@@ -72,10 +129,7 @@ pub async fn settings(address: &str, tls: &Path) -> Result<Settings> {
             )
             .await?;
         let settings: Settings = response.into_inner();
-        anyhow::ensure!(
-            settings.unit == "msat" && settings.bolt11.is_some() && settings.bolt12.is_some(),
-            "LDK processor must advertise msat, BOLT11 and BOLT12"
-        );
+        profile.validate(&settings)?;
         Ok(settings)
     })
     .await
