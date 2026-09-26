@@ -42,6 +42,13 @@ result, with no spinner. Redirected output uses plain progress lines on stderr,
 not terminal animation. `version --json` and internal checkout registration retain
 their machine-readable output. This is the same CLI behavior in release bundles.
 
+Checkout controller publication uses an anonymous, temporary Docker config for
+the owned loopback registry, including digest verification and reuse checks.
+It resolves the active local Docker Unix socket and installed Buildx executable
+before isolating registry credentials; your Docker logins and selected context
+are unchanged. Remote TCP/SSH engines are not supported by this checkout
+publication path. Normal image builds retain their existing Docker configuration.
+
 GUI startup verifies artifacts once in the launcher and independently once in
 the new backend. The verified snapshot is reused only within that startup; it is
 not a persistent cache. Subsequent requests still detect changed artifacts and
