@@ -170,14 +170,6 @@ fn observe_final(config: &Context, report: &Report, errors: bool) -> Result<()> 
     let paid = read(&config.work.join("paid.json")).unwrap_or(Value::Null);
     let mut observations = observer::assertions(&config.task, &funded, &paid);
     observations["autonomy"] = json!(!errors);
-    let consistent = report.consistent(
-        &config.task,
-        observations["report"] == true,
-        paid["wallet"]["balance_sat"].as_u64(),
-    );
-    observations["report_valid"] = json!(consistent);
-    observations["report_format"] = json!(report.format_valid);
-    observations["report"] = json!(consistent && report.format_valid);
     let events = events(&config.work)?;
     observations["terminal"] = json!(observer::terminal_assertion(config, &events));
     save(
@@ -210,6 +202,11 @@ fn observe_final(config: &Context, report: &Report, errors: bool) -> Result<()> 
             && absent
             && (paid.is_null() || close["instance_key"] == paid["runtime"]["instance_key"])
     );
+    let truth = observer::report_truth(&config.task, &funded, &paid, &observations);
+    let consistent = report.consistent(&config.task, &truth);
+    observations["report_valid"] = json!(consistent);
+    observations["report_format"] = json!(report.format_valid);
+    observations["report"] = json!(consistent && report.format_valid);
     save(
         &config.work.join("benchmark-observations.json"),
         &observations,
@@ -470,7 +467,7 @@ mod tests {
             ("/deadline_seconds", json!(1201)),
             ("/target_seconds", json!(301)),
             ("/assertions/0/1", json!(11)),
-            ("/report_schema/properties/success/const", json!(false)),
+            ("/report_schema/properties/success/type", json!("integer")),
         ] {
             let mut altered = original.clone();
             *altered

@@ -90,7 +90,7 @@ pub fn o1() -> &'static Task {
     ("agent_cleanup", 10),
 ].into_iter().map(|(name, weight)| (name.into(),weight)).collect();
         let mut task = Task {
-            id:"O1".into(), version:"0.4".into(), suite:"operate".into(), scorer:"o1-70-15-15/0.4".into(),
+            id:"O1".into(), version:"0.5".into(), suite:"operate".into(), scorer:"o1-70-15-15/0.5".into(),
             prompt:String::new(), cell_name:document["name"].as_str().unwrap().into(),
             components:document["components"].as_array().unwrap().clone(), links:document["links"].as_array().unwrap().clone(),
             policy:document["policy"].clone(),
@@ -99,25 +99,63 @@ pub fn o1() -> &'static Task {
             target_seconds:300.0, deadline_seconds:1200, timing_calibrated:false,
             operational_required:assertions.iter().filter(|(id,_)| id != "report").map(|(id,_)| id.clone()).collect(),
             assertions, report_schema:Value::Null, score_weights:[70,15,15],
-            rules:json!({"report":"Exactly one JSON object earns format credit. A single trailing JSON object after prose can validate claims. Duplicate keys, ambiguous or incorrect claims fail.","environment":"Cleanup and preservation required; otherwise accepted score/success are null.","tools":"All failures count; success deduplicated by semantic arguments excluding request IDs. Read/discovery cap 3; other calls cap 1. No expected-negative calls.","payment_flow":"Exactly one successful payer funding payment and one settled recipient invoice; no offsetting cycles. Retain terminal evidence before removal."}),
+            rules:json!({"composition":"Discover schemas and compose the cell from semantic requirements; no complete cell document is supplied. Component identity and semantic bindings are scored, not a particular configuration schema version.","report":"Exactly one JSON object earns format credit. A single trailing JSON object after prose can validate claims. The schema defines shape only; claims must match independent observations, including success and cleanup. Missing evidence cannot validate a claim. Duplicate keys, ambiguous or incorrect claims fail.","environment":"Cleanup and preservation required; otherwise accepted score/success are null.","tools":"All failures count; success deduplicated by semantic arguments excluding request IDs. Read/discovery cap 3; other calls cap 1. No expected-negative calls.","payment_flow":"Exactly one successful payer funding payment and one settled recipient invoice; no offsetting cycles. Retain terminal evidence before removal."}),
         };
-        task.report_schema = json!({"type":"object","additionalProperties":false,"required":["success","minted_sat","paid_sat","remaining_sat","cleanup"],"properties":{"success":{"type":"boolean","const":true},"minted_sat":{"type":"integer","const":task.amounts.mint_sat},"paid_sat":{"type":"integer","const":task.amounts.melt_sat},"remaining_sat":{"type":"integer","minimum":*task.remaining().start(),"maximum":*task.remaining().end()},"cleanup":{"type":"boolean","const":true}}});
+        task.report_schema = json!({"type":"object","additionalProperties":false,"required":["success","minted_sat","paid_sat","remaining_sat","cleanup"],"properties":{"success":{"type":"boolean"},"minted_sat":{"type":"integer"},"paid_sat":{"type":"integer"},"remaining_sat":{"type":"integer"},"cleanup":{"type":"boolean"}}});
         task.prompt = prompt(&task);
         task
     })
 }
 fn prompt(task: &Task) -> String {
+    let components = task
+        .components
+        .iter()
+        .map(|component| {
+            format!(
+                "{}: {} role, implementation {} version {}",
+                component["id"].as_str().unwrap(),
+                component["kind"].as_str().unwrap(),
+                component["implementation"].as_str().unwrap(),
+                component["version"].as_str().unwrap()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let links = task
+        .links
+        .iter()
+        .map(|link| {
+            let binding = &link["binding"];
+            let requirement = if binding["type"] == "chain" {
+                format!("network {}", binding["network"].as_str().unwrap())
+            } else {
+                format!(
+                    "method {} in {}",
+                    binding["method"].as_str().unwrap(),
+                    binding["unit"].as_str().unwrap()
+                )
+            };
+            format!(
+                "{} -> {} using {} ({requirement})",
+                link["from"].as_str().unwrap(),
+                link["to"].as_str().unwrap(),
+                link["kind"].as_str().unwrap()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
     format!(
-        r"Complete {id} autonomously using only Proofstorm MCP tools. Create exactly one cell named {cell_name}. Use this topology, including exact component versions and config versions; do not add components or links: {document}
+        r"Complete {id} autonomously using only Proofstorm MCP tools. Create exactly one cell named {cell_name}. Compose these components using the specified IDs, roles, implementations and versions: {components}. Required links: {links}. Do not add components or links. Discover the supported configuration schemas, control settings and link bindings through the catalog, then construct the cell document yourself.
 Discover public schemas as needed. Use native component commands through cell_exec; host filesystem, shell and web tools are unavailable. Do not write or execute Python scripts.
 Fund a direct channel between the two LND nodes with liquidity in both directions. Mine maturity and channel confirmations explicitly. Initialize {wallet} at {mint_url}, obtain a {mint}-sat mint quote, pay from {payer}, and claim exactly {mint} sat. Call benchmark_checkpoint(stage=funded,mint_quote_id=...) before spending. Create a fresh {melt}-sat BOLT11 invoice on {payer} and melt wallet ecash to it. Verify recipient settlement and remaining balance, then call benchmark_checkpoint(stage=paid,mint_quote_id=...,melt_quote_id=...,payment_hash=...,minted_sat={mint},paid_sat={melt},remaining_sat=...). Total fees must be at most {fee} sat. Quote and payment identities must agree with your observations.
 Checkpoints retain observations; they neither perform payments nor award success. Both successful checkpoints must precede cell removal. There must be exactly one successful {mint}-sat funding payment and one settled {melt}-sat receipt on {payer}; no offsetting mint/melt cycles. Resolve every native operation before removing the cell, then wait for verified closure with its original instance key. Keep evidence private; do not print seeds or credentials.
-Finish with exactly one JSON object, no prose or fence, matching this report schema: {schema}. If anything fails, attempt cleanup and report success:false honestly. You have {deadline} seconds. No human continuation or delegation.
+Finish with exactly one JSON object, no prose or fence, matching this shape-only report schema: {schema}. Report the actual amounts observed, whether the task completed, and whether cleanup was verified. If anything fails, attempt cleanup and report success:false honestly; a failure report is permitted by the schema. Do not invent values when evidence is missing. You have {deadline} seconds. No human continuation or delegation.
 Scoring separates operational completion from formatting. Extra prose before one trailing JSON object loses reporting points. Missing, ambiguous, duplicate-key or incorrect structured claims fail report validation. Environment validity is checked independently by the runner.
 ",
         id = task.id,
         cell_name = task.cell_name,
-        document = task.document(),
+        components = components,
+        links = links,
         wallet = task.component("nutshell-wallet", 0),
         mint_url = task.mint_url(),
         payer = task.component("lnd", 1),
@@ -127,4 +165,53 @@ Scoring separates operational completion from formatting. Extra prose before one
         schema = task.report_schema,
         deadline = task.deadline_seconds
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_requires_composition_without_disclosing_the_cell_payload() {
+        let task = o1();
+        for forbidden in [
+            "api_version",
+            "config_version",
+            "input_fee_ppk",
+            "\"control\"",
+            "max_components",
+        ] {
+            assert!(!task.prompt.contains(forbidden), "{forbidden}");
+        }
+        for component in &task.components {
+            for key in ["id", "kind", "implementation", "version"] {
+                assert!(task.prompt.contains(component[key].as_str().unwrap()));
+            }
+        }
+        for link in &task.links {
+            assert!(!task.prompt.contains(link["id"].as_str().unwrap()));
+            assert!(task.prompt.contains(link["kind"].as_str().unwrap()));
+        }
+        let mut changed = task.clone();
+        changed.components[0]["version"] = json!("new-version");
+        changed.links[0]["binding"]["network"] = json!("other-network");
+        let instructions = prompt(&changed);
+        assert!(instructions.contains("new-version") && instructions.contains("other-network"));
+        assert!(task.document()["components"][0]["config_version"].is_string());
+    }
+
+    #[test]
+    fn public_report_schema_contains_shape_only() {
+        for property in o1().report_schema["properties"]
+            .as_object()
+            .unwrap()
+            .values()
+        {
+            assert_eq!(property.as_object().unwrap().len(), 1);
+            assert!(matches!(
+                property["type"].as_str(),
+                Some("boolean" | "integer")
+            ));
+        }
+    }
 }

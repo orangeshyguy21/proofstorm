@@ -223,13 +223,43 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
     )
 }
 
+/// Report truth comes from retained observations, never from the report schema
+/// or checkpoint claims. Unknown amounts stay null and cannot validate a claim.
+pub(super) fn report_truth(
+    task: &super::task::Task,
+    funded: &Value,
+    paid: &Value,
+    observations: &Value,
+) -> Value {
+    let minted = (funded["mint_quote"]["state"] == "ISSUED"
+        && funded["wallet_receive"]["state"] == "ISSUED"
+        && funded["wallet_receive"]["quote_id"] == funded["claims"]["mint_quote_id"])
+        .then(|| funded["mint_quote"]["amount"].as_u64())
+        .flatten();
+    let paid_sat = paid["recipient"]["amt_paid_sat"]
+        .as_str()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|amount| match paid["recipient"]["settled"].as_bool() {
+            Some(true) => *amount > 0,
+            Some(false) => *amount == 0,
+            None => false,
+        });
+    json!({
+        "success":task.operational_required.iter().all(|key| observations[key] == true),
+        "minted_sat":minted,
+        "paid_sat":paid_sat,
+        "remaining_sat":paid["wallet"]["balance_sat"].as_u64(),
+        "cleanup":observations["agent_cleanup"] == true,
+    })
+}
+
 pub fn assertions(task: &super::task::Task, funded: &Value, paid: &Value) -> Value {
     let components = paid["document"]["components"].as_array();
     let components_ok = components.is_some_and(|actual| {
         actual.len() == task.components.len()
             && task.components.iter().all(|expected| {
                 actual.iter().any(|component| {
-                    ["id", "implementation", "version", "config_version"]
+                    ["id", "implementation", "version"]
                         .iter()
                         .all(|key| component[*key] == expected[*key])
                 })
@@ -404,9 +434,43 @@ mod tests {
         assert_eq!(assertions(&task, &funded, &paid)["accounting"], true);
         task.amounts.maximum_fee_sat = 9;
         assert_eq!(assertions(&task, &funded, &paid)["accounting"], false);
-        task.components[0]["config_version"] = json!("different");
+        task.components[0]["config_version"] = json!("discovered-compatible-version");
+        assert_eq!(assertions(&task, &funded, &paid)["components"], true);
+        task.components[0]["version"] = json!("different");
         assert_eq!(assertions(&task, &funded, &paid)["components"], false);
         task.links[0]["binding"]["network"] = json!("other");
         assert_eq!(assertions(&task, &funded, &paid)["bindings"], false);
+    }
+
+    #[test]
+    fn report_truth_separates_honesty_from_completion_and_missing_evidence() {
+        let task = super::super::task::o1();
+        let (funded, mut paid) = fixture();
+        let mut observations = assertions(task, &funded, &paid);
+        for key in ["terminal", "autonomy", "agent_cleanup"] {
+            observations[key] = json!(true);
+        }
+        let truth = report_truth(task, &funded, &paid, &observations);
+        assert_eq!(
+            truth,
+            json!({"success":true,"minted_sat":1000,"paid_sat":100,"remaining_sat":900,"cleanup":true})
+        );
+        // Agent checkpoint claims do not determine the observed report values.
+        paid["claims"]["paid_sat"] = json!(999);
+        assert_eq!(report_truth(task, &funded, &paid, &observations), truth);
+        paid["recipient"]["settled"] = json!(false);
+        paid["recipient"]["amt_paid_sat"] = json!("0");
+        paid["wallet"]["balance_sat"] = json!(1000);
+        observations["recipient_settled"] = json!(false);
+        let failed = report_truth(task, &funded, &paid, &observations);
+        assert_eq!(
+            failed,
+            json!({"success":false,"minted_sat":1000,"paid_sat":0,"remaining_sat":1000,"cleanup":true})
+        );
+        assert!(super::super::report::Report::parse(&failed.to_string()).consistent(task, &failed));
+        let missing = report_truth(task, &Value::Null, &Value::Null, &json!({}));
+        for key in ["minted_sat", "paid_sat", "remaining_sat"] {
+            assert!(missing[key].is_null(), "{key}");
+        }
     }
 }

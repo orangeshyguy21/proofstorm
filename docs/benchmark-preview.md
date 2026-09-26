@@ -6,6 +6,14 @@ report, and remove the cell. It uses existing Bitcoin Core, LND, CDK, and Nutshe
 components. It is an opt-in acceptance command, not yet an installed `storm`
 benchmark product or a model leaderboard.
 
+O1 0.5 keeps schema discovery and composition in scope. The prompt supplies
+component IDs, roles, implementations, versions and semantic link requirements,
+not a complete cell document. The agent discovers configuration versions, control
+settings and bindings from the catalog. Component grading checks IDs,
+implementations and versions; bindings are checked semantically. The reference
+control alone uses the complete document retained in `Task`. This replaces 0.4's
+ready-to-submit document; no model attempts used the 0.4 contract.
+
 ## Run
 
 Prerequisites: the normal checkout build/runtime dependencies, Docker, a working
@@ -19,7 +27,7 @@ CARGO_TARGET_DIR=.proofstorm-dev/target cargo build --locked -p proofstorm-accep
 .proofstorm-dev/target/debug/proofstorm-acceptance \
   --checkout-home "$PWD/.proofstorm-dev/state" \
   --root "$PWD" \
-  --work-dir "$PWD/dev/benchmark-o1-kimi-v04-01" \
+  --work-dir "$PWD/dev/benchmark-o1-kimi-v05-01" \
   --timeout 1500 \
   --benchmark-model kimi-code-plan-global/kimi-for-coding \
   --benchmark-opencode /absolute/path/to/opencode \
@@ -49,7 +57,7 @@ receipt:
 
 ```sh
 .proofstorm-dev/target/debug/proofstorm-acceptance \
-  --cleanup "$PWD/dev/benchmark-o1-kimi-v04-01"
+  --cleanup "$PWD/dev/benchmark-o1-kimi-v05-01"
 ```
 
 Cleanup recovery does not grant credit for agent cleanup. A run without a final
@@ -79,7 +87,7 @@ retains terminal operation evidence immediately before the first removal request
 because cell teardown deletes those records. Either a verified `cell_wait` or a
 completed `cell_remove` receipt can demonstrate closure.
 
-Scorer `o1-70-15-15/0.4` computes:
+Scorer `o1-70-15-15/0.5` computes:
 
 - **Quality (70):** 70% of the weighted assertion score. Nine operational
   assertions are required. Correct JSON-only reporting contributes seven points;
@@ -92,6 +100,13 @@ Scorer `o1-70-15-15/0.4` computes:
 - **Time (15):** `15 × clamp((1200 − elapsed_seconds) / 900, 0, 1)`.
   The 300-second target and 1,200-second deadline are provisional, not calibrated
   comparison targets.
+
+The report schema describes shape only: required fields, types and no extra
+fields. It does not prescribe success, amounts or the grading balance window.
+Claims are compared with independent observations after agent cleanup has been
+checked. An honest `success:false` report can be valid without earning task
+completion; a false success or cleanup claim fails validation. Missing payment
+evidence cannot be replaced by a claimed zero.
 
 Results separate `task_success`, `report_valid`, `report_format`, and
 `environment_valid`. A complete trailing JSON object after prose can validate
@@ -120,7 +135,7 @@ Regrade without a model or runtime:
 
 ```sh
 .proofstorm-dev/target/debug/proofstorm-acceptance \
-  --benchmark-grade "$PWD/dev/benchmark-o1-kimi-v04-01"
+  --benchmark-grade "$PWD/dev/benchmark-o1-kimi-v05-01"
 ```
 
 Regrading verifies retained evidence hashes and requires the original task/scorer
@@ -137,8 +152,8 @@ an offsetting-payment counterexample with live observations. It is a grader
 control, not a model attempt, and has no model score. Run it with the same
 checkout/root options and a fresh work directory; omit benchmark model options.
 The 0.1 and 0.2 attempts remain retained and cannot be regraded with the changed
-0.4 task contract. The 0.3 runner is retained separately; no model attempts used
-that contract. Keep the original runner for offline reproduction of older
+0.5 task contract. The 0.3 and 0.4 runners are retained separately; no model
+attempts used those contracts. Keep the original runner for offline reproduction of older
 results; upgrading the scorer does not rewrite them.
 
 Preservation hashes only Claude's top-level and per-project MCP server maps,
