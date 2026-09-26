@@ -83,6 +83,14 @@ pub fn validate_gates(names: &[String]) -> Result<()> {
             "onboarding's on-demand check cannot share slice2's prefetched setup"
         );
     }
+    ensure!(
+        names
+            .iter()
+            .filter(|name| name.starts_with("benchmark-"))
+            .count()
+            <= 1,
+        "benchmark tasks and oracles require separate evidence directories"
+    );
     Ok(())
 }
 

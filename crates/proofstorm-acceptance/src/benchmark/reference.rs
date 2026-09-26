@@ -5,7 +5,7 @@ use anyhow::{Context as _, Result, ensure};
 use serde_json::json;
 use std::process::Command;
 
-pub fn run(context: &GateContext) -> Result<()> {
+pub fn run(context: &GateContext, selected_task: &super::task::Task) -> Result<()> {
     let config = Context {
         root: context.root.clone(),
         work: context.work().into(),
@@ -13,7 +13,7 @@ pub fn run(context: &GateContext) -> Result<()> {
         mcp: context.artifacts.mcp.clone(),
         model: "reference-control".into(),
         harness: super::harness::Harness::Reference,
-        task: super::task::o1().clone(),
+        task: selected_task.clone(),
     };
     let path = config.work.join("benchmark-context.json");
     save(&path, &json!(config))?;
@@ -33,34 +33,30 @@ pub fn run(context: &GateContext) -> Result<()> {
         &task.cell_name,
         "",
         "bootstrap",
-        task.component("bitcoin-core", 0),
-        task.component("lnd", 0),
-        task.component("lnd", 1),
+        task.role("chain"),
+        task.role("backend"),
+        task.role("payer"),
         2_000_000,
         1_000_000,
         500_000,
     )?;
     let mut session = native::Session::new(&mut client, &task.cell_name, "");
-    session.nutshell_initialize(
-        task.component("nutshell-wallet", 0),
-        task.component("cdk", 0),
-        "initialize-wallet",
-    )?;
+    session.nutshell_initialize(task.role("wallet"), task.role("mint"), "initialize-wallet")?;
     let quote = session.nutshell_invoice(
-        task.component("nutshell-wallet", 0),
-        task.component("cdk", 0),
+        task.role("wallet"),
+        task.role("mint"),
         "mint-quote",
         task.amounts.mint_sat,
     )?;
     let invoice = session.nutshell_invoice_projection(
-        task.component("nutshell-wallet", 0),
-        task.component("cdk", 0),
+        task.role("wallet"),
+        task.role("mint"),
         "mint-invoice",
         &quote,
         task.amounts.mint_sat,
     )?;
     session.projected(
-        task.component("lnd", 1),
+        task.role("payer"),
         "fund-mint",
         &format!(
             "{} payinvoice --force --json {}",
@@ -74,8 +70,8 @@ pub fn run(context: &GateContext) -> Result<()> {
         &json!({"mode":"json_fields","fields":["status","value_sat"]}),
     )?;
     session.nutshell_claim(
-        task.component("nutshell-wallet", 0),
-        task.component("cdk", 0),
+        task.role("wallet"),
+        task.role("mint"),
         "claim",
         &quote,
         task.amounts.mint_sat,
@@ -85,31 +81,71 @@ pub fn run(context: &GateContext) -> Result<()> {
         json!({"stage":"funded","mint_quote_id":quote}),
     )?;
     let invoice = session.projected(
-        task.component("lnd", 1),
+        task.role("recipient"),
         "recipient-invoice",
         &format!("{} addinvoice --amt={}", native::LND, task.amounts.melt_sat),
         &json!({"mode":"lnd_invoice"}),
     )?;
-    let melt = session.nutshell_melt(
-        task.component("nutshell-wallet", 0),
-        task.component("cdk", 0),
-        "melt",
-        invoice["payment_request"]
-            .as_str()
-            .context("recipient invoice")?,
-        task.amounts.melt_sat,
-    )?;
-    let remaining = session.nutshell_balance(
-        task.component("nutshell-wallet", 0),
-        task.component("cdk", 0),
-        "remaining",
-    )?;
-    session.client.call("benchmark_checkpoint",json!({"stage":"paid","mint_quote_id":quote,"melt_quote_id":melt["quote_id"],"payment_hash":invoice["payment_hash"],"minted_sat":task.amounts.mint_sat,"paid_sat":task.amounts.melt_sat,"remaining_sat":remaining}))?;
+    let melt = if task.payment_expectation == super::task::PaymentExpectation::Settled {
+        session.nutshell_melt(
+            task.role("wallet"),
+            task.role("mint"),
+            "melt",
+            invoice["payment_request"]
+                .as_str()
+                .context("recipient invoice")?,
+            task.amounts.melt_sat,
+        )?
+    } else {
+        // A failed native command is an observation, not proof of nonpayment.
+        // Keep its actual exit status, then independently inspect all systems.
+        session.start(
+            task.role("wallet"),
+            "melt",
+            &format!(
+                "cd /app && cashu -h {} -u sat -w wallet -t -y pay {}",
+                native::quote(&task.mint_url()),
+                native::quote(
+                    invoice["payment_request"]
+                        .as_str()
+                        .context("recipient invoice")?
+                )
+            ),
+        )?;
+        let mut operation = cell::wait_one(session.client, "melt", 120)?;
+        if operation["terminal"] != true {
+            operation = cell::wait_one(session.client, "melt", 60)?;
+        }
+        ensure!(
+            operation["terminal"] == true && operation["native_result"]["cleanup_verified"] == true,
+            "payment attempt did not terminate cleanly: {operation}"
+        );
+        save(
+            &config.work.join("reference-melt-operation.json"),
+            &operation,
+        )?;
+        session.json(task.role("wallet"), "melt-observe", &format!(
+            "exec env HOME=/wallet PROOFSTORM_WALLET={} PROOFSTORM_MINT={} PROOFSTORM_EXPECTED_MINT_URL={} PROOFSTORM_INVOICE={} /opt/proofstorm/driver quote observe-melt",
+            native::quote(task.role("wallet")), native::quote(task.role("mint")), native::quote(&task.mint_url()), native::quote(invoice["payment_request"].as_str().context("recipient invoice")?)
+        ))?
+    };
+    let remaining =
+        session.nutshell_balance(task.role("wallet"), task.role("mint"), "remaining")?;
+    let paid_sat = if task.payment_expectation == super::task::PaymentExpectation::Settled {
+        task.amounts.melt_sat
+    } else {
+        0
+    };
+    session.client.call("benchmark_checkpoint",json!({"stage":task.final_checkpoint,"mint_quote_id":quote,"melt_quote_id":melt["quote_id"],"payment_hash":invoice["payment_hash"],"minted_sat":task.amounts.mint_sat,"paid_sat":paid_sat,"remaining_sat":remaining}))?;
     session
         .client
         .call("cell_remove", json!({"name":&task.cell_name}))?;
     cell::wait_closed(session.client, &task.cell_name)?;
-    let report = json!({"success":true,"minted_sat":task.amounts.mint_sat,"paid_sat":task.amounts.melt_sat,"remaining_sat":remaining,"cleanup":true});
+    let mut report = json!({"success":true,"minted_sat":task.amounts.mint_sat,"paid_sat":paid_sat,"remaining_sat":remaining,"cleanup":true});
+    if task.payment_expectation == super::task::PaymentExpectation::UnpaidNoRoute {
+        report["payment_occurred"] = json!(false);
+        report["diagnosis"] = json!("no_route");
+    }
     observe_final(
         &config,
         &super::report::Report::parse(&report.to_string()),
@@ -125,7 +161,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     // Counterexample uses the same real payment observations: another successful
     // funding payment must fail accounting even if net holdings are unchanged.
     let funded = read(&config.work.join("funded.json"))?;
-    let mut paid = read(&config.work.join("paid.json"))?;
+    let mut paid = read(&config.work.join(format!("{}.json", task.final_checkpoint)))?;
     let truth = observer::report_truth(task, &funded, &paid, &assertions);
     paid["payer_payments"]["payments"]
         .as_array_mut()
@@ -135,6 +171,16 @@ pub fn run(context: &GateContext) -> Result<()> {
         observer::assertions(task, &funded, &paid)["accounting"] == false,
         "offsetting cycle control was accepted"
     );
+    let negative_controls =
+        if task.payment_expectation == super::task::PaymentExpectation::UnpaidNoRoute {
+            super::negative::controls(
+                task,
+                &funded,
+                &read(&config.work.join(format!("{}.json", task.final_checkpoint)))?,
+            )?
+        } else {
+            json!({})
+        };
     let prose = super::report::Report::parse(&format!("Payment completed.\n{report}"));
     ensure!(
         !prose.format_valid && prose.consistent(task, &truth),
@@ -157,7 +203,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     );
     save(
         &config.work.join("oracle-reference.json"),
-        &json!({"kind":"known-good-grader-control","model_attempt":false,"task":super::score::task(),"assertions":assertions,"boundary_calls":super::calls(&events(&config.work)?)?.len(),"controls":{"extra_payment_rejected":true,"prose_preserves_claims_not_format_credit":true,"incorrect_report_rejected":true,"honest_failure_accepted_false_completion_rejected":true}}),
+        &json!({"kind":"known-good-grader-control","model_attempt":false,"task":task,"assertions":assertions,"negative_controls":negative_controls,"boundary_calls":super::calls(&events(&config.work)?)?.len(),"controls":{"extra_payment_rejected":true,"prose_preserves_claims_not_format_credit":true,"incorrect_report_rejected":true,"honest_failure_accepted_false_completion_rejected":true}}),
     )?;
     Ok(())
 }

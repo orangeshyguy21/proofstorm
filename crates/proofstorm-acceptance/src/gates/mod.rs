@@ -50,6 +50,8 @@ pub mod surface;
 /// Every gate name the binary accepts, in the plan's port order.
 pub const NAMES: &[&str] = &[
     "benchmark-o1",
+    "benchmark-o5",
+    "benchmark-o5-oracle",
     "benchmark-oracle",
     "qualification",
     "smoke",
@@ -111,8 +113,14 @@ pub const NAMES: &[&str] = &[
 /// Dispatch a gate by the name passed to `just e2e`.
 pub fn run(name: &str, context: &GateContext) -> Result<()> {
     match name {
-        "benchmark-o1" => crate::benchmark::run_gate(context),
-        "benchmark-oracle" => crate::benchmark::reference::run(context),
+        "benchmark-o1" => crate::benchmark::run_gate(context, crate::benchmark::task::o1()),
+        "benchmark-o5" => crate::benchmark::run_gate(context, crate::benchmark::task::o5()),
+        "benchmark-o5-oracle" => {
+            crate::benchmark::reference::run(context, crate::benchmark::task::o5())
+        }
+        "benchmark-oracle" => {
+            crate::benchmark::reference::run(context, crate::benchmark::task::o1())
+        }
         "qualification" => crate::qualification::run(context),
         "smoke" => smoke::run(context),
         "runtime-lifecycle" => runtime_lifecycle::run(context),

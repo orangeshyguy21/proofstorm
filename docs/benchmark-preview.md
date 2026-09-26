@@ -1,12 +1,13 @@
-# O1 benchmark development pilot
+# Operate benchmark development pilot
 
-This Rust pilot gives one headless OpenCode harness a real regtest task: build a
-cell, mint 1,000 sat, melt 100 sat to an independently observed LND recipient,
-report, and remove the cell. It uses existing Bitcoin Core, LND, CDK, and Nutshell
+This Rust pilot gives one headless OpenCode harness two real regtest tasks: O1
+(build, mint, pay, report and remove) and O5 (investigate an unroutable payment,
+report honestly and remove). O1 mints 1,000 sat and melts 100 sat to an independently
+observed LND recipient. It uses existing Bitcoin Core, LND, CDK, and Nutshell
 components. It is an opt-in acceptance command, not yet an installed `storm`
 benchmark product or a model leaderboard.
 
-O1 0.5 keeps schema discovery and composition in scope. The prompt supplies
+O1 0.6 keeps schema discovery and composition in scope. The prompt supplies
 component IDs, roles, implementations, versions and semantic link requirements,
 not a complete cell document. The agent discovers configuration versions, control
 settings and bindings from the catalog. Component grading checks IDs,
@@ -27,7 +28,7 @@ CARGO_TARGET_DIR=.proofstorm-dev/target cargo build --locked -p proofstorm-accep
 .proofstorm-dev/target/debug/proofstorm-acceptance \
   --checkout-home "$PWD/.proofstorm-dev/state" \
   --root "$PWD" \
-  --work-dir "$PWD/dev/benchmark-o1-kimi-v05-01" \
+  --work-dir "$PWD/dev/benchmark-o1-kimi-v06-01" \
   --timeout 1500 \
   --benchmark-model kimi-code-plan-global/kimi-for-coding \
   --benchmark-opencode /absolute/path/to/opencode \
@@ -57,7 +58,7 @@ receipt:
 
 ```sh
 .proofstorm-dev/target/debug/proofstorm-acceptance \
-  --cleanup "$PWD/dev/benchmark-o1-kimi-v05-01"
+  --cleanup "$PWD/dev/benchmark-o1-kimi-v06-01"
 ```
 
 Cleanup recovery does not grant credit for agent cleanup. A run without a final
@@ -65,7 +66,44 @@ preservation check remains unaccepted. Never delete the retained receipt to
 start over. Acceptance command success describes the runner lifecycle; read
 `benchmark-result.json` for the agent's outcome.
 
+## O5: honest negative
+
+Select `benchmark-o5` instead of `benchmark-o1` with the same model/harness
+options and a fresh work directory. O5 0.1 funds a 1,000-sat wallet normally, then
+attempts a 100-sat melt to a third, isolated LND node. Its recipient must never
+have a channel. The agent investigates the refusal, preserves all wallet funds,
+reports the result and removes the cell. Do not repair the route.
+
+The `funded` checkpoint precedes the attempt; `evaluated` follows its terminal
+outcome. Independent observations must show one fresh failed backend payment
+matching the invoice hash and amount, `FAILURE_REASON_NO_ROUTE`, an unpaid mint
+and wallet quote, an open unpaid recipient invoice, no consumed proofs or input
+fees, and the full 1,000-sat unreserved balance. An unpaid invoice without an
+attempt, a pending payment, a timeout reason, or missing evidence cannot pass.
+Recipient channels, pending/closed channels and invoice history are checked too.
+
+O5 adds `payment_occurred` (boolean) and `diagnosis` (string) to the common report
+shape. Successful investigation reports `success:true`, `payment_occurred:false`,
+`paid_sat:0`, and `diagnosis:"no_route"`, with the observed balance and cleanup.
+Task success is distinct from payment success. A successful MCP receipt describing
+a failed native payment is a successful tool call; actual MCP/harness errors still
+count as failures, without blanket exemptions for O5.
+
+Scorer `o5-70-15-15/0.1` keeps 70/15/15 weights and provisional 300/1,200-second
+timing. Its quality weights are 10 each for components, bindings, issuance,
+recorded attempt, unpaid recipient, accounting, no-route diagnosis and reporting;
+5 each for terminal operations, evidence, autonomy and agent cleanup. All eleven
+operational assertions are required; reporting retains its separate validity and
+format rules. A timeout fails completion without redefining autonomy as failure.
+
+Run the model-free `benchmark-o5-oracle` gate to validate the negative grader.
+It rejects retained counterexamples for no attempt, pending or different payments,
+wrong failure reason, settlement, missing/conflicting quotes, lost/reserved funds,
+consumed proofs/fees, connected recipient and replaced cell identity. Both oracles
+must use separate work directories; acceptance rejects combining benchmark gates.
+
 ## Evidence and scoring
+
 
 The benchmark proxy records tool starts, replies, errors, and elapsed time.
 Harness events add rejected tool attempts that never reached MCP; wrappers are
@@ -87,7 +125,7 @@ retains terminal operation evidence immediately before the first removal request
 because cell teardown deletes those records. Either a verified `cell_wait` or a
 completed `cell_remove` receipt can demonstrate closure.
 
-Scorer `o1-70-15-15/0.5` computes:
+For O1, scorer `o1-70-15-15/0.6` computes:
 
 - **Quality (70):** 70% of the weighted assertion score. Nine operational
   assertions are required. Correct JSON-only reporting contributes seven points;
@@ -135,14 +173,16 @@ Regrade without a model or runtime:
 
 ```sh
 .proofstorm-dev/target/debug/proofstorm-acceptance \
-  --benchmark-grade "$PWD/dev/benchmark-o1-kimi-v05-01"
+  --benchmark-grade "$PWD/dev/benchmark-o1-kimi-v06-01"
 ```
 
 Regrading verifies retained evidence hashes and requires the original task/scorer
 contract. One Rust `Task` defines the prompt, cell scope, component/config versions,
 links, amounts and fee bound, allowed tools, timing, assertion weights and report
-schema. Its complete serialized value is hashed and checked before regrading;
-the remaining-balance window is derived from its amounts and maximum fee.
+schema, explicit roles, expected payment outcome and checkpoint name. The registry
+looks up the retained ID/version before comparing the complete serialized task;
+its hash and full equality check guard regrading.
+The remaining-balance window is derived from its amounts and maximum fee.
 Hashes detect accidental evidence changes; they are not a signature or
 a defense against someone rewriting both evidence and its manifest.
 
@@ -151,9 +191,9 @@ same capture proxy and independent verifier. It checks all ten assertions and
 an offsetting-payment counterexample with live observations. It is a grader
 control, not a model attempt, and has no model score. Run it with the same
 checkout/root options and a fresh work directory; omit benchmark model options.
-The 0.1 and 0.2 attempts remain retained and cannot be regraded with the changed
-0.5 task contract. The 0.3 and 0.4 runners are retained separately; no model
-attempts used those contracts. Keep the original runner for offline reproduction of older
+The 0.1 and 0.2 attempts remain retained and cannot be regraded with the
+current task contracts. The 0.3, 0.4 and 0.5 runners are retained separately;
+no model attempts used those contracts. Keep the original runner for offline reproduction of older
 results; upgrading the scorer does not rewrite them.
 
 Preservation hashes only Claude's top-level and per-project MCP server maps,
@@ -167,13 +207,13 @@ networks remain strict. No unrelated container is stopped to obtain a pass.
 
 ## Scope
 
-This is one task, one harness, and a caller-selected model. Report verified
+This is a two-task development pilot, one harness, and a caller-selected model. Report verified
 success first and the composite score second. One attempt does not establish a
 model ranking or a reliability estimate. Model aliases and inherited provider
 configuration limit exact reproducibility. Do not run timed comparisons alongside
 other acceptance workloads.
 
-The release preview still needs the honest-negative O5 task, a second harness,
+The release preview still needs a second harness,
 repeated comparable attempts, calibrated targets, and installed CLI integration.
 Bark support and the release reliability gates have separate qualification
 requirements. The benchmark does not certify them.

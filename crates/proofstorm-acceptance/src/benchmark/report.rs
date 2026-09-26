@@ -1,27 +1,44 @@
 //! Deterministic structured claims and a separate presentation requirement.
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Claims {
-    success: bool,
-    minted_sat: u64,
-    paid_sat: u64,
-    remaining_sat: u64,
-    cleanup: bool,
-}
-
 #[derive(Debug, Serialize)]
 pub(super) struct Report {
     pub format_valid: bool,
-    pub claims: Option<Claims>,
+    pub claims: Option<serde_json::Value>,
 }
 
-fn claims(text: &str) -> Option<Claims> {
-    let text = text.trim();
-    (text.starts_with('{') && text.ends_with('}'))
-        .then(|| serde_json::from_str(text).ok())
-        .flatten()
+// Value normally accepts duplicate keys. Reject them before schema validation,
+// preserving the same unambiguous-report contract for every task.
+struct UniqueObject(serde_json::Value);
+impl<'de> Deserialize<'de> for UniqueObject {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = UniqueObject;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("one JSON object without duplicate keys")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut values = serde_json::Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if values.contains_key(&key) {
+                        return Err(serde::de::Error::custom("duplicate report key"));
+                    }
+                    values.insert(key, map.next_value()?);
+                }
+                Ok(UniqueObject(serde_json::Value::Object(values)))
+            }
+        }
+        deserializer.deserialize_map(Visitor)
+    }
+}
+fn claims(text: &str) -> Option<serde_json::Value> {
+    serde_json::from_str::<UniqueObject>(text.trim())
+        .ok()
+        .map(|object| object.0)
 }
 
 impl Report {
@@ -77,6 +94,7 @@ fn matches_schema(claims: &serde_json::Value, schema: &serde_json::Value) -> boo
             let valid_type = match rule["type"].as_str() {
                 Some("boolean") => value.is_boolean(),
                 Some("integer") => value.as_u64().is_some(),
+                Some("string") => value.is_string(),
                 _ => false,
             };
             valid_type

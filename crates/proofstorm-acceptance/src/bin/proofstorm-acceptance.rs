@@ -97,11 +97,13 @@ async fn main() -> Result<()> {
         args.gates
     };
     runner::validate_gates(&names)?;
-    let benchmark = names.iter().any(|n| n == "benchmark-o1");
+    let benchmark = names
+        .iter()
+        .any(|n| matches!(n.as_str(), "benchmark-o1" | "benchmark-o5"));
     if benchmark {
         anyhow::ensure!(
             names.len() == 1 && selection.benchmark_model.is_some(),
-            "benchmark-o1 requires --benchmark-model and its own run"
+            "model benchmarks require --benchmark-model and their own run"
         );
         anyhow::ensure!(
             args.work_dir.is_some() || args.worker_home.is_some(),

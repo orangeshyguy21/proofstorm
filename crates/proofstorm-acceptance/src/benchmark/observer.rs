@@ -1,5 +1,5 @@
 //! Reads runtime/payment state using runner-owned credentials before teardown.
-use super::{Context, read, save};
+use super::{Context, read, save, task::PaymentExpectation};
 use crate::{Kubectl, McpClient, cell, http};
 use anyhow::{Context as _, Result, ensure};
 use serde_json::{Value, json};
@@ -78,12 +78,12 @@ fn identifier(value: &Value, key: &str) -> Result<String> {
 fn holdings(task: &super::task::Task, kube: &Kubectl, ns: &str) -> Result<Value> {
     let value: Value = serde_json::from_str(&kube.exec(
         ns,
-        &format!("deployment/{}", task.component("nutshell-wallet", 0)),
+        &format!("deployment/{}", task.role("wallet")),
         &[
             "/opt/proofstorm/driver",
             "holdings",
             "nutshell-wallet",
-            task.component("nutshell-wallet", 0),
+            task.role("wallet"),
         ],
     )?)?;
     let rows = value["mints"]
@@ -99,7 +99,10 @@ fn holdings(task: &super::task::Task, kube: &Kubectl, ns: &str) -> Result<Value>
 pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Result<Value> {
     let task = &config.task;
     let stage = args["stage"].as_str().context("stage required")?;
-    ensure!(matches!(stage, "funded" | "paid"), "unknown checkpoint");
+    ensure!(
+        stage == "funded" || stage == task.final_checkpoint,
+        "unknown checkpoint"
+    );
     let path = config.work.join(format!("{stage}.json"));
     ensure!(
         !path.exists(),
@@ -119,22 +122,18 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
     let installation = proofstorm_app::installation::Installation::load(&config.home)?;
     let kube = Kubectl::for_installation(&installation)?;
     let wallet = holdings(task, &kube, ns)?;
-    let mut forward = http::PortForward::open(
-        &kube,
-        ns,
-        &format!("service/{}", task.component("cdk", 0)),
-        3338,
-    )?;
+    let mut forward =
+        http::PortForward::open(&kube, ns, &format!("service/{}", task.role("mint")), 3338)?;
     let quote = identifier(args, "mint_quote_id")?;
     let mint = http::get_json_retrying(&mut forward, &format!("/v1/mint/quote/bolt11/{quote}"), 5)?;
     let receive: Value = serde_json::from_str(&kube.exec(
         ns,
-        &format!("deployment/{}", task.component("nutshell-wallet", 0)),
+        &format!("deployment/{}", task.role("wallet")),
         &[
             "env",
             "HOME=/wallet",
-            &format!("PROOFSTORM_WALLET={}", task.component("nutshell-wallet", 0)),
-            &format!("PROOFSTORM_MINT={}", task.component("cdk", 0)),
+            &format!("PROOFSTORM_WALLET={}", task.role("wallet")),
+            &format!("PROOFSTORM_MINT={}", task.role("mint")),
             &format!("PROOFSTORM_EXPECTED_MINT_URL={}", task.mint_url()),
             "PROOFSTORM_OBSERVATION_ROLE=payment_receive",
             &format!("PROOFSTORM_MINT_QUOTE_ID={quote}"),
@@ -145,7 +144,7 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
     )?)?;
     let mut evidence = json!({"stage":stage,"claims":args,"runtime":runtime,"document":document,"lock":lock,
         "wallet":wallet,"mint_quote":mint,"wallet_receive":receive});
-    if stage == "paid" {
+    if stage == task.final_checkpoint {
         let before = read(&config.work.join("funded.json"))?;
         ensure!(
             before["claims"]["mint_quote_id"] == args["mint_quote_id"],
@@ -167,7 +166,7 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
         );
         let receiver: Value = serde_json::from_str(&kube.exec(
             ns,
-            &format!("statefulset/{}", task.component("lnd", 1)),
+            &format!("statefulset/{}", task.role("recipient")),
             &[
                 "lncli",
                 "--lnddir=/home/lnd/.lnd",
@@ -183,12 +182,12 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
             .context("receiver invoice missing")?;
         let wallet_melt: Value = serde_json::from_str(&kube.exec(
             ns,
-            &format!("deployment/{}", task.component("nutshell-wallet", 0)),
+            &format!("deployment/{}", task.role("wallet")),
             &[
                 "env",
                 "HOME=/wallet",
-                &format!("PROOFSTORM_WALLET={}", task.component("nutshell-wallet", 0)),
-                &format!("PROOFSTORM_MINT={}", task.component("cdk", 0)),
+                &format!("PROOFSTORM_WALLET={}", task.role("wallet")),
+                &format!("PROOFSTORM_MINT={}", task.role("mint")),
                 &format!("PROOFSTORM_EXPECTED_MINT_URL={}", task.mint_url()),
                 &format!("PROOFSTORM_INVOICE={invoice}"),
                 "/opt/proofstorm/driver",
@@ -199,13 +198,13 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
         evidence["mint_melt"] = melt;
         evidence["recipient"] = receiver;
         evidence["wallet_melt"] = wallet_melt;
-        for (field, command) in [
-            ("payer_payments", "listpayments"),
-            ("recipient_invoices", "listinvoices"),
+        for (field, role, command) in [
+            ("payer_payments", "payer", "listpayments"),
+            ("recipient_invoices", "recipient", "listinvoices"),
         ] {
             let value: Value = serde_json::from_str(&kube.exec(
                 ns,
-                &format!("statefulset/{}", task.component("lnd", 1)),
+                &format!("statefulset/{}", task.role(role)),
                 &[
                     "lncli",
                     "--lnddir=/home/lnd/.lnd",
@@ -217,9 +216,36 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
             evidence[field] = value;
         }
     }
+    if task.payment_expectation == PaymentExpectation::UnpaidNoRoute {
+        for (field, role, args) in [
+            (
+                "backend_payments",
+                "backend",
+                vec!["listpayments", "--include_incomplete"],
+            ),
+            ("recipient_channels", "recipient", vec!["listchannels"]),
+            ("recipient_pending", "recipient", vec!["pendingchannels"]),
+            ("recipient_closed", "recipient", vec!["closedchannels"]),
+            ("recipient_invoices", "recipient", vec!["listinvoices"]),
+        ] {
+            let mut command = vec![
+                "lncli",
+                "--lnddir=/home/lnd/.lnd",
+                "--network=regtest",
+                "--rpcserver=127.0.0.1:10009",
+            ];
+            command.extend(args);
+            evidence[field] = serde_json::from_str(&kube.exec(
+                ns,
+                &format!("statefulset/{}", task.role(role)),
+                &command,
+            )?)?;
+        }
+    }
     save(&path, &evidence)?;
+
     Ok(
-        json!({"retained":true,"stage":stage,"next":if stage=="funded" {format!("melt {} sat to {}",task.amounts.melt_sat,task.component("lnd",1))} else {"remove the cell, wait for verified closure, then give the final JSON report".to_owned()}}),
+        json!({"retained":true,"stage":stage,"next":if stage=="funded" {format!("melt {} sat to {}",task.amounts.melt_sat,task.role("recipient"))} else {"remove the cell, wait for verified closure, then give the final JSON report".to_owned()}}),
     )
 }
 
@@ -244,13 +270,22 @@ pub(super) fn report_truth(
             Some(false) => *amount == 0,
             None => false,
         });
-    json!({
+    let mut truth = json!({
         "success":task.operational_required.iter().all(|key| observations[key] == true),
         "minted_sat":minted,
         "paid_sat":paid_sat,
         "remaining_sat":paid["wallet"]["balance_sat"].as_u64(),
         "cleanup":observations["agent_cleanup"] == true,
-    })
+    });
+    if task.payment_expectation == PaymentExpectation::UnpaidNoRoute {
+        truth["payment_occurred"] = json!(paid_sat.map(|amount| amount > 0));
+        truth["diagnosis"] = if observations["no_route"] == true {
+            json!("no_route")
+        } else {
+            Value::Null
+        };
+    }
+    truth
 }
 
 pub fn assertions(task: &super::task::Task, funded: &Value, paid: &Value) -> Value {
@@ -297,10 +332,14 @@ pub fn assertions(task: &super::task::Task, funded: &Value, paid: &Value) -> Val
         && mint
         && melt
         && receiver;
-    json!({"components":components_ok,"bindings":bindings,"mint_settled":mint,
+    let mut assertions = json!({"components":components_ok,"bindings":bindings,"mint_settled":mint,
         "recipient_settled":receiver&&melt,"accounting":accounting,
         "evidence":mint&&melt&&receiver&&funded["runtime"]["instance_key"].is_string()&&funded["runtime"]["instance_key"]==paid["runtime"]["instance_key"]&&funded["document"]==paid["document"],
-        "report":paid["claims"]["minted_sat"]==task.amounts.mint_sat&&paid["claims"]["paid_sat"]==task.amounts.melt_sat&&after.is_some()&&paid["claims"]["remaining_sat"]==paid["wallet"]["balance_sat"]})
+        "report":paid["claims"]["minted_sat"]==task.amounts.mint_sat&&paid["claims"]["paid_sat"]==task.amounts.melt_sat&&after.is_some()&&paid["claims"]["remaining_sat"]==paid["wallet"]["balance_sat"]});
+    if task.payment_expectation == PaymentExpectation::UnpaidNoRoute {
+        super::negative::assertions(task, funded, paid, &mut assertions);
+    }
+    assertions
 }
 
 fn sat_string(value: &Value, amount: u64) -> bool {
