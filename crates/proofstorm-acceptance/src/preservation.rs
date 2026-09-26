@@ -14,7 +14,7 @@ use std::{
 const LIFECYCLE_FIELDS: [&str; 4] = ["running", "restarting", "started", "restarts"];
 
 /// Normally two observations five seconds apart. A container already in Docker
-/// restart backoff gets a bounded chance to demonstrate its next restart. No
+/// restart backoff gets a bounded chance to demonstrate a full restart cycle. No
 /// exemption is inferred from the flag alone, and no resource is modified.
 pub fn baseline(
     checkout_home: Option<&Path>,
@@ -52,9 +52,16 @@ pub fn baseline(
 fn awaiting_restart(first: &Value, current: &Value) -> bool {
     first["containers"].as_object().is_some_and(|containers| {
         containers.iter().any(|(id, value)| {
-            value["restarting"] == true
-                && value["restarts"] == current["containers"][id]["restarts"]
-                && value["started"] == current["containers"][id]["started"]
+            let next = &current["containers"][id];
+            let count_changed = value["restarts"] != next["restarts"];
+            let start_changed = value["started"] != next["started"];
+            let restarting = value["restarting"] == true
+                || next["restarting"] == true
+                || count_changed
+                || start_changed;
+            // Docker updates StartedAt when launching and RestartCount after
+            // failure. Either edge alone can miss the other unstable field.
+            restarting && !(count_changed && start_changed)
         })
     })
 }
@@ -435,6 +442,33 @@ mod tests {
         );
         first["containers"]["external"]["restarting"] = json!(false);
         assert!(!awaiting_restart(&first, &first));
+    }
+
+    #[test]
+    fn restart_cycle_waits_for_both_edges_in_either_order() {
+        for initially_restarting in [true, false] {
+            let mut first = inventory(424, "original-start");
+            first["containers"]["external"]["restarting"] = json!(initially_restarting);
+            let mut middle = first.clone();
+            middle["containers"]["external"]["restarting"] = json!(!initially_restarting);
+            let (field, value) = if initially_restarting {
+                ("started", json!("next-start"))
+            } else {
+                ("restarts", json!(425))
+            };
+            middle["containers"]["external"][field] = value;
+            assert!(awaiting_restart(&first, &middle));
+            let excluded = exclusions(&first, &middle, None).unwrap();
+            let mut completed = middle.clone();
+            completed["containers"]["external"]["started"] = json!("next-start");
+            completed["containers"]["external"]["restarts"] = json!(425);
+            assert!(verify_with_exclusions(&middle, &completed, &excluded).is_err());
+            assert!(!awaiting_restart(&first, &completed));
+            assert_eq!(
+                exclusions(&first, &completed, None).unwrap(),
+                json!({"external":["restarting","started","restarts"]})
+            );
+        }
     }
     #[test]
     fn drift_is_reported_not_repaired_or_ignored() {
