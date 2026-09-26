@@ -19,6 +19,8 @@ use std::{
 };
 
 pub struct Selection {
+    pub benchmark_model: Option<String>,
+    pub benchmark_opencode: PathBuf,
     pub qualification: Option<(PathBuf, String)>,
     pub checkout_home: Option<PathBuf>,
     pub bundle: Option<PathBuf>,
@@ -37,6 +39,12 @@ impl Selection {
     }
 
     fn arguments(&self, command: &mut Command) {
+        if let Some(model) = &self.benchmark_model {
+            command.arg("--benchmark-model").arg(model);
+            command
+                .arg("--benchmark-opencode")
+                .arg(&self.benchmark_opencode);
+        }
         if let Some((plan, case)) = &self.qualification {
             command
                 .arg("--qualification-plan")
@@ -196,7 +204,19 @@ pub fn worker(selection: &Selection, root: &Path, home: &Path, name: &str) -> Re
         context.qualification_observer = Some(crate::qualification::Observer::new(case.clone()));
         context.qualification = Some(case);
     }
-    let result = gates::run(name, &context).and_then(|()| {
+    let result = (if name == "benchmark-o1" {
+        crate::benchmark::run_gate(
+            &context,
+            selection
+                .benchmark_model
+                .as_deref()
+                .context("--benchmark-model required")?,
+            &selection.benchmark_opencode,
+        )
+    } else {
+        gates::run(name, &context)
+    })
+    .and_then(|()| {
         if let Some(observer) = &context.qualification_observer {
             observer.finish()?;
         }
@@ -713,6 +733,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let work = root.path().join("must-not-exist");
         let selection = Selection {
+            benchmark_model: None,
+            benchmark_opencode: "opencode".into(),
             qualification: None,
             checkout_home: None,
             bundle: None,

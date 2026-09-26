@@ -2855,6 +2855,7 @@ dependencies = [
  "proofstorm-kube",
  "proofstorm-qualification",
  "proofstorm-store",
+ "rcgen",
  "rusqlite",
  "semver",
  "serde",
