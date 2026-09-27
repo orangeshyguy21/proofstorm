@@ -4,6 +4,7 @@
 mod tests;
 use rusqlite::{Connection, ErrorCode, OpenFlags, ToSql, types::ValueRef};
 use serde_json::{Value, json};
+use sha2::Digest as _;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -315,6 +316,27 @@ struct Melt {
     fee: Option<u64>,
 }
 impl Melt {
+    fn read(wallet: &Wallet, id: &str, invoice: &str, mint: &str) -> Result<(Self, Value)> {
+        let (_, row) = wallet.one(
+            "SELECT quote,state,amount,fee_reserve,fee_paid,request,mint FROM bolt11_melt_quotes WHERE quote=?1",
+            &[&id],
+            "melt_quote_missing",
+        )?;
+        if !text(&row[5])?.eq_ignore_ascii_case(invoice) {
+            return Err(fail("melt_quote_invoice_mismatch"));
+        }
+        // Nutshell can leave this column NULL. The caller must also bind this
+        // exact ID to the authoritative quote returned by the expected mint.
+        if !row[6].is_null() && normalized_mint(text(&row[6])?) != normalized_mint(mint) {
+            return Err(fail("melt_quote_mint_mismatch"));
+        }
+        let invoice_hash = json!(format!(
+            "{:x}",
+            sha2::Sha256::digest(text(&row[5])?.to_ascii_lowercase())
+        ));
+        Ok((Self::parse(&row)?, invoice_hash))
+    }
+
     fn parse(row: &Row) -> Result<Self> {
         Ok(Self {
             id: text(&row[0])?.into(),
@@ -425,7 +447,10 @@ pub fn observe(mode: &str, config: &Config) -> Result<Value> {
         value["source"] = json!("mint");
         return Ok(value);
     }
-    if !matches!(mode, "observe-receive" | "observe-melt") {
+    if !matches!(
+        mode,
+        "observe-receive" | "observe-melt" | "observe-melt-quote"
+    ) {
         return Err(fail("quote_driver_mode_invalid"));
     }
     let wallet = config.wallet()?;
@@ -441,17 +466,32 @@ pub fn observe(mode: &str, config: &Config) -> Result<Value> {
             config.get("PROOFSTORM_MINT")?,
         ));
     }
-    let melt = Melt::correlate(
-        &wallet,
-        config.get("PROOFSTORM_INVOICE")?,
-        &before_ids(config)?,
-    )?;
+    let (melt, invoice_hash) = if mode == "observe-melt-quote" {
+        Melt::read(
+            &wallet,
+            config.id("PROOFSTORM_MELT_QUOTE_ID")?,
+            config.get("PROOFSTORM_INVOICE")?,
+            config.get("PROOFSTORM_EXPECTED_MINT_URL")?,
+        )?
+    } else {
+        (
+            Melt::correlate(
+                &wallet,
+                config.get("PROOFSTORM_INVOICE")?,
+                &before_ids(config)?,
+            )?,
+            Value::Null,
+        )
+    };
     let mut value = melt.artifact(
         config.get("PROOFSTORM_WALLET")?,
         config.get("PROOFSTORM_MINT")?,
     );
     // Wallet-local fee fields are not authoritative mint evidence.
     value["source"] = json!("wallet");
+    if !invoice_hash.is_null() {
+        value["invoice_sha256"] = invoice_hash;
+    }
     if matches!(melt.state.as_str(), "PAID" | "UNPAID") {
         let (fee, count) = input_fee(&wallet, &melt, config.get("PROOFSTORM_EXPECTED_MINT_URL")?)?;
         value["input_fee_sat"] = json!(fee);

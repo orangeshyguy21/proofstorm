@@ -211,6 +211,16 @@ impl Kubectl {
         self.run(&invocation)
     }
 
+    /// Passive driver failures are sanitized JSON on stdout, not stderr.
+    /// Do not echo command arguments (which can contain private invoices), or
+    /// arbitrary driver output, when forwarding a checkpoint error to an agent.
+    pub fn exec_observation(&self, namespace: &str, target: &str, argv: &[&str]) -> Result<String> {
+        let mut invocation = vec!["exec", target, "-n", namespace, "--"];
+        invocation.extend_from_slice(argv);
+        let (success, stdout, _) = self.try_run(&invocation)?;
+        observation_output(success, stdout)
+    }
+
     /// Restart one workload and wait for its rollout to finish.
     pub fn rollout_restart(&self, namespace: &str, target: &str) -> Result<()> {
         self.run(&["rollout", "restart", target, "-n", namespace])?;
@@ -302,9 +312,55 @@ impl Kubectl {
     }
 }
 
+fn observation_output(success: bool, stdout: String) -> Result<String> {
+    if success {
+        return Ok(stdout);
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(&stdout) {
+        if value["code"] == "wallet_orchestration_failed" && value["stage"] == "quote" {
+            if let Some(reason) = value["reason"].as_str().filter(|reason| {
+                !reason.is_empty()
+                    && reason.len() <= 96
+                    && reason.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+            }) {
+                bail!("quote observation failed: {reason}");
+            }
+        }
+    }
+    bail!("driver observation failed without a recognized diagnostic");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observation_errors_forward_the_driver_reason_without_private_output() {
+        let stdout = r#"{"code":"wallet_orchestration_failed","stage":"quote","reason":"melt_quote_invoice_mismatch","private":"invoice-and-secrets"}"#;
+        let error = observation_output(false, stdout.into())
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "quote observation failed: melt_quote_invoice_mismatch"
+        );
+        for invalid in [
+            "private unstructured output",
+            r#"{"code":"other","stage":"quote","reason":"secret"}"#,
+            r#"{"code":"wallet_orchestration_failed","stage":"quote","reason":"bad\nprivate"}"#,
+        ] {
+            assert_eq!(
+                observation_output(false, invalid.into())
+                    .unwrap_err()
+                    .to_string(),
+                "driver observation failed without a recognized diagnostic"
+            );
+        }
+        assert_eq!(
+            observation_output(true, "{\"state\":\"UNPAID\"}".into()).unwrap(),
+            "{\"state\":\"UNPAID\"}"
+        );
+    }
 
     #[test]
     fn private_kubeconfig_and_context_are_explicit_arguments() {

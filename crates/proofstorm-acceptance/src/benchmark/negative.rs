@@ -2,6 +2,7 @@
 //! attempt correlated with both Cashu quotes and the isolated recipient.
 use super::task::Task;
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 
 fn empty(value: &Value) -> bool {
     value.as_array().is_some_and(Vec::is_empty)
@@ -41,9 +42,11 @@ pub(super) fn assertions(task: &Task, funded: &Value, evaluated: &Value, asserti
     let identity = hash.as_str().is_some_and(|hash| hash.len() == 64)
         && recipient["r_hash"] == *hash
         && sat(&recipient["value"], task.amounts.melt_sat)
-        && recipient["payment_request"]
-            .as_str()
-            .is_some_and(|v| !v.is_empty())
+        && recipient["payment_request"].as_str().is_some_and(|v| {
+            !v.is_empty()
+                && evaluated["wallet_melt"]["invoice_sha256"]
+                    == format!("{:x}", Sha256::digest(v.to_ascii_lowercase()))
+        })
         && evaluated["mint_melt"]["quote"]
             .as_str()
             .is_some_and(|v| !v.is_empty())
@@ -144,6 +147,18 @@ pub(super) fn controls(task: &Task, funded: &Value, evaluated: &Value) -> anyhow
             "no_route",
         ),
         (
+            "insufficient_balance",
+            "/backend_payments/payments/0/failure_reason",
+            json!("FAILURE_REASON_INSUFFICIENT_BALANCE"),
+            "no_route",
+        ),
+        (
+            "wrong_quote_invoice",
+            "/wallet_melt/invoice_sha256",
+            json!("different"),
+            "payment_attempt",
+        ),
+        (
             "recipient_paid",
             "/recipient/settled",
             json!(true),
@@ -234,6 +249,8 @@ mod tests {
         evaluated["claims"] = json!({"mint_quote_id":"aa","melt_quote_id":"bb","payment_hash":hash,"minted_sat":1000,"paid_sat":0,"remaining_sat":1000});
         evaluated["mint_melt"] = json!({"quote":"bb","amount":100,"state":"UNPAID"});
         evaluated["wallet_melt"] = json!({"quote_id":"bb","amount_sat":100,"state":"UNPAID","input_fee_sat":0,"input_proof_count":0});
+        evaluated["wallet_melt"]["invoice_sha256"] =
+            json!(format!("{:x}", Sha256::digest(b"recipient-invoice")));
         evaluated["recipient"] = invoice.clone();
         evaluated["recipient_invoices"] = json!({"invoices":[invoice]});
         evaluated["payer_payments"] = json!({"payments":[{"status":"SUCCEEDED","value_sat":"1000","payment_request":"funding-invoice"}]});

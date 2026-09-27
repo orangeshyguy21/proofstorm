@@ -138,6 +138,97 @@ fn invoice_and_melt_observations_are_exact_and_sanitized() {
 }
 
 #[test]
+fn explicit_melt_quote_selects_identity_not_recency_and_remains_passive() {
+    let mut fixture = Fixture::new("recipient");
+    fixture.melt();
+    fixture.db.execute("INSERT INTO bolt11_melt_quotes SELECT 'second-quote',state,amount,fee_reserve,fee_paid,request,999,mint,unit,paid_time,payment_preimage FROM bolt11_melt_quotes",[]).unwrap();
+    let path = fixture.root.path().join(".cashu/wallet/wallet.sqlite3");
+    let before = fs::read(&path).unwrap();
+    for id in [MELT, "second-quote"] {
+        fixture.set("PROOFSTORM_MELT_QUOTE_ID", id);
+        let quote = observe("observe-melt-quote", &fixture.config).unwrap();
+        assert_eq!(quote["quote_id"], id);
+        assert_eq!(quote["state"], "UNPAID");
+        assert_eq!(quote["input_proof_count"], 0);
+        assert_eq!(quote["invoice_sha256"].as_str().unwrap().len(), 64);
+        private(&quote);
+    }
+    assert_eq!(fs::read(path).unwrap(), before);
+    // The older invoice-only interface still rejects ambiguity.
+    assert_eq!(
+        observe("observe-melt", &fixture.config).unwrap_err().0,
+        "melt_quote_ambiguous"
+    );
+}
+
+#[test]
+fn explicit_melt_quote_rejects_wrong_identity_invoice_mint_and_duplicate_rows() {
+    let mut fixture = Fixture::new("recipient");
+    fixture.melt();
+    fixture.set("PROOFSTORM_MELT_QUOTE_ID", "missing-quote");
+    assert_eq!(
+        observe("observe-melt-quote", &fixture.config)
+            .unwrap_err()
+            .0,
+        "melt_quote_missing"
+    );
+    fixture.set("PROOFSTORM_MELT_QUOTE_ID", MELT);
+    fixture.set("PROOFSTORM_INVOICE", "another-private-invoice");
+    assert_eq!(
+        observe("observe-melt-quote", &fixture.config)
+            .unwrap_err()
+            .0,
+        "melt_quote_invoice_mismatch"
+    );
+    fixture.set("PROOFSTORM_INVOICE", INVOICE);
+    fixture.set("PROOFSTORM_EXPECTED_MINT_URL", "http://wrong-mint:3338");
+    assert_eq!(
+        observe("observe-melt-quote", &fixture.config)
+            .unwrap_err()
+            .0,
+        "melt_quote_mint_mismatch"
+    );
+    fixture.set("PROOFSTORM_EXPECTED_MINT_URL", "http://recipient-mint:3338");
+    fixture
+        .db
+        .execute(
+            "INSERT INTO bolt11_melt_quotes SELECT * FROM bolt11_melt_quotes",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        observe("observe-melt-quote", &fixture.config)
+            .unwrap_err()
+            .0,
+        "wallet_quote_ambiguous"
+    );
+}
+
+#[test]
+fn explicit_melt_quote_handles_nutshell_null_mint_but_requires_caller_mint_binding() {
+    let mut fixture = Fixture::new("recipient");
+    fixture.melt();
+    fixture
+        .db
+        .execute("UPDATE bolt11_melt_quotes SET mint=NULL", [])
+        .unwrap();
+    assert_eq!(
+        observe("observe-melt-quote", &fixture.config).unwrap()["quote_id"],
+        MELT
+    );
+    fixture
+        .config
+        .variables
+        .remove("PROOFSTORM_EXPECTED_MINT_URL");
+    assert_eq!(
+        observe("observe-melt-quote", &fixture.config)
+            .unwrap_err()
+            .0,
+        "proofstorm_expected_mint_url_missing"
+    );
+}
+
+#[test]
 fn fee_evidence_uses_the_mint_database_and_never_infers_a_missing_fee() {
     let mut fixture = Fixture::new("recipient");
     fixture.melt();
