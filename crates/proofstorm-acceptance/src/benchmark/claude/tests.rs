@@ -105,6 +105,73 @@ fn failed_or_missing_harness_reply_never_borrows_proxy_success() {
     }
 }
 
+fn heartbeat() -> Value {
+    json!({"type":"tool_progress","tool_use_id":"one-heartbeat-0",
+        "tool_name":"mcp__proofstorm__catalog_list","parent_tool_use_id":"one",
+        "elapsed_time_seconds":30,"heartbeat":true})
+}
+
+#[test]
+fn tool_heartbeats_never_count_as_calls_or_replace_replies() {
+    for reply in [Some(false), Some(true), None] {
+        let work = tempfile::tempdir().unwrap();
+        let ctx = context(work.path());
+        captured(work.path());
+        let mut rows = vec![
+            init(&ctx),
+            tool_use("one", "mcp__proofstorm__catalog_list"),
+            heartbeat(),
+            heartbeat(),
+        ];
+        if let Some(error) = reply {
+            rows.push(tool_result("one", error));
+        }
+        rows.push(done("{}"));
+        fixture(work.path(), &rows);
+        let output = retained(work.path()).unwrap();
+        assert_eq!(output.calls.len(), 1);
+        assert_eq!(output.calls[0].success, reply.map(|error| !error));
+        assert_eq!(output.calls[0].elapsed_ms, 9);
+        assert!(output.telemetry_error.is_none());
+        assert!(!output.unauthorized);
+    }
+}
+
+#[test]
+fn malformed_or_unmatched_tool_progress_stays_incomplete() {
+    for (key, value) in [
+        ("parent_tool_use_id", json!("unseen")),
+        ("tool_name", json!("mcp__proofstorm__cell_remove")),
+        ("tool_use_id", Value::Null),
+        ("elapsed_time_seconds", json!(-1)),
+        ("elapsed_time_seconds", json!("30")),
+        ("heartbeat", json!(false)),
+        ("task_id", json!("delegated")),
+        ("subagent_type", json!("worker")),
+        ("subagent_retry", json!({"attempt":1})),
+    ] {
+        let work = tempfile::tempdir().unwrap();
+        let ctx = context(work.path());
+        captured(work.path());
+        let mut progress = heartbeat();
+        progress[key] = value;
+        fixture(
+            work.path(),
+            &[
+                init(&ctx),
+                tool_use("one", "mcp__proofstorm__catalog_list"),
+                progress,
+                tool_result("one", false),
+                done("{}"),
+            ],
+        );
+        let output = retained(work.path()).unwrap();
+        assert_eq!(output.calls.len(), 2, "{key}");
+        assert_eq!(output.calls[1].tool, "telemetry_gap", "{key}");
+        assert!(output.telemetry_error.is_some(), "{key}");
+    }
+}
+
 #[test]
 fn refusals_foreign_tools_gaps_and_errors_stay_visible() {
     // A permission refusal is a failed attempt, not an unauthorized action.

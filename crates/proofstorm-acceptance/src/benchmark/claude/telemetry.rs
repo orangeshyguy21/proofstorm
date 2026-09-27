@@ -35,6 +35,22 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
                 }
             }
             Some("rate_limit_event") => {}
+            Some("tool_progress") => {
+                // CLI 2.1.281 emits periodic heartbeats with a synthetic ID and
+                // the real call ID in parent_tool_use_id. They are progress,
+                // never another attempt or evidence of a successful reply.
+                let parent = row["parent_tool_use_id"].as_str();
+                let known = parent.and_then(|id| seen.get(id));
+                complete &= row["heartbeat"] == true
+                    && row["tool_use_id"].as_str().is_some_and(|id| !id.is_empty())
+                    && row["elapsed_time_seconds"]
+                        .as_f64()
+                        .is_some_and(|elapsed| elapsed.is_finite() && elapsed >= 0.0)
+                    && known.is_some_and(|call| call["name"] == row["tool_name"])
+                    && row["task_id"].is_null()
+                    && row["subagent_type"].is_null()
+                    && row["subagent_retry"].is_null();
+            }
             Some("assistant") => {
                 // Subagent traffic cannot occur without a delegation tool.
                 unauthorized |= !row["parent_tool_use_id"].is_null();

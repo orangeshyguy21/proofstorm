@@ -59,8 +59,9 @@ For Codex, select the harness and exact Codex model ID instead:
 
 The Codex adapter requires `exec --json --strict-config --ephemeral --ignore-rules`
 plus `debug models --bundled` and `debug prompt-input`. Its CLI contract was exercised with
-`0.158.0-alpha.2.1` against a local fake model and MCP server; this is not a paid
-O1/O5 qualification or an account-availability claim. Unknown model IDs fail
+`0.158.0-alpha.2.1` against a local fake model and MCP server. Subsequent real
+O1/O5 attempts with `gpt-6-astra` exercised settlement, failed-payment evidence,
+scoring and cleanup; this does not establish access to other models. Unknown model IDs fail
 before a model request. Bundled catalog membership does not prove account access;
 provider failures remain failed attempts, and no replacement model is selected.
 
@@ -137,7 +138,11 @@ would-be request's model, tool definitions and prompt delivery, before any model
 call. The wire profile (version, effort, thinking, system-prompt and tool-definition
 digests) is retained in `claude-preflight.private.json` and the manifest. The CLI
 contract was exercised with Claude Code `2.1.281` through one real MCP round trip
-against a local fake model; this is not a paid O1/O5 qualification.
+against a local fake model, then real O1/O5 attempts with `claude-opus-5-5` using
+the machine login. Those attempts exposed an unrecognized tool-progress heartbeat
+event; the adapter now validates heartbeats against known calls without treating
+them as attempts or replies. Copies of the retained transcripts were regraded
+offline with that fix; the original receipts remain unchanged.
 
 Stream-json tool uses are joined to the proxy trace, counting each call once. A
 permission refusal is a failed call; an unobserved foreign tool success, subagent
@@ -310,7 +315,7 @@ networks remain strict. No unrelated container is stopped to obtain a pass.
 
 ## Scope
 
-This is a two-task development pilot with two CLI adapters and caller-selected models. Report verified
+This is a two-task development pilot with three CLI adapters and caller-selected models. Report verified
 success first and the composite score second. One attempt does not establish a
 model ranking or a reliability estimate. Model aliases and inherited provider
 configuration limit exact reproducibility. Do not run timed comparisons alongside
@@ -318,8 +323,11 @@ other acceptance workloads.
 
 Compare models first and retain harness/version/settings as metadata; running the
 same model through multiple harnesses is optional. Harness differences can affect
-results and must remain visible. The release preview still needs
-paid Codex and Claude Code task qualification, repeated comparable attempts, calibrated targets,
-and installed CLI integration.
+results and must remain visible. The initial Codex/Claude live qualification
+retained all four attempts: both models completed O1, while O5 exposed report
+validation and failure-reason mistakes. Cleanup and preservation passed for all
+four; these are qualification samples, not a comparison campaign. The release
+preview still needs repeated comparable attempts, calibrated targets, and
+installed CLI integration.
 Bark support and the release reliability gates have separate qualification
 requirements. The benchmark does not certify them.
