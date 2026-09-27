@@ -3,10 +3,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub fn task() -> Value {
-    json!(super::task::o1())
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Call {
     pub id: u64,

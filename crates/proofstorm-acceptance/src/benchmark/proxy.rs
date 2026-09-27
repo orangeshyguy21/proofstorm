@@ -77,9 +77,9 @@ pub fn serve(path: &Path) -> Result<()> {
                         .as_str()
                         .is_some_and(|name| config.task.allowed(name))
                 });
-                tools.push(json!({"name":"benchmark_checkpoint","description":format!("Retain independent {} payment observations BEFORE cleanup. Call funded after minting {} sat, then paid after melting {} sat. Each successful checkpoint is immutable. This is a report submission, not a payment tool.",config.task.id,config.task.amounts.mint_sat,config.task.amounts.melt_sat),"inputSchema":{
+                tools.push(json!({"name":"benchmark_checkpoint","description":format!("Retain independent {} payment observations BEFORE cleanup. Call funded after minting {} sat, then {} after attempting a {}-sat melt. Each successful checkpoint is immutable. This is a report submission, not a payment tool.",config.task.id,config.task.amounts.mint_sat,config.task.final_checkpoint,config.task.amounts.melt_sat),"inputSchema":{
                     "type":"object","additionalProperties":false,"properties":{
-                        "stage":{"type":"string","enum":["funded","paid"]},"mint_quote_id":{"type":"string"},
+                        "stage":{"type":"string","enum":["funded",config.task.final_checkpoint]},"mint_quote_id":{"type":"string"},
                         "melt_quote_id":{"type":"string"},"payment_hash":{"type":"string"},
                         "minted_sat":{"type":"integer"},"paid_sat":{"type":"integer"},"remaining_sat":{"type":"integer"}},
                     "required":["stage","mint_quote_id"]}}));

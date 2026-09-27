@@ -53,11 +53,26 @@ fn run_inner(
     log: Option<&Path>,
     limit: u64,
 ) -> Result<String> {
+    run_command(home, Command::new(program).args(args), seconds, log, limit)
+}
+
+/// Apply the usual bounds and environment policy to a command with scoped overrides.
+pub(super) fn configured(home: &Path, command: &mut Command, seconds: u64) -> Result<String> {
+    run_command(home, command, seconds, None, OUTPUT_LIMIT)
+}
+
+fn run_command(
+    home: &Path,
+    command: &mut Command,
+    seconds: u64,
+    log: Option<&Path>,
+    limit: u64,
+) -> Result<String> {
+    let program = command.get_program().to_owned();
+    let program = Path::new(&program);
     let out = tempfile::tempfile()?;
     let err = tempfile::tempfile()?;
-    let mut command = Command::new(program);
     command
-        .args(args)
         .stdin(Stdio::null())
         .stdout(out.try_clone()?)
         .stderr(err.try_clone()?);

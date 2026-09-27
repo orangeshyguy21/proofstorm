@@ -13,12 +13,21 @@ use std::{
 #[derive(Parser)]
 #[command(about = "Run live gates in a new, owned Proofstorm installation")]
 struct Arguments {
-    /// Opt-in O1 pilot model, in `OpenCode` provider/model form.
+    /// Exact model ID accepted by the selected CLI (`OpenCode` uses provider/model).
     #[arg(long)]
     benchmark_model: Option<String>,
     /// Headless `OpenCode` executable for the opt-in pilot.
     #[arg(long, default_value = "opencode")]
     benchmark_opencode: PathBuf,
+    /// CLI harness for this model attempt.
+    #[arg(long, default_value = "opencode", value_parser = ["opencode", "codex"])]
+    benchmark_harness: String,
+    /// Headless Codex executable.
+    #[arg(long, default_value = "codex")]
+    benchmark_codex: PathBuf,
+    /// File-based Codex login to copy into the owned home (never modified).
+    #[arg(long)]
+    benchmark_codex_auth: Option<PathBuf>,
     /// Rescore retained O1 evidence without contacting a model or runtime.
     #[arg(long)]
     benchmark_grade: Option<PathBuf>,
@@ -85,6 +94,9 @@ async fn main() -> Result<()> {
     let selection = runner::Selection {
         benchmark_model: args.benchmark_model,
         benchmark_opencode: args.benchmark_opencode,
+        benchmark_harness: args.benchmark_harness,
+        benchmark_codex: args.benchmark_codex,
+        benchmark_codex_auth: args.benchmark_codex_auth,
         qualification: args.qualification_plan.zip(args.qualification_case),
         checkout_home: args.checkout_home,
         bundle: args.bundle,
@@ -97,11 +109,13 @@ async fn main() -> Result<()> {
         args.gates
     };
     runner::validate_gates(&names)?;
-    let benchmark = names.iter().any(|n| n == "benchmark-o1");
+    let benchmark = names
+        .iter()
+        .any(|n| matches!(n.as_str(), "benchmark-o1" | "benchmark-o5"));
     if benchmark {
         anyhow::ensure!(
             names.len() == 1 && selection.benchmark_model.is_some(),
-            "benchmark-o1 requires --benchmark-model and its own run"
+            "model benchmarks require --benchmark-model and their own run"
         );
         anyhow::ensure!(
             args.work_dir.is_some() || args.worker_home.is_some(),

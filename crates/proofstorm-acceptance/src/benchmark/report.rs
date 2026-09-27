@@ -1,27 +1,44 @@
 //! Deterministic structured claims and a separate presentation requirement.
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Claims {
-    success: bool,
-    minted_sat: u64,
-    paid_sat: u64,
-    remaining_sat: u64,
-    cleanup: bool,
-}
-
 #[derive(Debug, Serialize)]
 pub(super) struct Report {
     pub format_valid: bool,
-    pub claims: Option<Claims>,
+    pub claims: Option<serde_json::Value>,
 }
 
-fn claims(text: &str) -> Option<Claims> {
-    let text = text.trim();
-    (text.starts_with('{') && text.ends_with('}'))
-        .then(|| serde_json::from_str(text).ok())
-        .flatten()
+// Value normally accepts duplicate keys. Reject them before schema validation,
+// preserving the same unambiguous-report contract for every task.
+struct UniqueObject(serde_json::Value);
+impl<'de> Deserialize<'de> for UniqueObject {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = UniqueObject;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("one JSON object without duplicate keys")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut values = serde_json::Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if values.contains_key(&key) {
+                        return Err(serde::de::Error::custom("duplicate report key"));
+                    }
+                    values.insert(key, map.next_value()?);
+                }
+                Ok(UniqueObject(serde_json::Value::Object(values)))
+            }
+        }
+        deserializer.deserialize_map(Visitor)
+    }
+}
+fn claims(text: &str) -> Option<serde_json::Value> {
+    serde_json::from_str::<UniqueObject>(text.trim())
+        .ok()
+        .map(|object| object.0)
 }
 
 impl Report {
@@ -45,17 +62,11 @@ impl Report {
         }
     }
 
-    pub fn consistent(
-        &self,
-        task: &super::task::Task,
-        checkpoint_valid: bool,
-        remaining: Option<u64>,
-    ) -> bool {
-        checkpoint_valid
-            && self.claims.as_ref().is_some_and(|c| {
-                matches_schema(&serde_json::json!(c), &task.report_schema)
-                    && Some(c.remaining_sat) == remaining
-            })
+    pub fn consistent(&self, task: &super::task::Task, observed: &serde_json::Value) -> bool {
+        self.claims.as_ref().is_some_and(|c| {
+            let claims = serde_json::json!(c);
+            matches_schema(&claims, &task.report_schema) && claims == *observed
+        })
     }
 }
 
@@ -83,6 +94,7 @@ fn matches_schema(claims: &serde_json::Value, schema: &serde_json::Value) -> boo
             let valid_type = match rule["type"].as_str() {
                 Some("boolean") => value.is_boolean(),
                 Some("integer") => value.as_u64().is_some(),
+                Some("string") => value.is_string(),
                 _ => false,
             };
             valid_type
@@ -108,15 +120,16 @@ mod tests {
 
     #[test]
     fn prose_loses_format_credit_without_erasing_valid_claims() {
+        let observed = serde_json::from_str(GOOD).unwrap();
         let strict = Report::parse(GOOD);
-        assert!(
-            strict.format_valid && strict.consistent(super::super::task::o1(), true, Some(899))
-        );
+        assert!(strict.format_valid && strict.consistent(super::super::task::o1(), &observed));
         let prose = Report::parse(&format!("Payment completed.\n\n{GOOD}"));
         assert!(!prose.format_valid);
-        assert!(prose.consistent(super::super::task::o1(), true, Some(899)));
-        assert!(!prose.consistent(super::super::task::o1(), true, Some(900)));
-        assert!(!prose.consistent(super::super::task::o1(), false, Some(899)));
+        assert!(prose.consistent(super::super::task::o1(), &observed));
+        let mut different = observed.clone();
+        different["remaining_sat"] = serde_json::json!(900);
+        assert!(!prose.consistent(super::super::task::o1(), &different));
+        assert!(!prose.consistent(super::super::task::o1(), &serde_json::Value::Null));
     }
 
     #[test]
@@ -132,8 +145,41 @@ mod tests {
             "success".into(),
         ] {
             assert!(
-                !Report::parse(&text).consistent(super::super::task::o1(), true, Some(899)),
+                !Report::parse(&text).consistent(
+                    super::super::task::o1(),
+                    &serde_json::from_str(GOOD).unwrap()
+                ),
                 "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn schema_allows_honest_failure_but_truth_requires_observations() {
+        let task = super::super::task::o1();
+        let failed = serde_json::json!({"success":false,"minted_sat":1000,"paid_sat":0,"remaining_sat":1000,"cleanup":true});
+        assert!(matches_schema(&failed, &task.report_schema));
+        let report = Report::parse(&failed.to_string());
+        assert!(report.format_valid && report.consistent(task, &failed));
+        for key in [
+            "success",
+            "minted_sat",
+            "paid_sat",
+            "remaining_sat",
+            "cleanup",
+        ] {
+            let mut unknown = failed.clone();
+            unknown[key] = serde_json::Value::Null;
+            assert!(!report.consistent(task, &unknown), "{key}");
+            let mut false_claim = failed.clone();
+            false_claim[key] = if failed[key].is_boolean() {
+                serde_json::json!(!failed[key].as_bool().unwrap())
+            } else {
+                serde_json::json!(failed[key].as_u64().unwrap() + 1)
+            };
+            assert!(
+                !Report::parse(&false_claim.to_string()).consistent(task, &failed),
+                "{key}"
             );
         }
     }

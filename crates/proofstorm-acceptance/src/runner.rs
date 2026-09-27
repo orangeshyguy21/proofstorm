@@ -21,6 +21,9 @@ use std::{
 pub struct Selection {
     pub benchmark_model: Option<String>,
     pub benchmark_opencode: PathBuf,
+    pub benchmark_harness: String,
+    pub benchmark_codex: PathBuf,
+    pub benchmark_codex_auth: Option<PathBuf>,
     pub qualification: Option<(PathBuf, String)>,
     pub checkout_home: Option<PathBuf>,
     pub bundle: Option<PathBuf>,
@@ -44,6 +47,14 @@ impl Selection {
             command
                 .arg("--benchmark-opencode")
                 .arg(&self.benchmark_opencode);
+            command
+                .arg("--benchmark-harness")
+                .arg(&self.benchmark_harness)
+                .arg("--benchmark-codex")
+                .arg(&self.benchmark_codex);
+            if let Some(auth) = &self.benchmark_codex_auth {
+                command.arg("--benchmark-codex-auth").arg(auth);
+            }
         }
         if let Some((plan, case)) = &self.qualification {
             command
@@ -83,6 +94,14 @@ pub fn validate_gates(names: &[String]) -> Result<()> {
             "onboarding's on-demand check cannot share slice2's prefetched setup"
         );
     }
+    ensure!(
+        names
+            .iter()
+            .filter(|name| name.starts_with("benchmark-"))
+            .count()
+            <= 1,
+        "benchmark tasks and oracles require separate evidence directories"
+    );
     Ok(())
 }
 
@@ -135,6 +154,9 @@ pub(crate) fn read_peer(work: &Path) -> Result<(Installation, Value)> {
 pub fn cleanup(work: &Path) -> Result<()> {
     let (installation, mut report) = read(work)?;
     let mut errors = Vec::new();
+    if let Err(error) = crate::benchmark::cleanup_harness_secrets(work) {
+        errors.push(format!("harness credentials: {error:#}"));
+    }
     let peer = work.join("peer");
     if peer.join("state/runtime-resources.json").exists() {
         let result = (|| -> Result<()> {
@@ -210,7 +232,16 @@ pub fn worker(selection: &Selection, root: &Path, home: &Path, name: &str) -> Re
             .as_ref()
             .map(|model| crate::benchmark::Selection {
                 model: model.clone(),
-                executable: selection.benchmark_opencode.clone(),
+                harness: if selection.benchmark_harness == "codex" {
+                    crate::benchmark::harness::Harness::Codex {
+                        executable: selection.benchmark_codex.clone(),
+                        auth_file: selection.benchmark_codex_auth.clone(),
+                    }
+                } else {
+                    crate::benchmark::harness::Harness::OpenCode {
+                        executable: selection.benchmark_opencode.clone(),
+                    }
+                },
             });
     let result = gates::run(name, &context).and_then(|()| {
         if let Some(observer) = &context.qualification_observer {
@@ -656,7 +687,7 @@ pub fn run(
             "No resource receipt was created. No Docker deletion attempted; inspect setup evidence if creation was interrupted."
         );
         save(&work, &report)
-    };
+    }.and(crate::benchmark::cleanup_harness_secrets(&work));
     let preservation = (|| -> Result<()> {
         let after = crate::preservation::snapshot(selection.checkout_home.as_deref())?;
         private_json(&work.join("preservation-after.json"), &after)?;
@@ -744,6 +775,9 @@ mod tests {
         let selection = Selection {
             benchmark_model: None,
             benchmark_opencode: "opencode".into(),
+            benchmark_harness: "opencode".into(),
+            benchmark_codex: "codex".into(),
+            benchmark_codex_auth: None,
             qualification: None,
             checkout_home: None,
             bundle: None,

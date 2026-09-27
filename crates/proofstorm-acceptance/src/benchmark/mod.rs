@@ -1,5 +1,7 @@
 //! Opt-in O1 benchmark pilot, sharing acceptance's owned runtime lifecycle.
-mod harness;
+mod codex;
+pub mod harness;
+mod negative;
 mod observer;
 mod opencode;
 pub mod proxy;
@@ -23,7 +25,7 @@ use std::{
 #[derive(Debug, Clone)]
 pub struct Selection {
     pub model: String,
-    pub executable: PathBuf,
+    pub harness: harness::Harness,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -110,7 +112,7 @@ fn calls(events: &[Value]) -> Result<Vec<score::Call>> {
     Ok(calls.into_values().collect())
 }
 
-pub fn run_gate(context: &crate::GateContext) -> Result<()> {
+pub fn run_gate(context: &crate::GateContext, task: &task::Task) -> Result<()> {
     let selected = context
         .benchmark
         .as_ref()
@@ -121,13 +123,14 @@ pub fn run_gate(context: &crate::GateContext) -> Result<()> {
         home: context.installation.home.clone(),
         mcp: context.artifacts.mcp.clone(),
         model: selected.model.clone(),
-        harness: harness::Harness::OpenCode {
-            executable: selected.executable.clone(),
-        },
-        task: task::o1().clone(),
+        harness: selected.harness.clone(),
+        task: task.clone(),
     };
     save(&config.work.join("benchmark-context.json"), &json!(config))?;
-    save(&config.work.join("benchmark-task.json"), &score::task())?;
+    save(
+        &config.work.join("benchmark-task.json"),
+        &json!(config.task),
+    )?;
     save(
         &config.work.join("benchmark-artifacts.json"),
         &json!({
@@ -142,11 +145,7 @@ pub fn run_gate(context: &crate::GateContext) -> Result<()> {
         let report = Report::parse(&outcome.final_text);
         save(&config.work.join("agent-final.json"), &json!(report.claims))?;
         save(&config.work.join("agent-report.json"), &json!(report))?;
-        observe_final(
-            &config,
-            &report,
-            outcome.outcome != "completed" || outcome.unauthorized,
-        )
+        observe_final(&config, &report, outcome.unauthorized)
     })();
 
     if let Err(error) = &result {
@@ -167,17 +166,14 @@ pub fn run_gate(context: &crate::GateContext) -> Result<()> {
 
 fn observe_final(config: &Context, report: &Report, errors: bool) -> Result<()> {
     let funded = read(&config.work.join("funded.json")).unwrap_or(Value::Null);
-    let paid = read(&config.work.join("paid.json")).unwrap_or(Value::Null);
+    let paid = read(
+        &config
+            .work
+            .join(format!("{}.json", config.task.final_checkpoint)),
+    )
+    .unwrap_or(Value::Null);
     let mut observations = observer::assertions(&config.task, &funded, &paid);
     observations["autonomy"] = json!(!errors);
-    let consistent = report.consistent(
-        &config.task,
-        observations["report"] == true,
-        paid["wallet"]["balance_sat"].as_u64(),
-    );
-    observations["report_valid"] = json!(consistent);
-    observations["report_format"] = json!(report.format_valid);
-    observations["report"] = json!(consistent && report.format_valid);
     let events = events(&config.work)?;
     observations["terminal"] = json!(observer::terminal_assertion(config, &events));
     save(
@@ -210,6 +206,11 @@ fn observe_final(config: &Context, report: &Report, errors: bool) -> Result<()> 
             && absent
             && (paid.is_null() || close["instance_key"] == paid["runtime"]["instance_key"])
     );
+    let truth = observer::report_truth(&config.task, &funded, &paid, &observations);
+    let consistent = report.consistent(&config.task, &truth);
+    observations["report_valid"] = json!(consistent);
+    observations["report_format"] = json!(report.format_valid);
+    observations["report"] = json!(consistent && report.format_valid);
     save(
         &config.work.join("benchmark-observations.json"),
         &observations,
@@ -255,7 +256,11 @@ pub fn finalize(work: &Path) -> Result<Value> {
     let observations = read(&work.join("benchmark-observations.json")).unwrap_or(json!({}));
     let task = read(&work.join("benchmark-task.json"))?;
     ensure!(
-        task == score::task(),
+        task::lookup(
+            task["id"].as_str().unwrap_or(""),
+            task["version"].as_str().unwrap_or("")
+        )
+        .is_some_and(|registered| json!(registered) == task),
         "task/scorer changed; use the original scorer for this attempt"
     );
     let config: Context = serde_json::from_value(read(&work.join("benchmark-context.json"))?)?;
@@ -321,6 +326,7 @@ const EVIDENCE_FILES: &[&str] = &[
     "benchmark-observations.json",
     "funded.json",
     "paid.json",
+    "evaluated.json",
     "events.jsonl",
     "normalized-calls.json",
     "harness-outcome.json",
@@ -338,7 +344,15 @@ const EVIDENCE_FILES: &[&str] = &[
     "prompt.txt",
     "proxy-ready.json",
     "harness-preflight.private.txt",
+    "codex-model.private.json",
+    "codex-config.private.toml",
+    "codex-prompt.private.json",
 ];
+
+/// Called by the parent after reaping the worker, including cancellation/recovery.
+pub fn cleanup_harness_secrets(work: &Path) -> Result<()> {
+    codex::cleanup_auth(work)
+}
 
 fn write_report(work: &Path, task: &task::Task, record: &Value) -> Result<()> {
     use std::fmt::Write as _;
@@ -391,6 +405,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn autonomy_does_not_depend_on_timeout_or_completion() -> Result<()> {
+        let work = tempfile::tempdir()?;
+        let config = Context {
+            root: work.path().into(),
+            work: work.path().into(),
+            home: work.path().into(),
+            mcp: "unused".into(),
+            model: "fixture".into(),
+            harness: harness::Harness::Reference,
+            task: task::o5().clone(),
+        };
+        let report = Report::parse("{}");
+        observe_final(&config, &report, false)?;
+        let observations = read(&work.path().join("benchmark-observations.json"))?;
+        assert_eq!(observations["autonomy"], true);
+        let result = score::grade(
+            &config.task,
+            &observations,
+            &[],
+            Some(1200.0),
+            "timeout",
+            true,
+            Some(true),
+        );
+        assert_eq!(result["accepted_score"], 0.0);
+        observe_final(&config, &report, true)?;
+        assert_eq!(
+            read(&work.path().join("benchmark-observations.json"))?["autonomy"],
+            false
+        );
+        Ok(())
+    }
+
+    #[test]
     fn interrupted_calls_and_truncated_tail_remain_unknown() -> Result<()> {
         let work = tempfile::tempdir()?;
         fs::write(
@@ -405,34 +453,36 @@ mod tests {
 
     #[test]
     fn offline_regrade_is_repeatable_and_rejects_changed_evidence() -> Result<()> {
-        let work = tempfile::tempdir()?;
-        save(
-            &work.path().join("acceptance.json"),
-            &json!({"cleanup":"passed","preservation":"passed"}),
-        )?;
-        save(&work.path().join("benchmark-task.json"), &score::task())?;
-        save(
-            &work.path().join("benchmark-context.json"),
-            &json!(Context {
-                root: work.path().into(),
-                work: work.path().into(),
-                home: work.path().into(),
-                mcp: "unused".into(),
-                model: "test".into(),
-                harness: harness::Harness::OpenCode {
-                    executable: "unused".into()
-                },
-                task: task::o1().clone()
-            }),
-        )?;
-        let original = finalize(work.path())?;
+        for selected in [task::o1(), task::o5()] {
+            let work = tempfile::tempdir()?;
+            save(
+                &work.path().join("acceptance.json"),
+                &json!({"cleanup":"passed","preservation":"passed"}),
+            )?;
+            save(&work.path().join("benchmark-task.json"), &json!(selected))?;
+            save(
+                &work.path().join("benchmark-context.json"),
+                &json!(Context {
+                    root: work.path().into(),
+                    work: work.path().into(),
+                    home: work.path().into(),
+                    mcp: "unused".into(),
+                    model: "test".into(),
+                    harness: harness::Harness::OpenCode {
+                        executable: "unused".into()
+                    },
+                    task: selected.clone()
+                }),
+            )?;
+            let original = finalize(work.path())?;
 
-        assert_eq!(original, regrade(work.path())?);
-        save(&work.path().join("paid.json"), &json!({}))?;
-        assert!(regrade(work.path()).is_err());
-        fs::remove_file(work.path().join("paid.json"))?;
-        fs::write(work.path().join("benchmark-task.json"), "{}")?;
-        assert!(regrade(work.path()).is_err());
+            assert_eq!(original, regrade(work.path())?);
+            save(&work.path().join("paid.json"), &json!({}))?;
+            assert!(regrade(work.path()).is_err());
+            fs::remove_file(work.path().join("paid.json"))?;
+            fs::write(work.path().join("benchmark-task.json"), "{}")?;
+            assert!(regrade(work.path()).is_err());
+        }
         Ok(())
     }
 
@@ -456,10 +506,13 @@ mod tests {
     fn every_task_dimension_is_guarded_before_regrade_writes() -> Result<()> {
         let work = tempfile::tempdir()?;
         save(&work.path().join("acceptance.json"), &json!({}))?;
-        let original = score::task();
+        let original = json!(task::o1());
         for (pointer, changed) in [
             ("/prompt", json!("different instructions")),
             ("/cell_name", json!("different-cell")),
+            ("/roles/recipient", json!("other")),
+            ("/payment_expectation", json!("unpaid_no_route")),
+            ("/final_checkpoint", json!("evaluated")),
             ("/components/0/version", json!("other")),
             ("/components/0/config_version", json!("other")),
             ("/links/0/to", json!("other")),
@@ -470,7 +523,7 @@ mod tests {
             ("/deadline_seconds", json!(1201)),
             ("/target_seconds", json!(301)),
             ("/assertions/0/1", json!(11)),
-            ("/report_schema/properties/success/const", json!(false)),
+            ("/report_schema/properties/success/type", json!("integer")),
         ] {
             let mut altered = original.clone();
             *altered

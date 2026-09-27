@@ -1,4 +1,6 @@
 //! Checkout builds publish only into their verified installation-local registry.
+mod registry;
+
 use super::{cluster, digest, docker, process};
 use crate::installation::{CATALOG_REGISTRY, Installation};
 use anyhow::{Context, Result, ensure};
@@ -88,8 +90,12 @@ pub(super) fn current(installation: &Installation, sha: &str) -> Result<Value> {
     })
 }
 
-fn manifest(installation: &Installation, image: &str) -> Result<String> {
-    let value: Value = serde_json::from_str(&docker(
+fn manifest(
+    installation: &Installation,
+    registry: &registry::Registry,
+    image: &str,
+) -> Result<String> {
+    let value: Value = serde_json::from_str(&registry.run(
         &installation.home,
         &[
             "buildx",
@@ -111,7 +117,12 @@ fn manifest(installation: &Installation, image: &str) -> Result<String> {
     Ok(sha.into())
 }
 
-fn verify_published_image(installation: &Installation, image: &str, image_id: &str) -> Result<()> {
+fn verify_published_image(
+    installation: &Installation,
+    registry: &registry::Registry,
+    image: &str,
+    image_id: &str,
+) -> Result<()> {
     // Docker's containerd image store reports the manifest/index ID, while the
     // classic store reports the config ID. Both are immutable content identities.
     if image
@@ -121,7 +132,7 @@ fn verify_published_image(installation: &Installation, image: &str, image_id: &s
         return Ok(());
     }
     let raw = |image: &str| -> Result<Value> {
-        Ok(serde_json::from_str(&docker(
+        Ok(serde_json::from_str(&registry.run(
             &installation.home,
             &["buildx", "imagetools", "inspect", "--raw", image],
             30,
@@ -154,7 +165,11 @@ fn verify_published_image(installation: &Installation, image: &str, image_id: &s
     Ok(())
 }
 
-fn reusable(installation: &Installation, sha: &str) -> Result<Option<Value>> {
+fn reusable(
+    installation: &Installation,
+    registry: &registry::Registry,
+    sha: &str,
+) -> Result<Option<Value>> {
     if let Some(value) = cached(installation, sha)? {
         let expected = value["image"]
             .as_str()
@@ -163,9 +178,10 @@ fn reusable(installation: &Installation, sha: &str) -> Result<Option<Value>> {
             .context("controller digest missing")?
             .1;
         let host = format!("{}/proofstormd@{expected}", installation.host_registry());
-        if manifest(installation, &host).is_ok_and(|actual| actual == expected) {
+        if manifest(installation, registry, &host).is_ok_and(|actual| actual == expected) {
             verify_published_image(
                 installation,
+                registry,
                 &host,
                 value["image_id"]
                     .as_str()
@@ -255,7 +271,8 @@ pub(super) fn prepare(
     progress: &dyn Fn(&str),
 ) -> Result<Value> {
     cluster::owned(installation)?;
-    if let Some(value) = reusable(installation, sha)? {
+    let registry = registry::Registry::new(installation)?;
+    if let Some(value) = reusable(installation, &registry, sha)? {
         progress("Reusing verified controller");
         return Ok(value);
     }
@@ -270,11 +287,12 @@ pub(super) fn prepare(
         "{}/proofstormd:checkout-{sha}",
         installation.host_registry()
     );
-    docker(&installation.home, &["tag", &image_id, &destination], 15)?;
-    docker(&installation.home, &["push", &destination], 300)?;
-    let registry_sha = manifest(installation, &destination)?;
+    registry.run(&installation.home, &["tag", &image_id, &destination], 15)?;
+    registry.run(&installation.home, &["push", &destination], 300)?;
+    let registry_sha = manifest(installation, &registry, &destination)?;
     verify_published_image(
         installation,
+        &registry,
         &format!(
             "{}/proofstormd@{registry_sha}",
             installation.host_registry()
@@ -303,6 +321,67 @@ pub(super) fn prepare(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Re-push the already published checkout tag; no build, rollout or cell work.
+    #[test]
+    #[ignore = "requires an idle, owned runtime and PROOFSTORM_REGISTRY_TEST_HOME"]
+    fn live_anonymous_publication_preserves_engine_and_digest() -> Result<()> {
+        let home = std::env::var_os("PROOFSTORM_REGISTRY_TEST_HOME")
+            .context("set PROOFSTORM_REGISTRY_TEST_HOME to the owned installation")?;
+        let installation = Installation::load(Path::new(&home))?;
+        let _guard = Installation::lock(&installation.home)?;
+        cluster::owned(&installation)?;
+        let value: Value = serde_json::from_slice(&fs::read(installation.home.join(RECEIPT))?)?;
+        validate_receipt(&installation, &value)?;
+        let sha = value["source_sha256"].as_str().context("source hash")?;
+        let image_id = value["image_id"].as_str().context("image ID")?;
+        let image = format!(
+            "{}/proofstormd:checkout-{sha}",
+            installation.host_registry()
+        );
+        let expected = value["image"]
+            .as_str()
+            .context("image")?
+            .split_once('@')
+            .context("digest")?
+            .1;
+        let registry = registry::Registry::new(&installation)?;
+        let engine = docker(&installation.home, &["info", "--format", "{{.ID}}"], 15)?;
+        ensure!(
+            registry.run(&installation.home, &["info", "--format", "{{.ID}}"], 15)? == engine,
+            "isolated command selected a different engine"
+        );
+        ensure!(
+            manifest(&installation, &registry, &image)? == expected,
+            "initial digest changed"
+        );
+        registry.run(&installation.home, &["push", &image], 60)?;
+        ensure!(
+            manifest(&installation, &registry, &image)? == expected,
+            "push changed digest"
+        );
+        let pinned = format!("{}/proofstormd@{expected}", installation.host_registry());
+        verify_published_image(&installation, &registry, &pinned, image_id)?;
+        // Exercise raw manifest reads even when containerd's ID permits the
+        // production verifier to accept the already matched manifest digest.
+        let raw: Value = serde_json::from_str(&registry.run(
+            &installation.home,
+            &["buildx", "imagetools", "inspect", "--raw", &pinned],
+            30,
+        )?)?;
+        ensure!(raw.is_object(), "raw manifest missing");
+        ensure!(
+            reusable(&installation, &registry, sha)?.is_some(),
+            "reuse failed"
+        );
+        drop(registry);
+        cluster::owned(&installation)?;
+        println!(
+            "same engine; anonymous push, manifest verification and reuse passed; digest unchanged"
+        );
+        Ok(())
+    }
+
     #[test]
     fn docker_classic_and_containerd_ids_are_bound_to_the_build_receipt() {
         let id = format!("sha256:{}", "a".repeat(64));
