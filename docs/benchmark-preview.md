@@ -94,13 +94,13 @@ ratio covers observed MCP attempts, not every script evaluation. Token usage is
 retained; unknown cost stays null. Requested model ID is recorded separately from
 provider-resolved identity, which this CLI does not verify.
 
-For Claude Code, select the harness, an exact model ID and exactly one credential
-in the runner's environment: `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN`
-from `claude setup-token`. No ambient login, keychain entry or `~/.claude`
-configuration is used, and the credential is never written to disk.
+For Claude Code, select the harness and an exact model ID. By default the attempt
+uses this machine's normal Claude Code login (`--benchmark-claude-auth login`);
+run `claude auth status` to confirm you are logged in. Only the login method and
+plan are recorded, never the account email or organization.
 
 ```sh
-ANTHROPIC_API_KEY=... .proofstorm-dev/target/debug/proofstorm-acceptance \
+.proofstorm-dev/target/debug/proofstorm-acceptance \
   --checkout-home "$PWD/.proofstorm-dev/state" \
   --root "$PWD" \
   --work-dir "$PWD/dev/benchmark-o1-claude-01" \
@@ -111,9 +111,17 @@ ANTHROPIC_API_KEY=... .proofstorm-dev/target/debug/proofstorm-acceptance \
   benchmark-o1
 ```
 
-Each attempt runs `claude -p --output-format stream-json` with an owned `HOME` and
-`CLAUDE_CONFIG_DIR` under the work directory, a cleared environment (host
-`ANTHROPIC_*`/`CLAUDE_*` settings never reach it), an empty owned git repository
+Login mode reads the normal config directory for authentication, so Claude Code
+may add an entry for the attempt's project to `~/.claude.json` and write MCP logs
+to its cache. Personal settings, hooks, plugins, skills, other MCP servers and
+built-in tools still stay out, and sessions are not saved. For full isolation, use
+`--benchmark-claude-auth environment` with exactly one of `ANTHROPIC_API_KEY` or
+`CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) in the runner's environment.
+That mode gives the attempt an owned `HOME` and `CLAUDE_CONFIG_DIR` under the work
+directory, reads no keychain login, and never writes the credential to disk.
+
+Each attempt runs `claude -p --output-format stream-json` with a cleared
+environment (host `ANTHROPIC_*`/`CLAUDE_*` settings never reach it), an empty owned git repository
 as its project, no setting sources, no session persistence and auto-memory
 disabled. The only tools are the task's Proofstorm MCP tools: built-in tools are
 removed with `--tools ""`, `--strict-mcp-config` loads only the owned proxy, and

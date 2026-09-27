@@ -25,6 +25,7 @@ pub struct Selection {
     pub benchmark_codex: PathBuf,
     pub benchmark_codex_auth: Option<PathBuf>,
     pub benchmark_claude: PathBuf,
+    pub benchmark_claude_auth: String,
     pub qualification: Option<(PathBuf, String)>,
     pub checkout_home: Option<PathBuf>,
     pub bundle: Option<PathBuf>,
@@ -54,7 +55,9 @@ impl Selection {
                 .arg("--benchmark-codex")
                 .arg(&self.benchmark_codex)
                 .arg("--benchmark-claude")
-                .arg(&self.benchmark_claude);
+                .arg(&self.benchmark_claude)
+                .arg("--benchmark-claude-auth")
+                .arg(&self.benchmark_claude_auth);
             if let Some(auth) = &self.benchmark_codex_auth {
                 command.arg("--benchmark-codex-auth").arg(auth);
             }
@@ -242,6 +245,11 @@ pub fn worker(selection: &Selection, root: &Path, home: &Path, name: &str) -> Re
                     },
                     "claude-code" => crate::benchmark::harness::Harness::ClaudeCode {
                         executable: selection.benchmark_claude.clone(),
+                        auth: if selection.benchmark_claude_auth == "environment" {
+                            crate::benchmark::harness::ClaudeAuth::Environment
+                        } else {
+                            crate::benchmark::harness::ClaudeAuth::Login
+                        },
                     },
                     _ => crate::benchmark::harness::Harness::OpenCode {
                         executable: selection.benchmark_opencode.clone(),
@@ -784,6 +792,7 @@ mod tests {
             benchmark_codex: "codex".into(),
             benchmark_codex_auth: None,
             benchmark_claude: "claude".into(),
+            benchmark_claude_auth: "login".into(),
             qualification: None,
             checkout_home: None,
             bundle: None,

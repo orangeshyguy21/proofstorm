@@ -11,6 +11,7 @@ fn context(work: &Path) -> Context {
         model: "claude-fable-5-1".into(),
         harness: Harness::ClaudeCode {
             executable: "claude".into(),
+            auth: ClaudeAuth::Environment,
         },
         task: crate::benchmark::task::o1().clone(),
     }
@@ -266,6 +267,40 @@ fn command_isolates_home_config_and_ambient_credentials() {
 }
 
 #[test]
+fn login_mode_uses_the_normal_config_directory_and_still_clears_the_environment() {
+    let work = tempfile::tempdir().unwrap();
+    let mut ctx = context(work.path());
+    ctx.harness = Harness::ClaudeCode {
+        executable: "claude".into(),
+        auth: ClaudeAuth::Login,
+    };
+    let cmd = command(&ctx);
+    let env: std::collections::BTreeMap<_, _> = cmd.get_envs().collect();
+    assert!(!env.contains_key(std::ffi::OsStr::new("CLAUDE_CONFIG_DIR")));
+    assert_eq!(
+        env.get(std::ffi::OsStr::new("HOME")).copied().flatten(),
+        std::env::var_os("HOME").as_deref()
+    );
+    for key in env.keys() {
+        assert!(!key.to_string_lossy().starts_with("ANTHROPIC_"), "{key:?}");
+    }
+    assert_eq!(
+        json!(ctx.harness)["auth"],
+        "login",
+        "retained contexts record the auth mode"
+    );
+    let legacy: Harness =
+        serde_json::from_value(json!({"kind":"claude_code","executable":"claude"})).unwrap();
+    assert!(matches!(
+        legacy,
+        Harness::ClaudeCode {
+            auth: ClaudeAuth::Login,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn arguments_pin_the_controlled_profile_and_end_options_before_the_prompt() {
     let work = tempfile::tempdir().unwrap();
     let mut ctx = context(work.path());
@@ -436,7 +471,10 @@ fn execution_bounds_both_streams_and_records_failed_exit_and_timeout() {
         let exe = work.path().join("fake-claude");
         fs::write(&exe, format!("#!/bin/sh\n{script}\n")).unwrap();
         fs::set_permissions(&exe, fs::Permissions::from_mode(0o700)).unwrap();
-        ctx.harness = Harness::ClaudeCode { executable: exe };
+        ctx.harness = Harness::ClaudeCode {
+            executable: exe,
+            auth: ClaudeAuth::Environment,
+        };
         ctx.task.deadline_seconds = deadline;
         execute(
             &ctx,
@@ -472,11 +510,17 @@ fn installed_cli_contract_without_paid_model() -> Result<()> {
         .map_or_else(|| temporary.path().join("probe"), std::path::PathBuf::from);
     fs::DirBuilder::new().mode(0o700).create(&work)?;
     let mut ctx = context(&work);
-    if let Some(executable) = std::env::var_os("PROOFSTORM_CLAUDE_TEST_BIN") {
-        ctx.harness = Harness::ClaudeCode {
-            executable: executable.into(),
-        };
-    }
+    // Login mode loads the real config directory; the placeholder key and
+    // loopback endpoint below still keep every request local.
+    ctx.harness = Harness::ClaudeCode {
+        executable: std::env::var_os("PROOFSTORM_CLAUDE_TEST_BIN")
+            .map_or_else(|| "claude".into(), Into::into),
+        auth: if std::env::var("PROOFSTORM_CLAUDE_TEST_AUTH").as_deref() == Ok("login") {
+            ClaudeAuth::Login
+        } else {
+            ClaudeAuth::Environment
+        },
+    };
     ctx.task.deadline_seconds = 90;
     ctx.task.prompt = "Use catalog_list, then report fixture complete.".into();
     save(&work.join("benchmark-context.json"), &json!(ctx))?;

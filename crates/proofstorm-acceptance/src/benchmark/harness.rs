@@ -17,8 +17,20 @@ pub enum Harness {
     },
     ClaudeCode {
         executable: PathBuf,
+        #[serde(default)]
+        auth: ClaudeAuth,
     },
     Reference,
+}
+/// How Claude Code authenticates. `Login` reuses the machine's normal Claude
+/// Code login and config directory; `Environment` isolates both and takes one
+/// explicit credential from the runner environment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaudeAuth {
+    #[default]
+    Login,
+    Environment,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AttemptOutput {

@@ -1,5 +1,7 @@
-//! Claude Code print-mode adapter. Owned home and config; the only tools are
-//! the benchmark's Proofstorm MCP tools. No ambient login or model substitution.
+//! Claude Code print-mode adapter. The only tools are the benchmark's Proofstorm
+//! MCP tools and no personal settings load. Login mode reuses the machine's
+//! Claude Code login; environment mode isolates home and config. No model
+//! substitution.
 mod preflight;
 mod telemetry;
 #[cfg(test)]
@@ -7,7 +9,7 @@ mod tests;
 
 use super::{
     Context,
-    harness::{AttemptOutput, Harness},
+    harness::{AttemptOutput, ClaudeAuth, Harness},
     save,
 };
 use anyhow::{Context as _, Result, ensure};
@@ -35,7 +37,7 @@ pub(super) fn tool_name(name: &str) -> String {
 }
 
 pub(super) fn command(context: &Context) -> Command {
-    let Harness::ClaudeCode { executable } = &context.harness else {
+    let Harness::ClaudeCode { executable, auth } = &context.harness else {
         unreachable!("Claude Code adapter")
     };
     let mut command = Command::new(executable);
@@ -45,14 +47,26 @@ pub(super) fn command(context: &Context) -> Command {
             command.env(key, value);
         }
     }
-    // An owned HOME keeps caches and MCP logs out of the user's home; the owned
-    // config directory replaces ~/.claude and ~/.claude.json.
-    let home = context.work.join("claude-home");
+    match auth {
+        // The normal config directory supplies the login; `--setting-sources ""`
+        // still keeps personal settings, hooks and plugins out.
+        ClaudeAuth::Login => {
+            if let Some(home) = std::env::var_os("HOME") {
+                command.env("HOME", home);
+            }
+        }
+        // An owned HOME keeps caches and MCP logs out of the user's home; the
+        // owned config directory replaces ~/.claude and ~/.claude.json.
+        ClaudeAuth::Environment => {
+            let home = context.work.join("claude-home");
+            command
+                .env("CLAUDE_CONFIG_DIR", home.join("config"))
+                .env("HOME", home);
+        }
+    }
     command
         .current_dir(context.work.join("agent"))
         .env("PWD", context.work.join("agent"))
-        .env("HOME", &home)
-        .env("CLAUDE_CONFIG_DIR", home.join("config"))
         .env("DISABLE_AUTOUPDATER", "1")
         .env("DISABLE_TELEMETRY", "1")
         .env("DISABLE_ERROR_REPORTING", "1")
@@ -145,8 +159,18 @@ pub(super) fn credential(
 }
 
 pub fn run(context: &Context) -> Result<()> {
-    let (credential_kind, secret) = credential(|key| std::env::var_os(key))?;
-    for name in ["agent", "claude-home", "claude-home/config"] {
+    let Harness::ClaudeCode { auth, .. } = &context.harness else {
+        unreachable!("Claude Code adapter")
+    };
+    let credential = match auth {
+        ClaudeAuth::Environment => Some(credential(|key| std::env::var_os(key))?),
+        ClaudeAuth::Login => None,
+    };
+    let owned: &[&str] = match auth {
+        ClaudeAuth::Login => &["agent"],
+        ClaudeAuth::Environment => &["agent", "claude-home", "claude-home/config"],
+    };
+    for name in owned {
         fs::DirBuilder::new()
             .mode(0o700)
             .create(context.work.join(name))?;
@@ -164,6 +188,10 @@ pub fn run(context: &Context) -> Result<()> {
     version.arg("--version");
     let version = crate::process::capture(version, 30)?;
     ensure!(version.status.success(), "Claude Code version check failed");
+    let login = match auth {
+        ClaudeAuth::Login => login_status(context)?,
+        ClaudeAuth::Environment => Value::Null,
+    };
     let mcp_config = context.work.join("claude-mcp.private.json");
     write_mcp_config(&context.work.join("benchmark-context.json"), &mcp_config)?;
     let profile = preflight::run(context)?;
@@ -186,7 +214,11 @@ pub fn run(context: &Context) -> Result<()> {
         &json!({
         "task":context.task,"harness":"claude-code","harness_version":String::from_utf8_lossy(&version.stdout).trim(),
         "model_requested":context.model,"model_resolved":null,"model_resolution":"harness-outcome.json usage.models_observed",
-        "credential_kind":if credential_kind == "ANTHROPIC_API_KEY" {"api_key"} else {"oauth_token"},
+        "credential_kind":match &credential {
+            None => "login",
+            Some(("ANTHROPIC_API_KEY", _)) => "api_key",
+            Some(_) => "oauth_token",
+        },"login":login,
         "profile":"controlled-mcp-only-v1","harness_profile":profile,
         "mcp_config_sha256":format!("{:x}",sha2::Sha256::digest(fs::read(&mcp_config)?)),
         "prompt_sha256":proofstorm_core::digest_json(&context.task.prompt),
@@ -201,7 +233,27 @@ pub fn run(context: &Context) -> Result<()> {
         "default MAX_MCP_OUTPUT_TOKENS applies to tool results",
         "no hard token/spend budget claimed","time target provisional"]}),
     )?;
-    execute(context, &[(credential_kind, secret.as_os_str())])
+    match &credential {
+        Some((kind, secret)) => execute(context, &[(kind, secret.as_os_str())]),
+        None => execute(context, &[]),
+    }
+}
+
+/// Model-free login check. Only the method and plan are retained, never the
+/// account email or organization.
+fn login_status(context: &Context) -> Result<Value> {
+    let mut status = command(context);
+    status.args(["auth", "status"]);
+    let status = crate::process::capture(status, 30)?;
+    let value: Value = serde_json::from_slice(&status.stdout).unwrap_or(Value::Null);
+    ensure!(
+        status.status.success() && value["loggedIn"] == true,
+        "Claude Code is not logged in; run `claude` and log in, or use --benchmark-claude-auth environment"
+    );
+    Ok(
+        json!({"auth_method":value["authMethod"],"api_provider":value["apiProvider"],
+        "subscription_type":value["subscriptionType"]}),
+    )
 }
 
 /// `environment` carries the explicit credential (and, in contract tests, a
