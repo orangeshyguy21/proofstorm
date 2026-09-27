@@ -20,7 +20,7 @@ struct Arguments {
     #[arg(long, default_value = "opencode")]
     benchmark_opencode: PathBuf,
     /// CLI harness for this model attempt.
-    #[arg(long, default_value = "opencode", value_parser = ["opencode", "codex"])]
+    #[arg(long, default_value = "opencode", value_parser = ["opencode", "codex", "claude-code"])]
     benchmark_harness: String,
     /// Headless Codex executable.
     #[arg(long, default_value = "codex")]
@@ -28,6 +28,10 @@ struct Arguments {
     /// File-based Codex login to copy into the owned home (never modified).
     #[arg(long)]
     benchmark_codex_auth: Option<PathBuf>,
+    /// Headless Claude Code executable. Needs exactly one of `ANTHROPIC_API_KEY`
+    /// or `CLAUDE_CODE_OAUTH_TOKEN`; no ambient login is used.
+    #[arg(long, default_value = "claude")]
+    benchmark_claude: PathBuf,
     /// Rescore retained O1 evidence without contacting a model or runtime.
     #[arg(long)]
     benchmark_grade: Option<PathBuf>,
@@ -97,6 +101,7 @@ async fn main() -> Result<()> {
         benchmark_harness: args.benchmark_harness,
         benchmark_codex: args.benchmark_codex,
         benchmark_codex_auth: args.benchmark_codex_auth,
+        benchmark_claude: args.benchmark_claude,
         qualification: args.qualification_plan.zip(args.qualification_case),
         checkout_home: args.checkout_home,
         bundle: args.bundle,

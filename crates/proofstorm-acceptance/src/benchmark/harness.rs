@@ -15,6 +15,9 @@ pub enum Harness {
         executable: PathBuf,
         auth_file: Option<PathBuf>,
     },
+    ClaudeCode {
+        executable: PathBuf,
+    },
     Reference,
 }
 #[derive(Debug, Serialize, Deserialize)]
@@ -31,6 +34,7 @@ pub fn run(config: &Context) -> Result<AttemptOutput> {
     match &config.harness {
         Harness::OpenCode { .. } => super::opencode::run(config)?,
         Harness::Codex { .. } => super::codex::run(config)?,
+        Harness::ClaudeCode { .. } => super::claude::run(config)?,
         Harness::Reference => anyhow::bail!("reference control is not a model harness"),
     }
     let outcome = retained(&config.harness, &config.work)?;
@@ -44,6 +48,7 @@ pub fn retained(harness: &Harness, work: &Path) -> Result<AttemptOutput> {
     match harness {
         Harness::OpenCode { .. } => super::opencode::retained(work),
         Harness::Codex { .. } => super::codex::retained(work),
+        Harness::ClaudeCode { .. } => super::claude::retained(work),
         Harness::Reference => anyhow::bail!("reference control cannot receive a model score"),
     }
 }

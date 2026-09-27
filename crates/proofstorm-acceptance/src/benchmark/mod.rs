@@ -1,4 +1,5 @@
 //! Opt-in O1 benchmark pilot, sharing acceptance's owned runtime lifecycle.
+mod claude;
 mod codex;
 pub mod harness;
 mod negative;
@@ -347,6 +348,8 @@ const EVIDENCE_FILES: &[&str] = &[
     "codex-model.private.json",
     "codex-config.private.toml",
     "codex-prompt.private.json",
+    "claude-mcp.private.json",
+    "claude-preflight.private.json",
 ];
 
 /// Called by the parent after reaping the worker, including cancellation/recovery.
