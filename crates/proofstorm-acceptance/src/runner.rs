@@ -24,6 +24,8 @@ pub struct Selection {
     pub benchmark_harness: String,
     pub benchmark_codex: PathBuf,
     pub benchmark_codex_auth: Option<PathBuf>,
+    pub benchmark_claude: PathBuf,
+    pub benchmark_claude_auth: String,
     pub qualification: Option<(PathBuf, String)>,
     pub checkout_home: Option<PathBuf>,
     pub bundle: Option<PathBuf>,
@@ -51,7 +53,11 @@ impl Selection {
                 .arg("--benchmark-harness")
                 .arg(&self.benchmark_harness)
                 .arg("--benchmark-codex")
-                .arg(&self.benchmark_codex);
+                .arg(&self.benchmark_codex)
+                .arg("--benchmark-claude")
+                .arg(&self.benchmark_claude)
+                .arg("--benchmark-claude-auth")
+                .arg(&self.benchmark_claude_auth);
             if let Some(auth) = &self.benchmark_codex_auth {
                 command.arg("--benchmark-codex-auth").arg(auth);
             }
@@ -232,15 +238,22 @@ pub fn worker(selection: &Selection, root: &Path, home: &Path, name: &str) -> Re
             .as_ref()
             .map(|model| crate::benchmark::Selection {
                 model: model.clone(),
-                harness: if selection.benchmark_harness == "codex" {
-                    crate::benchmark::harness::Harness::Codex {
+                harness: match selection.benchmark_harness.as_str() {
+                    "codex" => crate::benchmark::harness::Harness::Codex {
                         executable: selection.benchmark_codex.clone(),
                         auth_file: selection.benchmark_codex_auth.clone(),
-                    }
-                } else {
-                    crate::benchmark::harness::Harness::OpenCode {
+                    },
+                    "claude-code" => crate::benchmark::harness::Harness::ClaudeCode {
+                        executable: selection.benchmark_claude.clone(),
+                        auth: if selection.benchmark_claude_auth == "environment" {
+                            crate::benchmark::harness::ClaudeAuth::Environment
+                        } else {
+                            crate::benchmark::harness::ClaudeAuth::Login
+                        },
+                    },
+                    _ => crate::benchmark::harness::Harness::OpenCode {
                         executable: selection.benchmark_opencode.clone(),
-                    }
+                    },
                 },
             });
     let result = gates::run(name, &context).and_then(|()| {
@@ -778,6 +791,8 @@ mod tests {
             benchmark_harness: "opencode".into(),
             benchmark_codex: "codex".into(),
             benchmark_codex_auth: None,
+            benchmark_claude: "claude".into(),
+            benchmark_claude_auth: "login".into(),
             qualification: None,
             checkout_home: None,
             bundle: None,

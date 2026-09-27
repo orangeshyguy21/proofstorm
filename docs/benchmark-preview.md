@@ -1,6 +1,6 @@
 # Operate benchmark development pilot
 
-This Rust pilot runs selected models through headless OpenCode or Codex CLIs on two real regtest tasks: O1
+This Rust pilot runs selected models through headless OpenCode, Codex or Claude Code CLIs on two real regtest tasks: O1
 (build, mint, pay, report and remove) and O5 (investigate an unroutable payment,
 report honestly and remove). O1 mints 1,000 sat and melts 100 sat to an independently
 observed LND recipient. It uses existing Bitcoin Core, LND, CDK, and Nutshell
@@ -59,8 +59,9 @@ For Codex, select the harness and exact Codex model ID instead:
 
 The Codex adapter requires `exec --json --strict-config --ephemeral --ignore-rules`
 plus `debug models --bundled` and `debug prompt-input`. Its CLI contract was exercised with
-`0.158.0-alpha.2.1` against a local fake model and MCP server; this is not a paid
-O1/O5 qualification or an account-availability claim. Unknown model IDs fail
+`0.158.0-alpha.2.1` against a local fake model and MCP server. Subsequent real
+O1/O5 attempts with `gpt-6-astra` exercised settlement, failed-payment evidence,
+scoring and cleanup; this does not establish access to other models. Unknown model IDs fail
 before a model request. Bundled catalog membership does not prove account access;
 provider failures remain failed attempts, and no replacement model is selected.
 
@@ -93,6 +94,62 @@ Its JSON stream does not expose every wrapper-only code-mode error, so the tool
 ratio covers observed MCP attempts, not every script evaluation. Token usage is
 retained; unknown cost stays null. Requested model ID is recorded separately from
 provider-resolved identity, which this CLI does not verify.
+
+For Claude Code, select the harness and an exact model ID. By default the attempt
+uses this machine's normal Claude Code login (`--benchmark-claude-auth login`);
+run `claude auth status` to confirm you are logged in. Only the login method and
+plan are recorded, never the account email or organization.
+
+```sh
+.proofstorm-dev/target/debug/proofstorm-acceptance \
+  --checkout-home "$PWD/.proofstorm-dev/state" \
+  --root "$PWD" \
+  --work-dir "$PWD/dev/benchmark-o1-claude-01" \
+  --timeout 1500 \
+  --benchmark-harness claude-code \
+  --benchmark-claude /absolute/path/to/claude \
+  --benchmark-model claude-opus-5-5 \
+  benchmark-o1
+```
+
+Login mode reads the normal config directory for authentication, so Claude Code
+may add an entry for the attempt's project to `~/.claude.json` and write MCP logs
+to its cache. Personal settings, hooks, plugins, skills, other MCP servers and
+built-in tools still stay out, and sessions are not saved. For full isolation, use
+`--benchmark-claude-auth environment` with exactly one of `ANTHROPIC_API_KEY` or
+`CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) in the runner's environment.
+That mode gives the attempt an owned `HOME` and `CLAUDE_CONFIG_DIR` under the work
+directory, reads no keychain login, and never writes the credential to disk.
+
+Each attempt runs `claude -p --output-format stream-json` with a cleared
+environment (host `ANTHROPIC_*`/`CLAUDE_*` settings never reach it), an empty owned git repository
+as its project, no setting sources, no session persistence and auto-memory
+disabled. The only tools are the task's Proofstorm MCP tools: built-in tools are
+removed with `--tools ""`, `--strict-mcp-config` loads only the owned proxy, and
+`--permission-mode dontAsk` refuses anything not on the allowlist. The proxy gets
+the runner's `HOME` back and blank model credentials. Claude Code's own system
+prompt, default effort and thinking settings apply; they are recorded, not
+replaced. Host managed (policy) settings, if installed, still apply.
+
+Preflight runs the exact attempt configuration with a placeholder key against an
+owned loopback endpoint that refuses every request. It checks the session's tool
+list, MCP connection, permission mode, model and credential source, and the
+would-be request's model, tool definitions and prompt delivery, before any model
+call. The wire profile (version, effort, thinking, system-prompt and tool-definition
+digests) is retained in `claude-preflight.private.json` and the manifest. The CLI
+contract was exercised with Claude Code `2.1.281` through one real MCP round trip
+against a local fake model, then real O1/O5 attempts with `claude-opus-5-5` using
+the machine login. Those attempts exposed an unrecognized tool-progress heartbeat
+event; the adapter now validates heartbeats against known calls without treating
+them as attempts or replies. Copies of the retained transcripts were regraded
+offline with that fix; the original receipts remain unchanged.
+
+Stream-json tool uses are joined to the proxy trace, counting each call once. A
+permission refusal is a failed call; an unobserved foreign tool success, subagent
+traffic or a wider session tool list is unauthorized. Unknown events, missing
+session initialization and unmatched proxy calls leave telemetry incomplete.
+Claude Code's reported cost is retained as an estimate; subscription tokens are
+not billed per call.
 
 The adapter sets both the process directory and `PWD`, passes `--dir`, disables
 ancestor project configuration, and uses OpenCode's `--pure` mode. A model-free
@@ -258,7 +315,7 @@ networks remain strict. No unrelated container is stopped to obtain a pass.
 
 ## Scope
 
-This is a two-task development pilot with two CLI adapters and caller-selected models. Report verified
+This is a two-task development pilot with three CLI adapters and caller-selected models. Report verified
 success first and the composite score second. One attempt does not establish a
 model ranking or a reliability estimate. Model aliases and inherited provider
 configuration limit exact reproducibility. Do not run timed comparisons alongside
@@ -266,8 +323,11 @@ other acceptance workloads.
 
 Compare models first and retain harness/version/settings as metadata; running the
 same model through multiple harnesses is optional. Harness differences can affect
-results and must remain visible. The release preview still needs Claude Code,
-paid Codex task qualification, repeated comparable attempts, calibrated targets,
-and installed CLI integration.
+results and must remain visible. The initial Codex/Claude live qualification
+retained all four attempts: both models completed O1, while O5 exposed report
+validation and failure-reason mistakes. Cleanup and preservation passed for all
+four; these are qualification samples, not a comparison campaign. The release
+preview still needs repeated comparable attempts, calibrated targets, and
+installed CLI integration.
 Bark support and the release reliability gates have separate qualification
 requirements. The benchmark does not certify them.
