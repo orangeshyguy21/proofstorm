@@ -113,11 +113,23 @@ fn model_result(plan: &Plan, entry: &Entry, acceptance: &Value, result: &Value) 
 }
 
 fn verify_preservation(work: &Path, acceptance: &Value) -> Result<()> {
-    crate::preservation::verify_with_exclusions(
-        &regular_read(&work.join("preservation-before.json"))?,
-        &regular_read(&work.join("preservation-after.json"))?,
-        &acceptance["preservation_exclusions"],
-    )
+    let before = regular_read(&work.join("preservation-before.json"))?;
+    let after = regular_read(&work.join("preservation-after.json"))?;
+    let excluded = &acceptance["preservation_exclusions"];
+    match acceptance["preservation_policy"].as_str() {
+        Some(crate::preservation::ADDITIONS_POLICY) => {
+            let additions = crate::preservation::verify_run(&before, &after, excluded)?;
+            ensure!(
+                acceptance["preservation_additions"] == additions,
+                "preservation addition report differs from observed inventory"
+            );
+            Ok(())
+        }
+        None if acceptance["preservation_policy"].is_null() => {
+            crate::preservation::verify_with_exclusions(&before, &after, excluded)
+        }
+        _ => anyhow::bail!("unknown preservation policy"),
+    }
 }
 
 fn safe_setup_failure(work: &Path, acceptance: &Value) -> Result<()> {

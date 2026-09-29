@@ -112,9 +112,20 @@ score from comparison.
 
 Ctrl-C or SIGTERM requests cancellation and lets the acceptance runner finish
 its owned cleanup before the driver exits. Avoid force-killing that cleanup.
-Existing preservation rules remain strict, including checks for new Docker
-resources; a change to the treatment of unrelated additions requires the
-separate PS-30 owner decision.
+New Docker containers, networks and volumes without Proofstorm ownership are
+reported without invalidating the run. Ordinary unrelated services, including
+Compose services, can be started during a campaign. Installation labels and
+reserved current or legacy Proofstorm/k3d names prevent an ownership exemption;
+missing ownership evidence fails verification. Existing resources, configuration,
+and cleanup of benchmark-owned resources remain strict, with only the existing
+preobserved lifecycle exceptions. The runner never deletes unrelated additions.
+
+Acceptance receipts record `preservation_policy`, `preservation_baseline_additions`
+and `preservation_additions` (counts by resource type); private snapshots retain
+identities. Networks and volumes include creation and ownership observations so
+a replacement cannot hide behind the same volume name. Continuation independently
+rechecks snapshots and addition counts using the recorded policy. Historical
+receipts without this policy keep their original strict interpretation.
 
 ## Pinned tool transfers
 

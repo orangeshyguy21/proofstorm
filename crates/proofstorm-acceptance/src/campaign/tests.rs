@@ -80,6 +80,114 @@ fn receipt(plan: &Plan, entry: &Entry, model: bool) {
 
 static NOT_CANCELLED: AtomicBool = AtomicBool::new(false);
 
+fn addition_receipt(plan: &Plan, entry: &Entry, model: bool, mode: &str) {
+    receipt(plan, entry, model);
+    let work = plan.attempt_path(entry);
+    let before = json!({"format_version":2,"containers":{},"networks":{},"volumes":{},"configuration_sha256":{}});
+    let mut after = before.clone();
+    after["containers"]["other"] = json!({"name":"/other","owner":null,"cluster":""});
+    if mode == "owned" {
+        after["containers"]["other"]["owner"] = json!("this-run");
+    }
+    save(&work.join("preservation-before.json"), &before).unwrap();
+    save(&work.join("preservation-after.json"), &after).unwrap();
+    let path = work.join("acceptance.json");
+    let mut acceptance = read(&path).unwrap();
+    acceptance["preservation_policy"] = json!(crate::preservation::ADDITIONS_POLICY);
+    acceptance["preservation_additions"] = json!({"containers":1,"networks":0,"volumes":0});
+    match mode {
+        "cleanup-failed" => acceptance["cleanup"] = json!("failed"),
+        "wrong-count" => acceptance["preservation_additions"]["containers"] = json!(0),
+        "unknown-policy" => acceptance["preservation_policy"] = json!("unknown"),
+        "legacy" => {
+            acceptance
+                .as_object_mut()
+                .unwrap()
+                .remove("preservation_policy");
+        }
+        _ => {}
+    }
+    save(&path, &acceptance).unwrap();
+    if model {
+        let path = work.join("benchmark-result.json");
+        let mut result = read(&path).unwrap();
+        result["evidence_sha256"]["acceptance.json"] =
+            json!(hash(&work.join("acceptance.json")).unwrap());
+        save(&path, &result).unwrap();
+    }
+}
+
+#[test]
+fn reported_unrelated_additions_allow_results_and_safe_setup_continuation() {
+    let dir = tempfile::tempdir().unwrap();
+    let plan = plan(dir.path(), 2);
+    assert!(
+        drive(
+            &plan,
+            &NOT_CANCELLED,
+            || Ok(()),
+            |entry| {
+                addition_receipt(&plan, entry, false, "allowed");
+                Ok(Some(1))
+            }
+        )
+        .is_err()
+    );
+    drive(
+        &plan,
+        &NOT_CANCELLED,
+        || Ok(()),
+        |entry| {
+            addition_receipt(&plan, entry, true, "allowed");
+            Ok(Some(0))
+        },
+    )
+    .unwrap();
+    drive(
+        &plan,
+        &NOT_CANCELLED,
+        || panic!("completed"),
+        |_| panic!("no repeat"),
+    )
+    .unwrap();
+    assert_eq!(
+        read(&plan.work.join("summary.json")).unwrap()["model_results"],
+        2
+    );
+}
+
+#[test]
+fn additions_do_not_relax_cleanup_ownership_or_recorded_policy_verification() {
+    for mode in [
+        "owned",
+        "cleanup-failed",
+        "wrong-count",
+        "unknown-policy",
+        "legacy",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan(dir.path(), 1);
+        assert!(
+            drive(
+                &plan,
+                &NOT_CANCELLED,
+                || Ok(()),
+                |entry| {
+                    addition_receipt(&plan, entry, true, mode);
+                    Ok(Some(0))
+                }
+            )
+            .is_err(),
+            "{mode}"
+        );
+        assert!(drive(&plan, &NOT_CANCELLED, || Ok(()), |_| panic!("no retry")).is_err());
+        assert_eq!(
+            read(&plan.work.join("results.json")).unwrap()[0]["score"],
+            Value::Null
+        );
+    }
+}
+
 #[test]
 fn fixed_order_includes_zero_scores_and_resume_never_repeats_models() {
     let dir = tempfile::tempdir().unwrap();
