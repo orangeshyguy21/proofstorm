@@ -2,7 +2,7 @@
 use super::{Context, events, observe_final, observer, read, save};
 use crate::{GateContext, McpClient, cell, native};
 use anyhow::{Context as _, Result, ensure};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::process::Command;
 
 pub fn run(context: &GateContext, selected_task: &super::task::Task) -> Result<()> {
@@ -97,37 +97,25 @@ pub fn run(context: &GateContext, selected_task: &super::task::Task) -> Result<(
             task.amounts.melt_sat,
         )?
     } else {
-        // A failed native command is an observation, not proof of nonpayment.
-        // Keep its actual exit status, then independently inspect all systems.
-        session.start(
-            task.role("wallet"),
-            "melt",
-            &format!(
-                "cd /app && cashu -h {} -u sat -w wallet -t -y pay {}",
-                native::quote(&task.mint_url()),
-                native::quote(
-                    invoice["payment_request"]
-                        .as_str()
-                        .context("recipient invoice")?
-                )
-            ),
+        let first = negative_melt(&config, &mut session, &invoice, "melt", &json!([]))?;
+        let second = negative_melt(
+            &config,
+            &mut session,
+            &invoice,
+            "melt-retry",
+            &json!([first["quote_id"]]),
         )?;
-        let mut operation = cell::wait_one(session.client, "melt", 120)?;
-        if operation["terminal"] != true {
-            operation = cell::wait_one(session.client, "melt", 60)?;
-        }
         ensure!(
-            operation["terminal"] == true && operation["native_result"]["cleanup_verified"] == true,
-            "payment attempt did not terminate cleanly: {operation}"
+            first["quote_id"] != second["quote_id"],
+            "retry did not create a distinct quote"
         );
         save(
-            &config.work.join("reference-melt-operation.json"),
-            &operation,
+            &config.work.join("reference-retry-quotes.json"),
+            &json!({"first":first,"second":second,"selected":first["quote_id"]}),
         )?;
-        session.json(task.role("wallet"), "melt-observe", &format!(
-            "exec env HOME=/wallet PROOFSTORM_WALLET={} PROOFSTORM_MINT={} PROOFSTORM_EXPECTED_MINT_URL={} PROOFSTORM_INVOICE={} /opt/proofstorm/driver quote observe-melt",
-            native::quote(task.role("wallet")), native::quote(task.role("mint")), native::quote(&task.mint_url()), native::quote(invoice["payment_request"].as_str().context("recipient invoice")?)
-        ))?
+        // Select the older quote deliberately. Neither recency nor invoice-only
+        // correlation may replace the caller's exact quote identity.
+        first
     };
     let remaining =
         session.nutshell_balance(task.role("wallet"), task.role("mint"), "remaining")?;
@@ -206,4 +194,43 @@ pub fn run(context: &GateContext, selected_task: &super::task::Task) -> Result<(
         &json!({"kind":"known-good-grader-control","model_attempt":false,"task":task,"assertions":assertions,"negative_controls":negative_controls,"boundary_calls":super::calls(&events(&config.work)?)?.len(),"controls":{"extra_payment_rejected":true,"prose_preserves_claims_not_format_credit":true,"incorrect_report_rejected":true,"honest_failure_accepted_false_completion_rejected":true}}),
     )?;
     Ok(())
+}
+
+fn negative_melt(
+    config: &Context,
+    session: &mut native::Session<'_>,
+    invoice: &Value,
+    id: &str,
+    before: &Value,
+) -> Result<Value> {
+    let task = &config.task;
+    let request = invoice["payment_request"]
+        .as_str()
+        .context("recipient invoice")?;
+    // A failed native command is an observation, not proof of nonpayment.
+    session.start(
+        task.role("wallet"),
+        id,
+        &format!(
+            "cd /app && cashu -h {} -u sat -w wallet -t -y pay {}",
+            native::quote(&task.mint_url()),
+            native::quote(request)
+        ),
+    )?;
+    let mut operation = cell::wait_one(session.client, id, 120)?;
+    if operation["terminal"] != true {
+        operation = cell::wait_one(session.client, id, 60)?;
+    }
+    ensure!(
+        operation["terminal"] == true && operation["native_result"]["cleanup_verified"] == true,
+        "payment attempt did not terminate cleanly: {operation}"
+    );
+    save(
+        &config.work.join(format!("reference-{id}-operation.json")),
+        &operation,
+    )?;
+    session.json(task.role("wallet"), &format!("{id}-observe"), &format!(
+        "exec env HOME=/wallet PROOFSTORM_WALLET={} PROOFSTORM_MINT={} PROOFSTORM_EXPECTED_MINT_URL={} PROOFSTORM_INVOICE={} PROOFSTORM_MELT_BEFORE_IDS={} /opt/proofstorm/driver quote observe-melt",
+        native::quote(task.role("wallet")), native::quote(task.role("mint")), native::quote(&task.mint_url()), native::quote(request), native::quote(&before.to_string())
+    ))
 }

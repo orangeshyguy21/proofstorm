@@ -563,6 +563,11 @@ pub fn run(
     private_json(&work.join("preservation-before.json"), &before)?;
     report["preservation_baseline_samples"] = json!(samples);
     report["preservation_exclusions"] = exclusions.clone();
+    report["preservation_policy"] = json!(crate::preservation::ADDITIONS_POLICY);
+    let initial: Value =
+        serde_json::from_slice(&fs::read(work.join("preservation-before-00.json"))?)?;
+    report["preservation_baseline_additions"] =
+        crate::preservation::verify_run(&initial, &before, &exclusions)?;
     report["preservation_config_scope"] = json!({"claude":"top-level and project mcpServers; normalized JSON","other_configuration":"whole-file sha256"});
     save(&work, &report)?;
     let operation = (|| -> Result<()> {
@@ -701,10 +706,10 @@ pub fn run(
         );
         save(&work, &report)
     }.and(crate::benchmark::cleanup_harness_secrets(&work));
-    let preservation = (|| -> Result<()> {
+    let preservation = (|| -> Result<Value> {
         let after = crate::preservation::snapshot(selection.checkout_home.as_deref())?;
         private_json(&work.join("preservation-after.json"), &after)?;
-        crate::preservation::verify_with_exclusions(&before, &after, &exclusions)
+        crate::preservation::verify_run(&before, &after, &exclusions)
     })();
     let mut report: Value = serde_json::from_slice(&fs::read(work.join("acceptance.json"))?)?;
     report["preservation"] = json!(if preservation.is_ok() {
@@ -714,6 +719,10 @@ pub fn run(
     });
     if let Err(error) = &preservation {
         report["preservation_error"] = json!(format!("{error:#}"));
+    }
+    if let Ok(additions) = &preservation {
+        report["preservation_additions"] = additions.clone();
+        eprintln!("Unrelated Docker additions (reported): {additions}");
     }
     save(&work, &report)?;
     if let Some((plan, case)) = &qualification {

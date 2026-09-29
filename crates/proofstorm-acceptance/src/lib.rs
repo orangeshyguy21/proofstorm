@@ -34,6 +34,7 @@
 )]
 
 pub mod benchmark;
+pub mod campaign;
 pub mod cell;
 pub mod client;
 mod diagnostics;

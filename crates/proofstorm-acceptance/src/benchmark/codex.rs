@@ -232,6 +232,7 @@ fn execute(context: &Context) -> Result<()> {
     // Inherit the acceptance worker's process group. Its parent reaps the whole
     // tree on completion/cancellation; creating another group would escape it.
     let start = Instant::now();
+    super::harness::mark_launch(context)?;
     let mut child = cmd.spawn().context("start Codex exec")?;
     let result = (|| -> Result<&str> {
         loop {

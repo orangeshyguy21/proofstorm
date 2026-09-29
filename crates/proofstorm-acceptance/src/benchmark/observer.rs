@@ -126,7 +126,7 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
         http::PortForward::open(&kube, ns, &format!("service/{}", task.role("mint")), 3338)?;
     let quote = identifier(args, "mint_quote_id")?;
     let mint = http::get_json_retrying(&mut forward, &format!("/v1/mint/quote/bolt11/{quote}"), 5)?;
-    let receive: Value = serde_json::from_str(&kube.exec(
+    let receive: Value = serde_json::from_str(&kube.exec_observation(
         ns,
         &format!("deployment/{}", task.role("wallet")),
         &[
@@ -180,7 +180,7 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
         let invoice = receiver["payment_request"]
             .as_str()
             .context("receiver invoice missing")?;
-        let wallet_melt: Value = serde_json::from_str(&kube.exec(
+        let wallet_melt: Value = serde_json::from_str(&kube.exec_observation(
             ns,
             &format!("deployment/{}", task.role("wallet")),
             &[
@@ -190,9 +190,14 @@ pub fn checkpoint(config: &Context, client: &mut McpClient, args: &Value) -> Res
                 &format!("PROOFSTORM_MINT={}", task.role("mint")),
                 &format!("PROOFSTORM_EXPECTED_MINT_URL={}", task.mint_url()),
                 &format!("PROOFSTORM_INVOICE={invoice}"),
+                &format!("PROOFSTORM_MELT_QUOTE_ID={melt_id}"),
                 "/opt/proofstorm/driver",
                 "quote",
-                "observe-melt",
+                if task.payment_expectation == PaymentExpectation::UnpaidNoRoute {
+                    "observe-melt-quote"
+                } else {
+                    "observe-melt"
+                },
             ],
         )?)?;
         evidence["mint_melt"] = melt;

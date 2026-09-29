@@ -318,11 +318,12 @@ pub fn finalize(work: &Path) -> Result<Value> {
     Ok(record)
 }
 
-const EVIDENCE_FILES: &[&str] = &[
+pub(crate) const EVIDENCE_FILES: &[&str] = &[
     "benchmark-task.json",
     "benchmark-context.json",
     "benchmark-artifacts.json",
     "benchmark-manifest.json",
+    "model-launch.json",
     "benchmark-attempt.json",
     "benchmark-observations.json",
     "funded.json",

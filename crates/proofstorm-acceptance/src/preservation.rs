@@ -12,6 +12,10 @@ use std::{
 };
 
 const LIFECYCLE_FIELDS: [&str; 4] = ["running", "restarting", "started", "restarts"];
+pub const ADDITIONS_POLICY: &str = "report-unowned-additions-v1";
+
+#[cfg(test)]
+mod additions_tests;
 
 /// Normally two observations five seconds apart. A container already in Docker
 /// restart backoff gets a bounded chance to demonstrate a full restart cycle. No
@@ -181,7 +185,11 @@ pub fn exclusions(first: &Value, second: &Value, run_owner: Option<&str>) -> Res
         }
     }
     let excluded = Value::Object(excluded);
-    verify_with_exclusions(first, second, &excluded)?;
+    if first["format_version"] == 2 || second["format_version"] == 2 {
+        verify_run(first, second, &excluded)?;
+    } else {
+        verify_with_exclusions(first, second, &excluded)?;
+    }
     Ok(excluded)
 }
 
@@ -214,6 +222,66 @@ pub fn verify_with_exclusions(before: &Value, after: &Value, excluded: &Value) -
     verify(&normalize(before, excluded)?, &normalize(after, excluded)?)
 }
 
+/// Report unrelated additions without exempting any preexisting resource.
+/// This grants no deletion authority; owned teardown still verifies its receipt.
+pub fn verify_run(before: &Value, after: &Value, excluded: &Value) -> Result<Value> {
+    ensure!(
+        before["format_version"] == 2 && after["format_version"] == 2,
+        "addition policy requires ownership-aware preservation inventories"
+    );
+    let mut retained = after.clone();
+    let mut additions = serde_json::Map::new();
+    for kind in ["containers", "networks", "volumes"] {
+        let old = before[kind]
+            .as_object()
+            .context("preservation inventory missing")?;
+        let new = after[kind]
+            .as_object()
+            .context("preservation inventory missing")?;
+        let mut count = 0;
+        for (id, resource) in new {
+            if old.contains_key(id) {
+                continue;
+            }
+            ensure!(
+                unowned(resource)?,
+                "new {kind} may belong to Proofstorm; inspect private preservation snapshots"
+            );
+            retained[kind]
+                .as_object_mut()
+                .context("preservation inventory missing")?
+                .remove(id);
+            count += 1;
+        }
+        additions.insert(kind.into(), json!(count));
+    }
+    verify_with_exclusions(before, &retained, excluded)?;
+    Ok(Value::Object(additions))
+}
+
+fn unowned(resource: &Value) -> Result<bool> {
+    let label = |key: &str| -> Result<&str> {
+        match resource.get(key) {
+            Some(Value::Null) => Ok(""),
+            Some(Value::String(value)) => Ok(value),
+            _ => anyhow::bail!("resource ownership observation missing or invalid"),
+        }
+    };
+    let owner = label("owner")?;
+    let cluster = label("cluster")?;
+    let name = resource["name"]
+        .as_str()
+        .context("resource name observation missing")?
+        .trim_start_matches('/');
+    // k3d helper resources do not all carry our installation label. Reserved
+    // current and legacy names can block an exemption, never authorize deletion.
+    Ok(owner.is_empty()
+        && !cluster.starts_with("proofstorm-")
+        && !cluster.starts_with("pst-")
+        && !name.starts_with("k3d-proofstorm-")
+        && !name.starts_with("k3d-pst-"))
+}
+
 pub fn snapshot(checkout_home: Option<&Path>) -> Result<Value> {
     let mut containers = BTreeMap::new();
     for id in docker(&["ps", "-a", "--no-trunc", "--format", "{{.ID}}"])?.lines() {
@@ -222,7 +290,7 @@ pub fn snapshot(checkout_home: Option<&Path>) -> Result<Value> {
             "--type",
             "container",
             "--format",
-            r#"{"id":{{json .Id}},"owner":{{json (index .Config.Labels "proofstorm.dev/installation")}},"running":{{json .State.Running}},"restarting":{{json .State.Restarting}},"started":{{json .State.StartedAt}},"restarts":{{json .RestartCount}},"mounts":{{json .Mounts}},"networks":{{json .NetworkSettings.Networks}}}"#,
+            r#"{"id":{{json .Id}},"name":{{json .Name}},"owner":{{json (index .Config.Labels "proofstorm.dev/installation")}},"cluster":{{json (index .Config.Labels "k3d.cluster")}},"running":{{json .State.Running}},"restarting":{{json .State.Restarting}},"started":{{json .State.StartedAt}},"restarts":{{json .RestartCount}},"mounts":{{json .Mounts}},"networks":{{json .NetworkSettings.Networks}}}"#,
             id,
         ])?)?;
         // Mount ordering is not part of identity.
@@ -232,16 +300,8 @@ pub fn snapshot(checkout_home: Option<&Path>) -> Result<Value> {
             .sort_by_cached_key(Value::to_string);
         containers.insert(id.to_owned(), value);
     }
-    let mut networks: Vec<_> = docker(&["network", "ls", "--no-trunc", "--format", "{{.ID}}"])?
-        .lines()
-        .map(str::to_owned)
-        .collect();
-    networks.sort();
-    let mut volumes: Vec<_> = docker(&["volume", "ls", "--format", "{{.Name}}"])?
-        .lines()
-        .map(str::to_owned)
-        .collect();
-    volumes.sort();
+    let networks = resource_inventory("network", "{{.ID}}")?;
+    let volumes = resource_inventory("volume", "{{.Name}}")?;
     let mut files = BTreeMap::new();
     if let Some(home) = std::env::var_os("HOME") {
         for name in [
@@ -267,8 +327,27 @@ pub fn snapshot(checkout_home: Option<&Path>) -> Result<Value> {
         }
     }
     Ok(
-        json!({"containers":containers,"networks":networks,"volumes":volumes,"configuration_sha256":files}),
+        json!({"format_version":2,"containers":containers,"networks":networks,"volumes":volumes,"configuration_sha256":files}),
     )
+}
+
+fn resource_inventory(kind: &str, identity: &str) -> Result<BTreeMap<String, Value>> {
+    let mut resources = BTreeMap::new();
+    let format = if kind == "network" {
+        r#"{"name":{{json .Name}},"created":{{json .Created}},"driver":{{json .Driver}},"owner":{{json (index .Labels "proofstorm.dev/installation")}},"cluster":{{json (index .Labels "k3d.cluster")}}}"#
+    } else {
+        r#"{"name":{{json .Name}},"created":{{json .CreatedAt}},"driver":{{json .Driver}},"owner":{{json (index .Labels "proofstorm.dev/installation")}},"cluster":{{json (index .Labels "k3d.cluster")}}}"#
+    };
+    let args = if kind == "network" {
+        vec![kind, "ls", "--no-trunc", "--format", identity]
+    } else {
+        vec![kind, "ls", "--format", identity]
+    };
+    for id in docker(&args)?.lines() {
+        let value = serde_json::from_str(&docker(&[kind, "inspect", "--format", format, id])?)?;
+        resources.insert(id.to_owned(), value);
+    }
+    Ok(resources)
 }
 
 pub fn verify(before: &Value, after: &Value) -> Result<()> {

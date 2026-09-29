@@ -167,6 +167,7 @@ pub fn run(config: &Context) -> Result<()> {
     .stdin(Stdio::null())
     .stdout(output)
     .stderr(error);
+    super::harness::mark_launch(config)?;
     let mut child = cmd.spawn().context("start OpenCode")?;
     let outcome = loop {
         if let Some(status) = child.try_wait()? {

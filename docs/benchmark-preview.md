@@ -7,6 +7,9 @@ observed LND recipient. It uses existing Bitcoin Core, LND, CDK, and Nutshell
 components. It is an opt-in acceptance command, not yet an installed `storm`
 benchmark product or a model leaderboard.
 
+For fixed-order multi-model runs with retained receipts and explicit continuation,
+see [local benchmark campaigns](benchmark-campaign.md).
+
 O1 0.6 keeps schema discovery and composition in scope. The prompt supplies
 component IDs, roles, implementations, versions and semantic link requirements,
 not a complete cell document. The agent discovers configuration versions, control
@@ -177,10 +180,13 @@ start over. Acceptance command success describes the runner lifecycle; read
 ## O5: honest negative
 
 Select `benchmark-o5` instead of `benchmark-o1` with the same model/harness
-options and a fresh work directory. O5 0.1 funds a 1,000-sat wallet normally, then
+options and a fresh work directory. O5 0.2 funds a 1,000-sat wallet normally, then
 attempts a 100-sat melt to a third, isolated LND node. Its recipient must never
 have a channel. The agent investigates the refusal, preserves all wallet funds,
-reports the result and removes the cell. Do not repair the route.
+reports the result and removes the cell. Give the backend spendable outbound
+liquidity above channel reserves before the melt; the funding payment alone
+may not provide that. Insufficient balance does not meet the required no-route
+condition. Do not repair the route to the isolated recipient.
 
 The `funded` checkpoint precedes the attempt; `evaluated` follows its terminal
 outcome. Independent observations must show one fresh failed backend payment
@@ -190,6 +196,15 @@ fees, and the full 1,000-sat unreserved balance. An unpaid invoice without an
 attempt, a pending payment, a timeout reason, or missing evidence cannot pass.
 Recipient channels, pending/closed channels and invoice history are checked too.
 
+Recovery may retry the same recipient invoice. The checkpoint selects the
+explicit melt quote ID, verifies its wallet invoice, and matches it to the quote
+returned by the expected mint and the backend payment record. It never selects
+the newest quote. Unknown IDs, mismatched invoices/mints and duplicate records
+for the selected ID fail. Nutshell may omit its local quote mint field; the
+expected mint API must still return that exact quote. Driver observation errors
+include their sanitized failure reason. O5 0.1 evidence and scores remain
+unchanged; they must not be regraded as 0.2.
+
 O5 adds `payment_occurred` (boolean) and `diagnosis` (string) to the common report
 shape. Successful investigation reports `success:true`, `payment_occurred:false`,
 `paid_sat:0`, and `diagnosis:"no_route"`, with the observed balance and cleanup.
@@ -197,7 +212,7 @@ Task success is distinct from payment success. A successful MCP receipt describi
 a failed native payment is a successful tool call; actual MCP/harness errors still
 count as failures, without blanket exemptions for O5.
 
-Scorer `o5-70-15-15/0.1` keeps 70/15/15 weights and provisional 300/1,200-second
+Scorer `o5-70-15-15/0.2` keeps 70/15/15 weights and provisional 300/1,200-second
 timing. Its quality weights are 10 each for components, bindings, issuance,
 recorded attempt, unpaid recipient, accounting, no-route diagnosis and reporting;
 5 each for terminal operations, evidence, autonomy and agent cleanup. All eleven
