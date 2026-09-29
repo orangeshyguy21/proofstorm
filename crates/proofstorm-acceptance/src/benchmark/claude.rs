@@ -285,6 +285,7 @@ pub(super) fn execute(context: &Context, environment: &[(&str, &OsStr)]) -> Resu
     // Inherit the acceptance worker's process group. Its parent reaps the whole
     // tree on completion/cancellation; creating another group would escape it.
     let start = Instant::now();
+    super::harness::mark_launch(context)?;
     let mut child = cmd.spawn().context("start Claude Code")?;
     let result = (|| -> Result<&str> {
         loop {

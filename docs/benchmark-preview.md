@@ -7,6 +7,9 @@ observed LND recipient. It uses existing Bitcoin Core, LND, CDK, and Nutshell
 components. It is an opt-in acceptance command, not yet an installed `storm`
 benchmark product or a model leaderboard.
 
+For fixed-order multi-model runs with retained receipts and explicit continuation,
+see [local benchmark campaigns](benchmark-campaign.md).
+
 O1 0.6 keeps schema discovery and composition in scope. The prompt supplies
 component IDs, roles, implementations, versions and semantic link requirements,
 not a complete cell document. The agent discovers configuration versions, control
