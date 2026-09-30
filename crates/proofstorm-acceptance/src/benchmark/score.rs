@@ -161,19 +161,75 @@ pub fn grade(
     if !telemetry {
         reasons.push("scoring_telemetry_incomplete");
     }
-    json!({"scorer":task.scorer,"task_hash":proofstorm_core::digest_json(task),
+    let mut record = json!({"scorer":task.scorer,"task_hash":proofstorm_core::digest_json(task),
         "assertions":assertions,"diagnostic_score":diagnostic,
         "task_success":task_success,"report_valid":report_valid,"report_format":observations["report_format"] == true,
         "environment_valid":environment_valid,"accepted_success":if environment_valid {Some(valid_completion)} else {None},
         "status":status,"reasons":reasons,"task_score":task_score,
         "quality_points":quality,"tool_points":tool_points,"time_points":time_points,
         "accepted_score":accepted_score,"tools":calls,"elapsed_seconds":timing,
-        "outcome":outcome,"runner_cleanup":cleanup})
+        "outcome":outcome,"runner_cleanup":cleanup});
+    if task.diagnostic.is_some() {
+        record["evaluation_profile"] = json!(task.diagnostic);
+        record["ranking_eligible"] = json!(false);
+        record["task_score"] = Value::Null;
+        record["accepted_score"] = Value::Null;
+        record["time_points"] = Value::Null;
+        record["status"] = json!(if environment_valid {
+            "diagnostic"
+        } else {
+            "invalid_environment"
+        });
+    }
+    record
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn extended_diagnostic_can_finish_late_but_never_earns_ranked_score() {
+        let task = super::super::task::o1_diagnostic();
+        for (seconds, outcome, cleanup, completed) in [
+            (1800.0, "completed", true, true),
+            (3601.0, "completed", true, false),
+            (3600.0, "timeout", true, false),
+            (1800.0, "completed", false, true),
+        ] {
+            let result = super::grade(
+                task,
+                &good(),
+                &[call(1, Some(true))],
+                Some(seconds),
+                outcome,
+                cleanup,
+                Some(true),
+            );
+            assert_eq!(result["task_success"], completed);
+            assert_eq!(result["ranking_eligible"], false);
+            assert!(result["task_score"].is_null());
+            assert!(result["accepted_score"].is_null());
+            assert!(result["time_points"].is_null());
+            assert_eq!(
+                result["status"],
+                if cleanup {
+                    "diagnostic"
+                } else {
+                    "invalid_environment"
+                }
+            );
+            assert_eq!(result["elapsed_seconds"], seconds);
+        }
+        let standard = grade(
+            &good(),
+            &[call(1, Some(true))],
+            Some(1800.0),
+            "completed",
+            true,
+        );
+        assert_eq!(standard["task_success"], false);
+        assert_eq!(standard["accepted_score"], 0.0);
+    }
     fn counts(calls: &[Call]) -> Value {
         super::counts(super::super::task::o1(), calls)
     }

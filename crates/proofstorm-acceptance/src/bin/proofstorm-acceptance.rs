@@ -118,10 +118,19 @@ async fn main() -> Result<()> {
         args.gates
     };
     runner::validate_gates(&names)?;
-    let benchmark = names
-        .iter()
-        .any(|n| matches!(n.as_str(), "benchmark-o1" | "benchmark-o5"));
+    let benchmark = names.iter().any(|n| {
+        matches!(
+            n.as_str(),
+            "benchmark-o1" | "benchmark-o5" | "benchmark-o1-diagnostic" | "benchmark-o5-diagnostic"
+        )
+    });
     if benchmark {
+        if names.iter().any(|name| name.ends_with("-diagnostic")) && args.worker_home.is_none() {
+            anyhow::ensure!(
+                args.timeout >= 4200,
+                "extended diagnostics require --timeout of at least 4200 seconds for the 3600-second model budget plus verification"
+            );
+        }
         anyhow::ensure!(
             names.len() == 1 && selection.benchmark_model.is_some(),
             "model benchmarks require --benchmark-model and their own run"

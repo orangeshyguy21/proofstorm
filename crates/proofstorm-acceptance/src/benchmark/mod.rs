@@ -457,7 +457,12 @@ mod tests {
 
     #[test]
     fn offline_regrade_is_repeatable_and_rejects_changed_evidence() -> Result<()> {
-        for selected in [task::o1(), task::o5()] {
+        for selected in [
+            task::o1(),
+            task::o5(),
+            task::o1_diagnostic(),
+            task::o5_diagnostic(),
+        ] {
             let work = tempfile::tempdir()?;
             save(
                 &work.path().join("acceptance.json"),

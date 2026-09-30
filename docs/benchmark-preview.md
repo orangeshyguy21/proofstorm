@@ -319,6 +319,63 @@ current task contracts. The 0.3, 0.4 and 0.5 runners are retained separately;
 no model attempts used those contracts. Keep the original runner for offline reproduction of older
 results; upgrading the scorer does not rewrite them.
 
+For slower local inference, `benchmark-o1-diagnostic` and
+`benchmark-o5-diagnostic` provide separate versioned, unranked contracts with a
+3600-second model deadline. Select the model and CLI as usual and pass
+`--timeout 4200` (or greater) to leave room for verification. The ordinary
+O1/O5 contracts and their 1200-second deadlines remain unchanged. Increasing
+the outer gate timeout alone never increases a model deadline.
+
+Diagnostic prompts, task hashes, manifests and retained results identify the
+extended allowance. Results retain completion, assertions, tool counts, actual
+wall time and environment validity, but `ranking_eligible` is false and
+`task_score`, `accepted_score` and `time_points` are null, including failed
+attempts. Cleanup and preservation are still mandatory. These gates are invoked
+directly with the acceptance CLI; the ranked campaign driver does not accept
+them. Record local model/runtime identity and hardware alongside the receipts.
+The 60-minute allowance is provisional and does not calibrate timing scores.
+
+The shared MCP schema layer exposes direct types already required by local
+`$ref` definitions, while retaining references and all validation constraints.
+This supports tool parsers that convert arguments from the direct property
+type, including Ollama's Qwen parser. Unknown, external, cyclic and differently
+scoped references are left alone. This is a common tool-schema compatibility
+rule, not a model-specific relaxation of accepted arguments. Qualify nested
+objects and schema references as well as simple scalar/array tool calls before
+starting a local-model campaign.
+
+Known-tool failures use MCP results with `isError: true`. The original error
+code, message and details appear in both text and `structuredContent`, so
+clients that omit JSON-RPC error data still receive recovery instructions.
+Unknown tools and malformed protocol requests retain protocol error handling.
+Authorization still runs before handlers. Error results obey the 32 KiB
+response bound; oversized details are explicitly marked omitted, with a
+bounded message and the original classification where it fits. Tool errors
+continue to count as failed calls. This follows MCP's distinction between
+[tool execution and protocol errors](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-11-25/server/tools.mdx#error-handling).
+Refresh source and binary pins after changes to the shared tool surface before
+freezing a campaign; historical attempts retain their original evidence.
+
+For model-free timing baselines, use `benchmark-o1-calibration` or
+`benchmark-o5-calibration`, with a fresh work directory and no model options.
+These run the same scripted task and independent assertions. O5 calibration
+attempts the negative payment once; the oracle's extra two-quote retry remains
+in `benchmark-o5-oracle` as a separate regression control.
+
+`oracle-reference.json` identifies `calibration-reference-v1` and records
+monotonic task time from the first `cell_up` through report construction and
+observed cell cleanup. It excludes runner setup, proxy initialization, post-run
+verification, synthetic counterexamples and runner teardown. Source revision,
+dirty state, binary digests, task hash and basic platform metadata are retained
+in `reference-provenance.json`. A timing sample is usable only when the gate,
+owned cleanup and preservation all pass in `acceptance.json`.
+
+Scripted references measure an infrastructure baseline; they do not include
+model reasoning or schema discovery and receive no model score. Use repeated
+references on a recorded resource profile to propose targets before comparative
+runs. Existing 300/1200-second timing constants remain provisional; these gates
+do not change task versions, scores or previously retained results.
+
 Preservation hashes only Claude's top-level and per-project MCP server maps,
 normalized as JSON. Other agent files remain byte-exact. Two pre-run Docker
 snapshots, normally five seconds apart, identify already-changing external

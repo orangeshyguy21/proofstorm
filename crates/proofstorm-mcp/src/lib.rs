@@ -33,6 +33,7 @@ pub use activity_search::ActivitySearchRequest;
 mod operation_read;
 pub use operation_read::OperationReadRequest;
 mod evidence;
+mod tool_error;
 mod tool_schema;
 pub use evidence::{
     EvidenceExportRequest, EvidenceExportResponse, EvidenceSection, EvidenceSectionReadRequest,
@@ -2048,30 +2049,39 @@ impl ServerHandler for ProofstormMcp {
         request: rmcp::model::CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
-        // Recheck the full contract on every call, including grants revoked after discovery.
-        // Handlers retain their finer cell/component/private-custody checks.
-        if let Some(tool) = proofstorm_core::mcp::tool(&request.name) {
-            self.authorize_all(tool.capabilities)?;
+        let tool = proofstorm_core::mcp::tool(&request.name);
+        let result = async {
+            // Recheck grants even after discovery. Handlers retain their finer
+            // cell/component/private-custody checks before producing details.
+            if let Some(tool) = tool {
+                self.authorize_all(tool.capabilities)?;
+            }
+            let installation = self
+                .kubernetes
+                .as_ref()
+                .and_then(|runtime| runtime.installation.as_ref());
+            let runtime_tool = tool.is_some_and(|tool| tool.requires_runtime);
+            let _access =
+                proofstorm_app::bootstrap::lifecycle::access(installation.filter(|_| runtime_tool))
+                    .map_err(|error| {
+                        app_error(proofstorm_app::Error::problem(
+                            "runtime_suspended",
+                            error.to_string(),
+                        ))
+                    })?;
+            self.tool_router
+                .call(rmcp::handler::server::tool::ToolCallContext::new(
+                    self, request, context,
+                ))
+                .await
         }
-        let installation = self
-            .kubernetes
-            .as_ref()
-            .and_then(|runtime| runtime.installation.as_ref());
-        let runtime_tool =
-            proofstorm_core::mcp::tool(&request.name).is_some_and(|tool| tool.requires_runtime);
-        let _access =
-            proofstorm_app::bootstrap::lifecycle::access(installation.filter(|_| runtime_tool))
-                .map_err(|error| {
-                    app_error(proofstorm_app::Error::problem(
-                        "runtime_suspended",
-                        error.to_string(),
-                    ))
-                })?;
-        self.tool_router
-            .call(rmcp::handler::server::tool::ToolCallContext::new(
-                self, request, context,
-            ))
-            .await
+        .await;
+        match result {
+            // Tool failures must reach text-only clients too. Unknown tools
+            // and malformed protocol envelopes remain protocol errors.
+            Err(error) if tool.is_some() => Ok(tool_error::result(error).into()),
+            other => other,
+        }
     }
 
     fn get_info(&self) -> ServerInfo {
@@ -3856,6 +3866,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn advertised_native_output_retains_reference_and_exposes_object_type() {
+        let store = seeded_store();
+        proofstorm_app::developer::configure(&store, "alpha", "designer").unwrap();
+        let service = ProofstormMcp::new(store, "alpha", "designer").unwrap();
+        let tool = service
+            .tool_router
+            .list_all()
+            .into_iter()
+            .find(|tool| tool.name == "cell_exec")
+            .unwrap();
+        let schema = serde_json::to_value(&tool.input_schema).unwrap();
+        let output = &schema["properties"]["output"];
+        assert_eq!(output["type"], "object");
+        let reference = output["$ref"].as_str().unwrap();
+        let definition = schema
+            .pointer(reference.strip_prefix('#').unwrap())
+            .unwrap();
+        assert_eq!(definition["additionalProperties"], false);
+        assert_eq!(definition["properties"]["mode"]["type"], "string");
+        assert!(definition["properties"]["mode"].get("$ref").is_some());
     }
 
     #[test]

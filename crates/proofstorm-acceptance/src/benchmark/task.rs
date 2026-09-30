@@ -27,6 +27,14 @@ pub struct Task {
     pub report_schema: Value,
     pub rules: Value,
     pub score_weights: [u32; 3],
+    /// Separate, unranked execution contract. Absent from historical tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<DiagnosticProfile>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticProfile {
+    ExtendedDeadlineV1,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -107,7 +115,7 @@ pub fn o1() -> &'static Task {
             allowed_tools:vec!["catalog_list".into(),"catalog_entry_read".into(),"catalog_config_schema_read".into(),"cell_plan".into(),"cell_read".into(),"cell_search".into(),"cell_up".into(),"cell_inspect".into(),"cell_wait".into(),"cell_exec".into(),"cell_remove".into(),"cell_component_status_list".into(),"cell_inventory_list".into(),"operation_status".into(),"operation_wait".into(),"operation_read".into(),"operation_cancel".into(),"activity_search".into(),"benchmark_checkpoint".into()],
             target_seconds:300.0, deadline_seconds:1200, timing_calibrated:false,
             operational_required:assertions.iter().filter(|(id,_)| id != "report").map(|(id,_)| id.clone()).collect(),
-            assertions, report_schema:Value::Null, score_weights:[70,15,15],
+            assertions, report_schema:Value::Null, score_weights:[70,15,15], diagnostic:None,
             rules:json!({"composition":"Discover schemas and compose the cell from semantic requirements; no complete cell document is supplied. Component identity and semantic bindings are scored, not a particular configuration schema version.","report":"Exactly one JSON object earns format credit. A single trailing JSON object after prose can validate claims. The schema defines shape only; claims must match independent observations, including success and cleanup. Missing evidence cannot validate a claim. Duplicate keys, ambiguous or incorrect claims fail.","environment":"Cleanup and preservation required; otherwise accepted score/success are null.","tools":"All failures count; success deduplicated by semantic arguments excluding request IDs. Read/discovery cap 3; other calls cap 1. No expected-negative calls.","payment_flow":"Exactly one successful payer funding payment and one settled recipient invoice; no offsetting cycles. Retain terminal evidence before removal."}),
         };
         task.report_schema = json!({"type":"object","additionalProperties":false,"required":["success","minted_sat","paid_sat","remaining_sat","cleanup"],"properties":{"success":{"type":"boolean"},"minted_sat":{"type":"integer"},"paid_sat":{"type":"integer"},"remaining_sat":{"type":"integer"},"cleanup":{"type":"boolean"}}});
@@ -117,9 +125,33 @@ pub fn o1() -> &'static Task {
 }
 /// Only currently implemented contracts are regradable by this binary.
 pub fn lookup(id: &str, version: &str) -> Option<&'static Task> {
-    [o1(), o5()]
+    [o1(), o5(), o1_diagnostic(), o5_diagnostic()]
         .into_iter()
         .find(|task| task.id == id && task.version == version)
+}
+
+fn extended(base: &Task) -> Task {
+    let mut task = base.clone();
+    task.version = format!("{}-diagnostic.1", base.version);
+    task.scorer = format!("{}-diagnostic/1", base.id.to_lowercase());
+    task.deadline_seconds = 3600;
+    task.diagnostic = Some(DiagnosticProfile::ExtendedDeadlineV1);
+    task.rules["evaluation"] = json!(
+        "Unranked extended-deadline diagnostic. Retain completion, assertions, tool counts, actual elapsed time and environment validity. No aggregate or timing score is awarded."
+    );
+    task.prompt = prompt(&task);
+    task.prompt.push_str("This is an unranked diagnostic with an extended execution allowance. Task, evidence and cleanup requirements still apply; no aggregate or timing score is awarded.\n");
+    task
+}
+
+pub fn o1_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o1()))
+}
+
+pub fn o5_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o5()))
 }
 
 pub fn o5() -> &'static Task {
@@ -235,6 +267,31 @@ Scoring separates operational completion from formatting. Extra prose before one
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extended_contracts_preserve_originals_and_bind_deadline_to_prompt() {
+        assert_eq!(
+            proofstorm_core::digest_json(o1()),
+            "sha256:c3a1ec902d511ea6cae4aaf4e33e6019ce61baa08f9cb80f1b7352c600768ce5"
+        );
+        assert_eq!(
+            proofstorm_core::digest_json(o5()),
+            "sha256:659ee06315a9695c93e6280f8e89bb08211b6a0fee0d5148593891e0eb45556f"
+        );
+        for (base, diagnostic) in [(o1(), o1_diagnostic()), (o5(), o5_diagnostic())] {
+            assert_ne!(
+                proofstorm_core::digest_json(base),
+                proofstorm_core::digest_json(diagnostic)
+            );
+            assert!(lookup(&diagnostic.id, &diagnostic.version).is_some());
+            assert_eq!(diagnostic.deadline_seconds, 3600);
+            assert!(diagnostic.prompt.contains("You have 3600 seconds."));
+            assert!(!diagnostic.prompt.contains("You have 1200 seconds."));
+            assert_eq!(base.components, diagnostic.components);
+            assert_eq!(base.assertions, diagnostic.assertions);
+            assert_eq!(base.operational_required, diagnostic.operational_required);
+        }
+    }
 
     #[test]
     fn registry_and_roles_are_explicit_and_order_independent() {
