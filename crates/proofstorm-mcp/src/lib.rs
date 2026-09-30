@@ -3893,11 +3893,41 @@ mod tests {
 
     #[test]
     fn all_advertised_input_unions_are_portable_and_keep_candidate_constraints() {
+        fn check_expanded_union(schema: &mut schemars::Schema, root: &serde_json::Value) {
+            let mut node = schema.as_value();
+            let mut has_type = false;
+            let mut has_union = false;
+            let mut seen = std::collections::BTreeSet::new();
+            loop {
+                has_type |= node.get("type").is_some();
+                has_union |= node.get("anyOf").is_some() || node.get("oneOf").is_some();
+                let Some(reference) = node.get("$ref").and_then(serde_json::Value::as_str) else {
+                    break;
+                };
+                assert!(seen.insert(reference), "cyclic advertised reference");
+                node = root
+                    .pointer(reference.strip_prefix('#').expect("local reference"))
+                    .expect("advertised reference resolves");
+            }
+            assert!(
+                !(has_type && has_union),
+                "provider rejects type beside a union after reference expansion: {schema:?}"
+            );
+            schemars::transform::transform_subschemas(
+                &mut |child: &mut schemars::Schema| check_expanded_union(child, root),
+                schema,
+            );
+        }
         let store = seeded_store();
         proofstorm_app::developer::configure(&store, "alpha", "designer").unwrap();
         let service = ProofstormMcp::new(store, "alpha", "designer").unwrap();
         let tools = service.tool_router.list_all();
         for tool in &tools {
+            let root = serde_json::to_value(&tool.input_schema).unwrap();
+            check_expanded_union(
+                &mut schemars::Schema::try_from(root.clone()).unwrap(),
+                &root,
+            );
             let encoded = serde_json::to_string(&tool.input_schema).unwrap();
             assert!(
                 !encoded.contains("\"oneOf\":"),

@@ -339,7 +339,11 @@ The shared MCP schema layer exposes direct types already required by local
 `$ref` definitions, while retaining references and all validation constraints.
 This supports tool parsers that convert arguments from the direct property
 type, including Ollama's Qwen parser. Unknown, external, cyclic and differently
-scoped references are left alone. This is a common tool-schema compatibility
+scoped references are left alone. References to unions also keep their types on
+the individual branches: adding a type beside such a reference creates a type
+beside `anyOf` after expansion, which Kimi rejects. Direct object references
+(including native output selection) still expose their object type for Qwen.
+This is a common tool-schema compatibility
 rule, not a model-specific relaxation of accepted arguments. Qualify nested
 objects and schema references as well as simple scalar/array tool calls before
 starting a local-model campaign.

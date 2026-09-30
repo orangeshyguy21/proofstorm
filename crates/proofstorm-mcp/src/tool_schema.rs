@@ -22,7 +22,11 @@ fn reference_types(schema: &mut Schema, root: &Value) {
     // Ollama's Qwen XML parser converts arguments using the direct property
     // type, without following $ref. Expose only types already required by the
     // referenced schema; preserve the reference and all validation constraints.
+    // Do not hoist a union's types: Moonshot expands refs and rejects a type
+    // beside anyOf. Its branches already carry their individual types.
     if schema.get("type").is_none()
+        && schema.get("anyOf").is_none()
+        && schema.get("oneOf").is_none()
         && let Some(reference) = schema.get("$ref").and_then(Value::as_str)
         && let Some(types) = referred_types(reference, root, &mut BTreeSet::new())
     {
@@ -62,7 +66,7 @@ fn implied_types(
     root: &Value,
     seen: &mut BTreeSet<String>,
 ) -> Option<BTreeSet<String>> {
-    if node.get("$id").is_some() {
+    if node.get("$id").is_some() || node.get("anyOf").is_some() || node.get("oneOf").is_some() {
         return None;
     }
     if let Some(value) = node.get("type") {
@@ -87,18 +91,7 @@ fn implied_types(
     if let Some(reference) = node.get("$ref").and_then(Value::as_str) {
         return referred_types(reference, root, seen);
     }
-    let branches = node
-        .get("anyOf")
-        .or_else(|| node.get("oneOf"))?
-        .as_array()?;
-    if branches.is_empty() {
-        return None;
-    }
-    let mut types = BTreeSet::new();
-    for branch in branches {
-        types.extend(implied_types(branch, root, seen)?);
-    }
-    Some(types)
+    None
 }
 
 fn tagged_unions(schema: &mut Schema) {
@@ -156,10 +149,27 @@ mod tests {
         }});
         let mut expected = input.clone();
         expected["properties"]["output"]["type"] = json!("object");
-        expected["properties"]["nullable"]["type"] = json!(["null", "object"]);
         expected["$defs"]["Output"]["properties"]["mode"]["type"] = json!("string");
         expected["$defs"]["Nullable"]["anyOf"][0]["type"] = json!("object");
-        expected["$defs"]["Alias"]["type"] = json!(["null", "object"]);
+        let result = portable_input(input.as_object().unwrap());
+        assert_eq!(json!(result), expected);
+        assert_eq!(portable_input(&result), result);
+    }
+
+    #[test]
+    fn union_references_keep_branch_types_without_hoisting_through_aliases() {
+        let input = json!({"type":"object","$defs":{
+            "Payload":variants(),
+            "Alias":{"$ref":"#/$defs/Payload"},
+            "Object":{"type":"object","additionalProperties":false}
+        },"properties":{
+            "private_payload":{"anyOf":[{"$ref":"#/$defs/Alias"},{"type":"null"}],"default":null},
+            "sibling_union":{"$ref":"#/$defs/Object","anyOf":[{"required":["a"]},{"required":["b"]}]},
+            "output":{"$ref":"#/$defs/Object"}
+        }});
+        let mut expected = input.clone();
+        expected["$defs"]["Payload"] = json!({"anyOf":variants()["oneOf"]});
+        expected["properties"]["output"]["type"] = json!("object");
         let result = portable_input(input.as_object().unwrap());
         assert_eq!(json!(result), expected);
         assert_eq!(portable_input(&result), result);
