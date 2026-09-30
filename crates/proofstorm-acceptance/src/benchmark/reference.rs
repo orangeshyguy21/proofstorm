@@ -59,6 +59,7 @@ fn run_profile(
         &json!({
             "format_version":1,"model_attempt":false,
             "profile":if calibration {"calibration-reference-v1"} else {"grader-oracle-v1"},
+            "image_preparation_profile":super::preparation::PROFILE,
             "source_revision":String::from_utf8_lossy(&source.stdout).trim(),"source_dirty":!dirty.stdout.is_empty(),
             "runner_sha256":format!("{:x}",sha2::Sha256::digest(fs::read(std::env::current_exe()?)?)),
             "mcp_sha256":format!("{:x}",sha2::Sha256::digest(fs::read(&context.artifacts.mcp)?)),

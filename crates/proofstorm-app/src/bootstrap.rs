@@ -441,6 +441,31 @@ fn stage(home: &Path, name: &str, action: impl FnOnce() -> Result<()>) -> Result
     result.with_context(|| format!("setup stage {name} failed; rerun the same setup command to retry (no resources were deleted)"))
 }
 
+/// Prefetch only a declared cell's pinned images into an owned runtime, without
+/// publishing the cell or changing application state. Benchmark setup uses this
+/// before starting its timer; ordinary reads never start downloads.
+///
+/// # Errors
+/// Returns an error for invalid cells, changed ownership, or failed image checks.
+pub fn prefetch_cell_images(
+    installation: &Installation,
+    cell: &proofstorm_core::CellSpec,
+) -> Result<BTreeSet<String>> {
+    let lock = proofstorm_core::resolve_lock(cell, proofstorm_core::default_catalog())
+        .map_err(anyhow::Error::msg)?;
+    let selected = selected_images(installation, &lock)?;
+    let _guard = Installation::lock(&installation.home)?;
+    ensure!(
+        Installation::load(&installation.home)? == *installation,
+        "installation identity changed"
+    );
+    lifecycle::ensure_available(&installation.home)?;
+    mirror_with_progress(installation, selected.clone(), &|label| {
+        eprintln!("{label}...");
+    })?;
+    Ok(selected)
+}
+
 /// Only explicit, authorized cell mutations call this. Reads never start downloads.
 pub(crate) async fn prepare_images(
     installation: Installation,
@@ -546,7 +571,7 @@ fn mirror_with_progress(
                     "{}/{repository}:catalog-{sha}",
                     installation.host_registry()
                 );
-                docker(
+                process::image_preparation(
                     &installation.home,
                     &[
                         "buildx",
@@ -560,7 +585,7 @@ fn mirror_with_progress(
                     900,
                 )?;
             }
-            let manifest: Value = serde_json::from_str(&docker(
+            let manifest: Value = serde_json::from_str(&process::image_preparation(
                 &installation.home,
                 &[
                     "buildx",
@@ -579,7 +604,7 @@ fn mirror_with_progress(
         }
         for node in cluster::nodes(installation) {
             cluster::owned(installation)?;
-            docker(
+            process::image_preparation(
                 &installation.home,
                 &["exec", &node, "crictl", "--timeout=120s", "pull", &image],
                 150,

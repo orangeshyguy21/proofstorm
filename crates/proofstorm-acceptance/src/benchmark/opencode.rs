@@ -140,7 +140,7 @@ pub fn run(config: &Context) -> Result<()> {
         "harness_config_sha256":proofstorm_core::digest_json(&effective),"prompt_sha256":proofstorm_core::digest_json(&config.task.prompt),
         "source_revision":String::from_utf8_lossy(&source.stdout).trim(),"source_dirty":!dirty.stdout.is_empty(),"runner_sha256":executable_sha256,
         "platform":std::env::consts::ARCH,"os":std::env::consts::OS,"budget":{"wall_seconds":u64::from(config.task.deadline_seconds),"agent_steps":150,"spend_hard_limit":null,"token_hard_limit":null},
-        "limitations":["provider credentials/config inherited; effective config audited and privately retained","provider model alias may change","time target provisional","no hard token/spend budget claimed"]}),
+        "limitations":["provider credentials/config inherited; effective config audited and privately retained","provider model alias may change","timing contract retained in task","no hard token/spend budget claimed"]}),
     )?;
     fs::write(config.work.join("prompt.txt"), &config.task.prompt)?;
     let output = fs::File::create(config.work.join("harness.jsonl"))?;

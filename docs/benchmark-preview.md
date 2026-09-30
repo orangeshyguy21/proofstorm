@@ -10,7 +10,7 @@ benchmark product or a model leaderboard.
 For fixed-order multi-model runs with retained receipts and explicit continuation,
 see [local benchmark campaigns](benchmark-campaign.md).
 
-O1 0.6 keeps schema discovery and composition in scope. The prompt supplies
+O1 0.7 keeps schema discovery and composition in scope. The prompt supplies
 component IDs, roles, implementations, versions and semantic link requirements,
 not a complete cell document. The agent discovers configuration versions, control
 settings and bindings from the catalog. Component grading checks IDs,
@@ -180,7 +180,7 @@ start over. Acceptance command success describes the runner lifecycle; read
 ## O5: honest negative
 
 Select `benchmark-o5` instead of `benchmark-o1` with the same model/harness
-options and a fresh work directory. O5 0.2 funds a 1,000-sat wallet normally, then
+options and a fresh work directory. O5 0.3 funds a 1,000-sat wallet normally, then
 attempts a 100-sat melt to a third, isolated LND node. Its recipient must never
 have a channel. The agent investigates the refusal, preserves all wallet funds,
 reports the result and removes the cell. Give the backend spendable outbound
@@ -212,8 +212,8 @@ Task success is distinct from payment success. A successful MCP receipt describi
 a failed native payment is a successful tool call; actual MCP/harness errors still
 count as failures, without blanket exemptions for O5.
 
-Scorer `o5-70-15-15/0.2` keeps 70/15/15 weights and provisional 300/1,200-second
-timing. Its quality weights are 10 each for components, bindings, issuance,
+Scorer `o5-70-15-15/0.3` keeps 70/15/15 weights with a calibrated 240-second
+full-credit target and a fixed 1,200-second execution budget. Its quality weights are 10 each for components, bindings, issuance,
 recorded attempt, unpaid recipient, accounting, no-route diagnosis and reporting;
 5 each for terminal operations, evidence, autonomy and agent cleanup. All eleven
 operational assertions are required; reporting retains its separate validity and
@@ -248,7 +248,7 @@ retains terminal operation evidence immediately before the first removal request
 because cell teardown deletes those records. Either a verified `cell_wait` or a
 completed `cell_remove` receipt can demonstrate closure.
 
-For O1, scorer `o1-70-15-15/0.6` computes:
+For O1, scorer `o1-70-15-15/0.7` computes:
 
 - **Quality (70):** 70% of the weighted assertion score. Nine operational
   assertions are required. Correct JSON-only reporting contributes seven points;
@@ -258,9 +258,10 @@ For O1, scorer `o1-70-15-15/0.6` computes:
   observations and discovery are capped, and request IDs do not evade the cap.
   The exact rule is retained in `benchmark-task.json`. Distinct unnecessary
   native commands can still game this measure; it is a pilot metric.
-- **Time (15):** `15 × clamp((1200 − elapsed_seconds) / 900, 0, 1)`.
-  The 300-second target and 1,200-second deadline are provisional, not calibrated
-  comparison targets.
+- **Time (15):** `15 × clamp((1200 − elapsed_seconds) / 960, 0, 1)`.
+  The 240-second full-credit target comes from the prepared reference cohort
+  below. The 1,200-second deadline is a fixed execution budget, not an estimate
+  of how long a model needs to succeed.
 
 The report schema describes shape only: required fields, types and no extra
 fields. It does not prescribe success, amounts or the grading balance window.
@@ -314,10 +315,14 @@ same capture proxy and independent verifier. It checks all ten assertions and
 an offsetting-payment counterexample with live observations. It is a grader
 control, not a model attempt, and has no model score. Run it with the same
 checkout/root options and a fresh work directory; omit benchmark model options.
-The 0.1 and 0.2 attempts remain retained and cannot be regraded with the
-current task contracts. The 0.3, 0.4 and 0.5 runners are retained separately;
+The O1 0.1 and 0.2 attempts remain retained and cannot be regraded with the
+current task contracts. The O1 0.3, 0.4 and 0.5 runners are retained separately;
 no model attempts used those contracts. Keep the original runner for offline reproduction of older
 results; upgrading the scorer does not rewrite them.
+O1 0.6, O5 0.2 and their `-diagnostic.1` contracts remain registered for exact
+offline regrading with their original hashes and provisional timing. New runs
+use O1 0.7/O5 0.3 (or their separate diagnostic versions). Historical scores
+must not be relabeled or pooled with the calibrated versions.
 
 For slower local inference, `benchmark-o1-diagnostic` and
 `benchmark-o5-diagnostic` provide separate versioned, unranked contracts with a
@@ -369,6 +374,24 @@ These run the same scripted task and independent assertions. O5 calibration
 attempts the negative payment once; the oracle's extra two-quote retry remains
 in `benchmark-o5-oracle` as a separate regression control.
 
+All benchmark gates first prepare the selected task's pinned component images
+and probe image in the run's private registry and nodes. This setup step creates
+no cell and launches no model. `benchmark-image-preparation.json` retains the
+`selected-task-images-v2` profile, task hash, installation identity, exact image
+set, elapsed setup time and outcome. Failed or interrupted preparation stops the
+run as a setup failure; it cannot consume a model attempt. The worker requires
+a matching successful receipt before starting its task. Ordinary cell creation
+still verifies images, creates the cell and waits for readiness inside the task
+timer. Historical runs without this preparation profile must remain separate
+from the prepared timing cohort.
+The last image-transfer command's bounded output is retained privately in
+`benchmark-image-preparation.private.json`; public errors omit that output.
+Pinned registry copies request HTTP/1.1 through Go's documented
+[`http2client` setting](https://pkg.go.dev/net/http#hdr-HTTP_2), scoped to the
+Docker image-copy subprocess. This avoids the observed peer HTTP/2 stream
+failures. HTTPS certificate checks and image digest verification remain enabled;
+the Docker daemon, global configuration and other subprocesses are unchanged.
+
 `oracle-reference.json` identifies `calibration-reference-v1` and records
 monotonic task time from the first `cell_up` through report construction and
 observed cell cleanup. It excludes runner setup, proxy initialization, post-run
@@ -380,8 +403,34 @@ owned cleanup and preservation all pass in `acceptance.json`.
 Scripted references measure an infrastructure baseline; they do not include
 model reasoning or schema discovery and receive no model score. Use repeated
 references on a recorded resource profile to propose targets before comparative
-runs. Existing 300/1200-second timing constants remain provisional; these gates
-do not change task versions, scores or previously retained results.
+runs. The gates themselves never change task versions or previously retained
+results.
+
+The `prepared-reference-timing-v1` contract freezes O1 0.7 and O5 0.3 at
+240/1200 seconds with unchanged 70/15/15 weights. The recorded policy selects
+the slowest of three accepted reference durations per task, rounded upward to
+a whole 60 seconds. Measurements from the 2026-09-30 cohort are:
+
+| Task | Accepted durations (seconds) | Mean | Sample standard deviation | Target |
+| --- | --- | ---: | ---: | ---: |
+| O1 | 183.386, 182.500, 179.070 | 181.652 | 2.280 | 240 |
+| O5 | 194.233, 186.592, 190.947 | 190.590 | 3.833 | 240 |
+
+All six share the same source patch, executable hashes, task contracts and
+Docker resource profile. Task assertions, cleanup, preservation and all O5
+negative controls passed; independent inventory checks found no leftover
+resources. One settings-drift sample and two tool-download setup failures are
+retained separately and excluded. Earlier source/preparation cohorts are not
+pooled. The machine was an Apple M4 Max with 16 logical CPUs and 128 GiB RAM;
+Docker had 16 CPUs and 33,599,827,968 bytes of memory, without CPU reservation.
+The task rules retain the combined evidence summary's SHA-256 digest.
+
+Three references on a shared host establish only an infrastructure baseline;
+they do not estimate tail latency or model reasoning/discovery time. The
+20-minute deadline remains a chosen execution budget. No contestant ordering
+was used to fit the target. The freeze changes timing/version metadata only;
+prompts, task actions, assertions and scoring gates are unchanged. Model
+comparisons still require a frozen roster, environment and campaign budget.
 
 Preservation hashes only Claude's top-level and per-project MCP server maps,
 normalized as JSON. Other agent files remain byte-exact. Two pre-run Docker

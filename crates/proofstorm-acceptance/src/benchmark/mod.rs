@@ -5,6 +5,7 @@ pub mod harness;
 mod negative;
 mod observer;
 mod opencode;
+pub mod preparation;
 pub mod proxy;
 pub mod reference;
 mod report;
@@ -323,6 +324,8 @@ pub(crate) const EVIDENCE_FILES: &[&str] = &[
     "benchmark-context.json",
     "benchmark-artifacts.json",
     "benchmark-manifest.json",
+    "benchmark-image-preparation.json",
+    "benchmark-image-preparation.private.json",
     "model-launch.json",
     "benchmark-attempt.json",
     "benchmark-observations.json",
@@ -462,6 +465,10 @@ mod tests {
             task::o5(),
             task::o1_diagnostic(),
             task::o5_diagnostic(),
+            task::lookup("O1", "0.6").unwrap(),
+            task::lookup("O5", "0.2").unwrap(),
+            task::lookup("O1", "0.6-diagnostic.1").unwrap(),
+            task::lookup("O5", "0.2-diagnostic.1").unwrap(),
         ] {
             let work = tempfile::tempdir()?;
             save(

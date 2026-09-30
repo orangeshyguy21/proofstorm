@@ -71,6 +71,9 @@ struct Arguments {
     /// Parent-owned worker home; not an existing-installation test mode.
     #[arg(long, hide = true)]
     worker_home: Option<PathBuf>,
+    /// Internal setup worker; never starts a model or creates a cell.
+    #[arg(long, hide = true, requires = "worker_home")]
+    benchmark_prepare_images: bool,
     /// Named gates; defaults to the small Bitcoin smoke test.
     gates: Vec<String>,
 }
@@ -124,7 +127,7 @@ async fn main() -> Result<()> {
             "benchmark-o1" | "benchmark-o5" | "benchmark-o1-diagnostic" | "benchmark-o5-diagnostic"
         )
     });
-    if benchmark {
+    if benchmark && !args.benchmark_prepare_images {
         if names.iter().any(|name| name.ends_with("-diagnostic")) && args.worker_home.is_none() {
             anyhow::ensure!(
                 args.timeout >= 4200,
@@ -142,6 +145,9 @@ async fn main() -> Result<()> {
     }
     if let Some(home) = args.worker_home {
         anyhow::ensure!(names.len() == 1, "worker requires exactly one gate");
+        if args.benchmark_prepare_images {
+            return proofstorm_acceptance::benchmark::preparation::run(&home, &names[0]);
+        }
         return runner::worker(&selection, &root, &home, &names[0]);
     }
     let cancelled = Arc::new(AtomicBool::new(false));

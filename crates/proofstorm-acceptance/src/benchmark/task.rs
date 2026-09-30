@@ -79,6 +79,36 @@ impl Task {
 
 pub fn o1() -> &'static Task {
     static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| calibrated(o1_v06(), "0.7"))
+}
+
+pub fn o5() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| calibrated(o5_v02(), "0.3"))
+}
+
+fn calibrated(base: &Task, version: &str) -> Task {
+    let mut task = base.clone();
+    task.version = version.into();
+    task.scorer = format!("{}-70-15-15/{version}", base.id.to_lowercase());
+    task.target_seconds = 240.0;
+    task.timing_calibrated = true;
+    task.rules["timing"] = json!({
+        "profile":"prepared-reference-timing-v1",
+        "reference_profile":"calibration-reference-v1",
+        "image_preparation_profile":"selected-task-images-v2",
+        "samples_per_task":3,
+        "target_policy":"Maximum accepted reference duration rounded upward to a whole 60 seconds",
+        "deadline_policy":"Fixed 1200-second execution budget, not an estimated model-success percentile",
+        "evidence_sha256":"9250dc37f51ad708725c960beb904ca3aef6e1bf0138e92264e219ec299bd12d",
+        "limits":"Infrastructure baseline on one shared host; excludes model reasoning and discovery; does not estimate tail latency"
+    });
+    task
+}
+
+// Preserve the exact provisional contracts for historical offline regrading.
+fn o1_v06() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
     TASK.get_or_init(|| {
         let components = [
         ("chain","bitcoin","bitcoin-core","31.1","bitcoin-core/31/v1","cell"),
@@ -125,9 +155,18 @@ pub fn o1() -> &'static Task {
 }
 /// Only currently implemented contracts are regradable by this binary.
 pub fn lookup(id: &str, version: &str) -> Option<&'static Task> {
-    [o1(), o5(), o1_diagnostic(), o5_diagnostic()]
-        .into_iter()
-        .find(|task| task.id == id && task.version == version)
+    [
+        o1(),
+        o5(),
+        o1_diagnostic(),
+        o5_diagnostic(),
+        o1_v06(),
+        o5_v02(),
+        o1_v06_diagnostic(),
+        o5_v02_diagnostic(),
+    ]
+    .into_iter()
+    .find(|task| task.id == id && task.version == version)
 }
 
 fn extended(base: &Task) -> Task {
@@ -154,10 +193,20 @@ pub fn o5_diagnostic() -> &'static Task {
     TASK.get_or_init(|| extended(o5()))
 }
 
-pub fn o5() -> &'static Task {
+fn o1_v06_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o1_v06()))
+}
+
+fn o5_v02_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o5_v02()))
+}
+
+fn o5_v02() -> &'static Task {
     static TASK: OnceLock<Task> = OnceLock::new();
     TASK.get_or_init(|| {
-        let mut task = o1().clone();
+        let mut task = o1_v06().clone();
         task.id = "O5".into();
         task.version = "0.2".into();
         task.scorer = "o5-70-15-15/0.2".into();
@@ -271,14 +320,19 @@ mod tests {
     #[test]
     fn extended_contracts_preserve_originals_and_bind_deadline_to_prompt() {
         assert_eq!(
-            proofstorm_core::digest_json(o1()),
+            proofstorm_core::digest_json(lookup("O1", "0.6").unwrap()),
             "sha256:c3a1ec902d511ea6cae4aaf4e33e6019ce61baa08f9cb80f1b7352c600768ce5"
         );
         assert_eq!(
-            proofstorm_core::digest_json(o5()),
+            proofstorm_core::digest_json(lookup("O5", "0.2").unwrap()),
             "sha256:659ee06315a9695c93e6280f8e89bb08211b6a0fee0d5148593891e0eb45556f"
         );
-        for (base, diagnostic) in [(o1(), o1_diagnostic()), (o5(), o5_diagnostic())] {
+        for (base, diagnostic) in [
+            (o1(), o1_diagnostic()),
+            (o5(), o5_diagnostic()),
+            (o1_v06(), o1_v06_diagnostic()),
+            (o5_v02(), o5_v02_diagnostic()),
+        ] {
             assert_ne!(
                 proofstorm_core::digest_json(base),
                 proofstorm_core::digest_json(diagnostic)
@@ -290,6 +344,39 @@ mod tests {
             assert_eq!(base.components, diagnostic.components);
             assert_eq!(base.assertions, diagnostic.assertions);
             assert_eq!(base.operational_required, diagnostic.operational_required);
+        }
+    }
+
+    #[test]
+    fn calibration_versions_only_change_the_declared_timing_contract() {
+        for (legacy, current, version) in [(o1_v06(), o1(), "0.7"), (o5_v02(), o5(), "0.3")] {
+            assert_eq!(current.version, version);
+            assert_eq!(current.target_seconds.to_bits(), 240.0_f64.to_bits());
+            assert_eq!(current.deadline_seconds, 1200);
+            assert!(current.timing_calibrated);
+            assert_eq!(current.score_weights, [70, 15, 15]);
+            assert!(!legacy.timing_calibrated);
+            assert_eq!(legacy.target_seconds.to_bits(), 300.0_f64.to_bits());
+            assert_ne!(
+                proofstorm_core::digest_json(current),
+                proofstorm_core::digest_json(legacy)
+            );
+            let mut restored = json!(current);
+            for field in [
+                "version",
+                "scorer",
+                "target_seconds",
+                "timing_calibrated",
+                "rules",
+            ] {
+                restored[field] = json!(legacy)[field].clone();
+            }
+            assert_eq!(restored, json!(legacy));
+            assert_eq!(
+                current.rules["timing"]["image_preparation_profile"],
+                super::super::preparation::PROFILE
+            );
+            assert!(lookup(&current.id, &current.version).is_some());
         }
     }
 

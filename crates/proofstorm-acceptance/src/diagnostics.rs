@@ -356,6 +356,7 @@ fn image_stage(work: &Path) -> &'static str {
 pub(crate) fn progress(work: &Path, log: &Path, elapsed_seconds: u64) -> Value {
     let stage = match log.file_name().and_then(|name| name.to_str()) {
         Some("setup.log") => setup_stage(work),
+        Some("benchmark-image-preparation.log") => "setup-benchmark-images",
         Some("image-qualification.log") => image_stage(work),
         _ => gate_stage(work),
     };
@@ -638,6 +639,14 @@ mod tests {
         .unwrap();
         let setup = root.path().join("setup.log");
         assert_eq!(progress(root.path(), &setup, 30)["stage"], "setup-tools");
+        assert_eq!(
+            progress(
+                root.path(),
+                &root.path().join("benchmark-image-preparation.log"),
+                60
+            )["stage"],
+            "setup-benchmark-images"
+        );
         let log = root.path().join("gate-0-qualification.log");
         fs::write(root.path().join("qualification-stage.json"), r#""funding""#).unwrap();
         let value = progress(root.path(), &log, 120);

@@ -143,7 +143,7 @@ fn run_inner(context: &Context) -> Result<()> {
         "CLI-bundled skill descriptions may remain in the rendered prompt; personal skill discovery is disabled",
         "Codex JSONL does not expose wrapper-only code-mode errors; tool ratio covers observed MCP attempts",
         "request_user_input may be advertised by Codex but exec cannot accept human assistance",
-        "no hard token/spend budget claimed","time target provisional"]}),
+        "no hard token/spend budget claimed","timing contract retained in task"]}),
     )?;
     execute(context)
 }

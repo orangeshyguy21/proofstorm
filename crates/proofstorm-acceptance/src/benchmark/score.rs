@@ -188,6 +188,79 @@ pub fn grade(
 mod tests {
     use super::*;
     #[test]
+    fn calibrated_boundaries_preserve_legacy_scores_and_completion_gates() {
+        use super::super::task;
+        for (current, previous) in [
+            (task::o1(), task::lookup("O1", "0.6").unwrap()),
+            (task::o5(), task::lookup("O5", "0.2").unwrap()),
+        ] {
+            let mut observations: Value = current
+                .assertions
+                .iter()
+                .map(|(key, _)| (key.clone(), json!(true)))
+                .collect();
+            observations["report_valid"] = json!(true);
+            observations["report_format"] = json!(true);
+            let mixed_calls = [call(1, Some(true)), call(2, Some(false))];
+            let legacy = super::grade(
+                previous,
+                &observations,
+                &mixed_calls,
+                Some(600.0),
+                "completed",
+                true,
+                Some(true),
+            );
+            assert_eq!(legacy["accepted_score"], 87.5);
+            assert_eq!(legacy["time_points"], 10.0);
+            let calibrated = super::grade(
+                current,
+                &observations,
+                &mixed_calls,
+                Some(600.0),
+                "completed",
+                true,
+                Some(true),
+            );
+            assert_eq!(calibrated["accepted_score"], 86.875);
+            assert_eq!(calibrated["time_points"], 9.375);
+            for (seconds, time_points, score, success) in [
+                (0.0, 15.0, 100.0, true),
+                (240.0, 15.0, 100.0, true),
+                (720.0, 7.5, 92.5, true),
+                (1200.0, 0.0, 85.0, true),
+                (1200.1, 0.0, 0.0, false),
+            ] {
+                let result = super::grade(
+                    current,
+                    &observations,
+                    &[call(1, Some(true))],
+                    Some(seconds),
+                    "completed",
+                    true,
+                    Some(true),
+                );
+                assert_eq!(result["time_points"], time_points);
+                assert_eq!(result["accepted_score"], score);
+                assert_eq!(result["accepted_success"], success);
+            }
+            for missing in [None, Some(f64::NAN), Some(-1.0)] {
+                let result = super::grade(
+                    current,
+                    &observations,
+                    &[call(1, Some(true))],
+                    missing,
+                    "completed",
+                    true,
+                    Some(true),
+                );
+                assert!(result["accepted_score"].is_null());
+                assert_eq!(result["status"], "unscored");
+            }
+        }
+    }
+
+    #[test]
     fn extended_diagnostic_can_finish_late_but_never_earns_ranked_score() {
         let task = super::super::task::o1_diagnostic();
         for (seconds, outcome, cleanup, completed) in [
@@ -273,9 +346,9 @@ mod tests {
     fn weights_gates_and_time_boundaries() {
         let calls = vec![call(1, Some(true)), call(2, Some(false))];
         let result = grade(&good(), &calls, Some(600.0), "completed", true);
-        assert_eq!(result["accepted_score"], 87.5);
+        assert_eq!(result["accepted_score"], 86.875);
         assert_eq!(
-            grade(&good(), &calls, Some(300.0), "completed", true)["time_points"],
+            grade(&good(), &calls, Some(240.0), "completed", true)["time_points"],
             15.0
         );
         assert_eq!(
@@ -311,7 +384,7 @@ mod tests {
         let mut obs = good();
         obs["report"] = json!(false);
         obs["report_format"] = json!(false);
-        let result = grade(&obs, &calls, Some(300.0), "completed", true);
+        let result = grade(&obs, &calls, Some(240.0), "completed", true);
         assert_eq!(result["task_success"], true);
         assert_eq!(result["accepted_score"], 93.0);
         assert_eq!(result["quality_points"], 63.0);
@@ -320,7 +393,7 @@ mod tests {
                 super::super::task::o1(),
                 &obs,
                 &calls,
-                Some(300.0),
+                Some(240.0),
                 "completed",
                 true,
                 preservation,
@@ -332,7 +405,7 @@ mod tests {
             assert!(result["accepted_success"].is_null());
         }
         obs["report_valid"] = json!(false);
-        let result = grade(&obs, &calls, Some(300.0), "completed", true);
+        let result = grade(&obs, &calls, Some(240.0), "completed", true);
         assert_eq!(result["task_success"], true);
         assert_eq!(result["quality_points"], 63.0);
         assert_eq!(result["accepted_score"], 0.0);
