@@ -335,18 +335,21 @@ directly with the acceptance CLI; the ranked campaign driver does not accept
 them. Record local model/runtime identity and hardware alongside the receipts.
 The 60-minute allowance is provisional and does not calibrate timing scores.
 
-The shared MCP schema layer exposes direct types already required by local
-`$ref` definitions, while retaining references and all validation constraints.
-This supports tool parsers that convert arguments from the direct property
-type, including Ollama's Qwen parser. Unknown, external, cyclic and differently
-scoped references are left alone. References to unions also keep their types on
-the individual branches: adding a type beside such a reference creates a type
-beside `anyOf` after expansion, which Kimi rejects. Direct object references
-(including native output selection) still expose their object type for Qwen.
-This is a common tool-schema compatibility
-rule, not a model-specific relaxation of accepted arguments. Qualify nested
-objects and schema references as well as simple scalar/array tool calls before
-starting a local-model campaign.
+The shared MCP schema layer expands bounded, acyclic local `$ref` definitions
+when the expanded tool schema is no larger than the original. This exposes
+nested objects, arrays, enums and tagged variants directly to tool parsers while
+preserving validation constraints and use-site annotations. Unused root
+definitions are removed only after complete expansion. Schemas with unresolved
+or differently scoped references, assertion siblings at a reference, excessive
+expansion, or growth from repeated definitions retain their compact reference
+graph. Retained references still expose direct types where safely inferable.
+
+Union types stay on their individual branches: hoisting a type beside `anyOf`
+can trigger Kimi's schema rejection. The rule is shared across models; Rust
+request validation remains strict, with no conversion of strings into objects,
+arrays or numbers. Provider parsers can still mishandle nested arguments, so
+qualify nullable objects, nested unions, arrays, numeric fields and tool-error
+recovery before starting a model campaign.
 
 Known-tool failures use MCP results with `isError: true`. The original error
 code, message and details appear in both text and `structuredContent`, so
