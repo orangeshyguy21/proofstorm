@@ -32,6 +32,34 @@ pub(super) fn controller_build(home: &Path, args: &[&str]) -> Result<String> {
     )
 }
 
+pub(super) fn image_preparation(home: &Path, args: &[&str], seconds: u64) -> Result<String> {
+    run_command(
+        home,
+        &mut image_command(args, std::env::var_os("GODEBUG")),
+        seconds,
+        Some(&home.join("image-preparation.log")),
+        OUTPUT_LIMIT,
+    )
+}
+
+fn image_command(args: &[&str], inherited_debug: Option<std::ffi::OsString>) -> Command {
+    let mut command = Command::new("docker");
+    command.args(args);
+    if args.starts_with(&["buildx", "imagetools", "create"]) {
+        // Registry copies encountered peer HTTP/2 PROTOCOL_ERROR failures.
+        // Go's documented client switch is scoped to this CLI/plugin process;
+        // HTTPS, credentials, digest checks, and the daemon stay unchanged.
+        // GODEBUG uses the last occurrence of a setting.
+        let mut debug = inherited_debug.unwrap_or_default();
+        if !debug.is_empty() {
+            debug.push(",");
+        }
+        debug.push("http2client=0");
+        command.env("GODEBUG", debug);
+    }
+    command
+}
+
 fn build_log(log: Option<&Path>, out: &fs::File, err: &fs::File) -> Result<()> {
     if let Some(path) = log {
         let mut bytes = Vec::new();
@@ -110,8 +138,16 @@ fn run_command(
     build_log(log, &out, &err)?;
     if !status.success() {
         if let Some(path) = log {
+            let operation = if path
+                .file_name()
+                .is_some_and(|name| name == "image-preparation.log")
+            {
+                "image preparation"
+            } else {
+                "controller build"
+            };
             anyhow::bail!(
-                "controller build failed; inspect private log {} and retry setup",
+                "{operation} failed; inspect private log {} and retry setup",
                 path.display()
             );
         }
@@ -153,6 +189,41 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
     #[test]
+    fn http1_is_scoped_to_registry_copy_and_preserves_other_debug_settings() {
+        for inherited in [None, Some(""), Some("x509usefallbackroots=1,http2client=1")] {
+            let args = [
+                "buildx",
+                "imagetools",
+                "create",
+                "--prefer-index=false",
+                "--tag",
+                "local/image",
+                "remote/image@sha256:pin",
+            ];
+            let command = image_command(&args, inherited.map(Into::into));
+            assert_eq!(command.get_args().collect::<Vec<_>>(), args);
+            let env = command.get_envs().collect::<Vec<_>>();
+            assert_eq!(env.len(), 1);
+            assert_eq!(env[0].0, "GODEBUG");
+            let expected = inherited.filter(|v| !v.is_empty()).map_or_else(
+                || "http2client=0".to_string(),
+                |value| format!("{value},http2client=0"),
+            );
+            assert_eq!(env[0].1.unwrap(), expected.as_str());
+        }
+        for args in [
+            vec!["buildx", "imagetools", "inspect", "image"],
+            vec!["exec", "node", "crictl", "pull", "image"],
+        ] {
+            assert_eq!(
+                image_command(&args, Some("other=1".into()))
+                    .get_envs()
+                    .count(),
+                0
+            );
+        }
+    }
+    #[test]
     fn oversized_output_is_an_error_not_truncated_json() {
         let root = tempfile::tempdir().unwrap();
         let args = ["-c", "head -c 4096 /dev/zero"];
@@ -162,23 +233,29 @@ mod tests {
         assert_eq!(output.len(), 4096);
     }
     #[test]
-    fn failed_build_diagnostics_stay_private_and_out_of_error_text() {
+    fn failed_build_and_image_diagnostics_stay_private_and_out_of_error_text() {
         let root = tempfile::tempdir().unwrap();
-        let log = root.path().join("controller-build.log");
-        let error = run_inner(
-            root.path(),
-            Path::new("/bin/sh"),
-            &["-c", "printf 'private-build-output' >&2; exit 1"],
-            5,
-            Some(&log),
-            OUTPUT_LIMIT,
-        )
-        .unwrap_err();
-        assert!(!error.to_string().contains("private-build-output"));
-        assert_eq!(fs::read_to_string(&log).unwrap(), "private-build-output");
-        assert_eq!(
-            fs::metadata(log).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
+        for (name, label) in [
+            ("controller-build.log", "controller build"),
+            ("image-preparation.log", "image preparation"),
+        ] {
+            let log = root.path().join(name);
+            let error = run_inner(
+                root.path(),
+                Path::new("/bin/sh"),
+                &["-c", "printf 'private-build-output' >&2; exit 1"],
+                5,
+                Some(&log),
+                OUTPUT_LIMIT,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(label));
+            assert!(!error.to_string().contains("private-build-output"));
+            assert_eq!(fs::read_to_string(&log).unwrap(), "private-build-output");
+            assert_eq!(
+                fs::metadata(log).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
     }
 }

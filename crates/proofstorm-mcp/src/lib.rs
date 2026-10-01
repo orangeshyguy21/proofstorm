@@ -33,6 +33,7 @@ pub use activity_search::ActivitySearchRequest;
 mod operation_read;
 pub use operation_read::OperationReadRequest;
 mod evidence;
+mod tool_error;
 mod tool_schema;
 pub use evidence::{
     EvidenceExportRequest, EvidenceExportResponse, EvidenceSection, EvidenceSectionReadRequest,
@@ -2048,30 +2049,39 @@ impl ServerHandler for ProofstormMcp {
         request: rmcp::model::CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
-        // Recheck the full contract on every call, including grants revoked after discovery.
-        // Handlers retain their finer cell/component/private-custody checks.
-        if let Some(tool) = proofstorm_core::mcp::tool(&request.name) {
-            self.authorize_all(tool.capabilities)?;
+        let tool = proofstorm_core::mcp::tool(&request.name);
+        let result = async {
+            // Recheck grants even after discovery. Handlers retain their finer
+            // cell/component/private-custody checks before producing details.
+            if let Some(tool) = tool {
+                self.authorize_all(tool.capabilities)?;
+            }
+            let installation = self
+                .kubernetes
+                .as_ref()
+                .and_then(|runtime| runtime.installation.as_ref());
+            let runtime_tool = tool.is_some_and(|tool| tool.requires_runtime);
+            let _access =
+                proofstorm_app::bootstrap::lifecycle::access(installation.filter(|_| runtime_tool))
+                    .map_err(|error| {
+                        app_error(proofstorm_app::Error::problem(
+                            "runtime_suspended",
+                            error.to_string(),
+                        ))
+                    })?;
+            self.tool_router
+                .call(rmcp::handler::server::tool::ToolCallContext::new(
+                    self, request, context,
+                ))
+                .await
         }
-        let installation = self
-            .kubernetes
-            .as_ref()
-            .and_then(|runtime| runtime.installation.as_ref());
-        let runtime_tool =
-            proofstorm_core::mcp::tool(&request.name).is_some_and(|tool| tool.requires_runtime);
-        let _access =
-            proofstorm_app::bootstrap::lifecycle::access(installation.filter(|_| runtime_tool))
-                .map_err(|error| {
-                    app_error(proofstorm_app::Error::problem(
-                        "runtime_suspended",
-                        error.to_string(),
-                    ))
-                })?;
-        self.tool_router
-            .call(rmcp::handler::server::tool::ToolCallContext::new(
-                self, request, context,
-            ))
-            .await
+        .await;
+        match result {
+            // Tool failures must reach text-only clients too. Unknown tools
+            // and malformed protocol envelopes remain protocol errors.
+            Err(error) if tool.is_some() => Ok(tool_error::result(error).into()),
+            other => other,
+        }
     }
 
     fn get_info(&self) -> ServerInfo {
@@ -3859,12 +3869,90 @@ mod tests {
     }
 
     #[test]
+    fn native_arguments_reject_stringified_payloads_and_wrapped_arrays() {
+        let valid = serde_json::json!({
+            "name":"fixture","component":"wallet","request_id":"capture",
+            "private_payload":{"kind":"capture","reference":"fixture","format":"bytes"},
+            "output":{"mode":"json_fields","fields":["balance","status"]}
+        });
+        assert!(serde_json::from_value::<CellExecRequest>(valid.clone()).is_ok());
+        let mut stringified = valid.clone();
+        stringified["private_payload"] = serde_json::json!(valid["private_payload"].to_string());
+        assert!(serde_json::from_value::<CellExecRequest>(stringified).is_err());
+        let mut wrapped = valid;
+        wrapped["output"]["fields"] = serde_json::json!({"item":["balance","status"]});
+        assert!(serde_json::from_value::<CellExecRequest>(wrapped).is_err());
+    }
+
+    #[test]
+    fn advertised_native_output_expands_nested_types_and_keeps_constraints() {
+        let store = seeded_store();
+        proofstorm_app::developer::configure(&store, "alpha", "designer").unwrap();
+        let service = ProofstormMcp::new(store, "alpha", "designer").unwrap();
+        let tool = service
+            .tool_router
+            .list_all()
+            .into_iter()
+            .find(|tool| tool.name == "cell_exec")
+            .unwrap();
+        let schema = serde_json::to_value(&tool.input_schema).unwrap();
+        assert!(schema.get("$defs").is_none());
+        let output = &schema["properties"]["output"];
+        assert_eq!(output["type"], "object");
+        assert!(output.get("$ref").is_none());
+        assert_eq!(output["additionalProperties"], false);
+        assert_eq!(output["properties"]["mode"]["type"], "string");
+        assert!(
+            output["properties"]["mode"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("json_fields"))
+        );
+        assert_eq!(output["properties"]["fields"]["type"], "array");
+        assert_eq!(output["properties"]["fields"]["items"]["type"], "string");
+    }
+
+    #[test]
     fn all_advertised_input_unions_are_portable_and_keep_candidate_constraints() {
+        fn check_expanded_union(schema: &mut schemars::Schema, root: &serde_json::Value) {
+            let mut node = schema.as_value();
+            let mut has_type = false;
+            let mut has_union = false;
+            let mut seen = std::collections::BTreeSet::new();
+            loop {
+                has_type |= node.get("type").is_some();
+                has_union |= node.get("anyOf").is_some() || node.get("oneOf").is_some();
+                let Some(reference) = node.get("$ref").and_then(serde_json::Value::as_str) else {
+                    break;
+                };
+                assert!(seen.insert(reference), "cyclic advertised reference");
+                node = root
+                    .pointer(reference.strip_prefix('#').expect("local reference"))
+                    .expect("advertised reference resolves");
+            }
+            assert!(
+                !(has_type && has_union),
+                "provider rejects type beside a union after reference expansion: {schema:?}"
+            );
+            schemars::transform::transform_subschemas(
+                &mut |child: &mut schemars::Schema| check_expanded_union(child, root),
+                schema,
+            );
+        }
         let store = seeded_store();
         proofstorm_app::developer::configure(&store, "alpha", "designer").unwrap();
         let service = ProofstormMcp::new(store, "alpha", "designer").unwrap();
         let tools = service.tool_router.list_all();
         for tool in &tools {
+            let root = serde_json::to_value(&tool.input_schema).unwrap();
+            assert_eq!(
+                tool_schema::portable_input(&tool.input_schema),
+                tool.input_schema
+            );
+            check_expanded_union(
+                &mut schemars::Schema::try_from(root.clone()).unwrap(),
+                &root,
+            );
             let encoded = serde_json::to_string(&tool.input_schema).unwrap();
             assert!(
                 !encoded.contains("\"oneOf\":"),
@@ -3879,10 +3967,7 @@ mod tests {
         let schema = serde_json::to_value(&tool.input_schema).unwrap();
         let source = &schema["properties"]["source"];
         assert_eq!(source["anyOf"][1], serde_json::json!({"type":"null"}));
-        let reference = source["anyOf"][0]["$ref"].as_str().unwrap();
-        let variants = schema
-            .pointer(reference.strip_prefix('#').unwrap())
-            .unwrap();
+        let variants = &source["anyOf"][0];
         let branches = variants["anyOf"].as_array().unwrap();
         assert_eq!(branches.len(), 3);
         for branch in branches {

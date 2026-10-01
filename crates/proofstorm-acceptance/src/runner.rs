@@ -219,6 +219,9 @@ pub fn worker(selection: &Selection, root: &Path, home: &Path, name: &str) -> Re
         installation.home == home.canonicalize()?,
         "worker home mismatch"
     );
+    if crate::benchmark::preparation::selected(name).is_some() {
+        crate::benchmark::preparation::verify(home.parent().unwrap(), &installation, name)?;
+    }
     let mut context = GateContext::new(root, installation, selection.artifacts()?)?;
     if let Some((path, id)) = &selection.qualification {
         let plan: proofstorm_qualification::Plan = serde_json::from_slice(&fs::read(path)?)?;
@@ -609,6 +612,57 @@ pub fn run(
             cancelled,
             &mut report,
         )?;
+        if let Some(name) = names
+            .iter()
+            .find(|name| crate::benchmark::preparation::selected(name).is_some())
+        {
+            report["setup"] = json!("running");
+            report["benchmark_image_preparation"] = json!("running");
+            save(&work, &report)?;
+            let mut prepare = command(&std::env::current_exe()?, &home);
+            prepare
+                .arg("--worker-home")
+                .arg(&home)
+                .arg("--benchmark-prepare-images")
+                .arg(name);
+            eprintln!("Preparing pinned task images before benchmark timing...");
+            let prepared = execute(
+                prepare,
+                &work.join("benchmark-image-preparation.log"),
+                5400,
+                Some(cancelled),
+            )
+            .and_then(|()| {
+                crate::benchmark::preparation::verify(&work, &Installation::load(&home)?, name)
+            });
+            let diagnostics = home.join("image-preparation.log");
+            if diagnostics.try_exists()? {
+                ensure!(
+                    fs::symlink_metadata(&diagnostics)?.is_file(),
+                    "linked image preparation diagnostics"
+                );
+                private_json(
+                    &work.join("benchmark-image-preparation.private.json"),
+                    &json!({"output":String::from_utf8_lossy(&fs::read(diagnostics)?)}),
+                )?;
+            }
+            report["benchmark_image_preparation"] =
+                json!(if prepared.is_ok() { "passed" } else { "failed" });
+            if let Err(error) = &prepared {
+                let path = work.join("benchmark-image-preparation.json");
+                if let Ok(mut receipt) = crate::benchmark::read(&path)
+                    && receipt["status"] == "running"
+                {
+                    receipt["status"] = json!("interrupted");
+                    receipt["runner_error"] = json!(format!("{error:#}"));
+                    crate::benchmark::save(&path, &receipt)?;
+                }
+            }
+            save(&work, &report)?;
+            prepared?;
+            report["setup"] = json!("passed");
+            save(&work, &report)?;
+        }
         if names.iter().any(|name| name == "installation-isolation") {
             let peer = work.join("peer");
             fs::DirBuilder::new().mode(0o700).create(&peer)?;

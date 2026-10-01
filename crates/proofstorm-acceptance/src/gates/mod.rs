@@ -53,6 +53,10 @@ pub const NAMES: &[&str] = &[
     "benchmark-o5",
     "benchmark-o5-oracle",
     "benchmark-oracle",
+    "benchmark-o1-calibration",
+    "benchmark-o5-calibration",
+    "benchmark-o1-diagnostic",
+    "benchmark-o5-diagnostic",
     "qualification",
     "smoke",
     "runtime-lifecycle",
@@ -115,11 +119,23 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
     match name {
         "benchmark-o1" => crate::benchmark::run_gate(context, crate::benchmark::task::o1()),
         "benchmark-o5" => crate::benchmark::run_gate(context, crate::benchmark::task::o5()),
+        "benchmark-o1-diagnostic" => {
+            crate::benchmark::run_gate(context, crate::benchmark::task::o1_diagnostic())
+        }
+        "benchmark-o5-diagnostic" => {
+            crate::benchmark::run_gate(context, crate::benchmark::task::o5_diagnostic())
+        }
         "benchmark-o5-oracle" => {
             crate::benchmark::reference::run(context, crate::benchmark::task::o5())
         }
         "benchmark-oracle" => {
             crate::benchmark::reference::run(context, crate::benchmark::task::o1())
+        }
+        "benchmark-o1-calibration" => {
+            crate::benchmark::reference::calibrate(context, crate::benchmark::task::o1())
+        }
+        "benchmark-o5-calibration" => {
+            crate::benchmark::reference::calibrate(context, crate::benchmark::task::o5())
         }
         "qualification" => crate::qualification::run(context),
         "smoke" => smoke::run(context),

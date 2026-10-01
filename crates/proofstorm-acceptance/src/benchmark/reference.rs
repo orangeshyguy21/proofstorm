@@ -3,9 +3,32 @@ use super::{Context, events, observe_final, observer, read, save};
 use crate::{GateContext, McpClient, cell, native};
 use anyhow::{Context as _, Result, ensure};
 use serde_json::{Value, json};
-use std::process::Command;
+use sha2::Digest;
+use std::{
+    fs,
+    process::Command,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 pub fn run(context: &GateContext, selected_task: &super::task::Task) -> Result<()> {
+    run_profile(context, selected_task, false)
+}
+
+/// Automated task baseline, without the oracle's extra live payment retry.
+/// It does not measure model reasoning or grant a model score.
+pub fn calibrate(context: &GateContext, selected_task: &super::task::Task) -> Result<()> {
+    run_profile(context, selected_task, true)
+}
+
+fn run_profile(
+    context: &GateContext,
+    selected_task: &super::task::Task,
+    calibration: bool,
+) -> Result<()> {
+    ensure!(
+        context.benchmark.is_none(),
+        "reference controls cannot use a model harness"
+    );
     let config = Context {
         root: context.root.clone(),
         work: context.work().into(),
@@ -17,12 +40,42 @@ pub fn run(context: &GateContext, selected_task: &super::task::Task) -> Result<(
     };
     let path = config.work.join("benchmark-context.json");
     save(&path, &json!(config))?;
+    let mut source = Command::new("git");
+    source
+        .current_dir(&context.root)
+        .args(["rev-parse", "HEAD"]);
+    let source = crate::process::capture(source, 30)?;
+    let mut dirty = Command::new("git");
+    dirty
+        .current_dir(&context.root)
+        .args(["status", "--porcelain"]);
+    let dirty = crate::process::capture(dirty, 30)?;
+    ensure!(
+        source.status.success() && dirty.status.success(),
+        "reference source identity unavailable"
+    );
+    save(
+        &config.work.join("reference-provenance.json"),
+        &json!({
+            "format_version":1,"model_attempt":false,
+            "profile":if calibration {"calibration-reference-v1"} else {"grader-oracle-v1"},
+            "image_preparation_profile":super::preparation::PROFILE,
+            "source_revision":String::from_utf8_lossy(&source.stdout).trim(),"source_dirty":!dirty.stdout.is_empty(),
+            "runner_sha256":format!("{:x}",sha2::Sha256::digest(fs::read(std::env::current_exe()?)?)),
+            "mcp_sha256":format!("{:x}",sha2::Sha256::digest(fs::read(&context.artifacts.mcp)?)),
+            "cli_sha256":format!("{:x}",sha2::Sha256::digest(fs::read(&context.artifacts.cli)?)),
+            "task_hash":proofstorm_core::digest_json(selected_task),"os":std::env::consts::OS,"arch":std::env::consts::ARCH,
+            "logical_cpus":std::thread::available_parallelism()?.get()
+        }),
+    )?;
     let mut command = Command::new(std::env::current_exe()?);
     crate::client::clear_runtime_environment(&mut command);
     command.arg("--benchmark-proxy").arg(path);
     let mut client = McpClient::from_command(command, "benchmark-reference-control")?;
     let task = &config.task;
     let document = task.document();
+    let started_unix_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+    let task_start = Instant::now();
     client.call(
         "cell_up",
         json!({"name":&task.cell_name,"request_id":"reference-create","cell":document}),
@@ -98,21 +151,23 @@ pub fn run(context: &GateContext, selected_task: &super::task::Task) -> Result<(
         )?
     } else {
         let first = negative_melt(&config, &mut session, &invoice, "melt", &json!([]))?;
-        let second = negative_melt(
-            &config,
-            &mut session,
-            &invoice,
-            "melt-retry",
-            &json!([first["quote_id"]]),
-        )?;
-        ensure!(
-            first["quote_id"] != second["quote_id"],
-            "retry did not create a distinct quote"
-        );
-        save(
-            &config.work.join("reference-retry-quotes.json"),
-            &json!({"first":first,"second":second,"selected":first["quote_id"]}),
-        )?;
+        if !calibration {
+            let second = negative_melt(
+                &config,
+                &mut session,
+                &invoice,
+                "melt-retry",
+                &json!([first["quote_id"]]),
+            )?;
+            ensure!(
+                first["quote_id"] != second["quote_id"],
+                "retry did not create a distinct quote"
+            );
+            save(
+                &config.work.join("reference-retry-quotes.json"),
+                &json!({"first":first,"second":second,"selected":first["quote_id"]}),
+            )?;
+        }
         // Select the older quote deliberately. Neither recency nor invoice-only
         // correlation may replace the caller's exact quote identity.
         first
@@ -134,6 +189,9 @@ pub fn run(context: &GateContext, selected_task: &super::task::Task) -> Result<(
         report["payment_occurred"] = json!(false);
         report["diagnosis"] = json!("no_route");
     }
+    // End at task/report/agent-owned cleanup completion. Post-run verification,
+    // synthetic counterexamples and runner-owned teardown are outside this span.
+    let task_elapsed_seconds = task_start.elapsed().as_secs_f64();
     observe_final(
         &config,
         &super::report::Report::parse(&report.to_string()),
@@ -191,7 +249,10 @@ pub fn run(context: &GateContext, selected_task: &super::task::Task) -> Result<(
     );
     save(
         &config.work.join("oracle-reference.json"),
-        &json!({"kind":"known-good-grader-control","model_attempt":false,"task":task,"assertions":assertions,"negative_controls":negative_controls,"boundary_calls":super::calls(&events(&config.work)?)?.len(),"controls":{"extra_payment_rejected":true,"prose_preserves_claims_not_format_credit":true,"incorrect_report_rejected":true,"honest_failure_accepted_false_completion_rejected":true}}),
+        &json!({"kind":"known-good-grader-control","model_attempt":false,"task":task,"assertions":assertions,"negative_controls":negative_controls,"boundary_calls":super::calls(&events(&config.work)?)?.len(),
+            "profile":if calibration {"calibration-reference-v1"} else {"grader-oracle-v1"},
+            "timing":{"started_unix_ms":started_unix_ms,"task_elapsed_seconds":task_elapsed_seconds,"clock":"monotonic","scope":"first cell_up through report construction and observed cell cleanup","extra_live_retry":!calibration && task.payment_expectation == super::task::PaymentExpectation::UnpaidNoRoute},
+            "controls":{"extra_payment_rejected":true,"prose_preserves_claims_not_format_credit":true,"incorrect_report_rejected":true,"honest_failure_accepted_false_completion_rejected":true}}),
     )?;
     Ok(())
 }

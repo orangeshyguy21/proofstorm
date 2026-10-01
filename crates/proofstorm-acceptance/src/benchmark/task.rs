@@ -27,6 +27,14 @@ pub struct Task {
     pub report_schema: Value,
     pub rules: Value,
     pub score_weights: [u32; 3],
+    /// Separate, unranked execution contract. Absent from historical tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<DiagnosticProfile>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticProfile {
+    ExtendedDeadlineV1,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,6 +79,36 @@ impl Task {
 
 pub fn o1() -> &'static Task {
     static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| calibrated(o1_v06(), "0.7"))
+}
+
+pub fn o5() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| calibrated(o5_v02(), "0.3"))
+}
+
+fn calibrated(base: &Task, version: &str) -> Task {
+    let mut task = base.clone();
+    task.version = version.into();
+    task.scorer = format!("{}-70-15-15/{version}", base.id.to_lowercase());
+    task.target_seconds = 240.0;
+    task.timing_calibrated = true;
+    task.rules["timing"] = json!({
+        "profile":"prepared-reference-timing-v1",
+        "reference_profile":"calibration-reference-v1",
+        "image_preparation_profile":"selected-task-images-v2",
+        "samples_per_task":3,
+        "target_policy":"Maximum accepted reference duration rounded upward to a whole 60 seconds",
+        "deadline_policy":"Fixed 1200-second execution budget, not an estimated model-success percentile",
+        "evidence_sha256":"9250dc37f51ad708725c960beb904ca3aef6e1bf0138e92264e219ec299bd12d",
+        "limits":"Infrastructure baseline on one shared host; excludes model reasoning and discovery; does not estimate tail latency"
+    });
+    task
+}
+
+// Preserve the exact provisional contracts for historical offline regrading.
+fn o1_v06() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
     TASK.get_or_init(|| {
         let components = [
         ("chain","bitcoin","bitcoin-core","31.1","bitcoin-core/31/v1","cell"),
@@ -107,7 +145,7 @@ pub fn o1() -> &'static Task {
             allowed_tools:vec!["catalog_list".into(),"catalog_entry_read".into(),"catalog_config_schema_read".into(),"cell_plan".into(),"cell_read".into(),"cell_search".into(),"cell_up".into(),"cell_inspect".into(),"cell_wait".into(),"cell_exec".into(),"cell_remove".into(),"cell_component_status_list".into(),"cell_inventory_list".into(),"operation_status".into(),"operation_wait".into(),"operation_read".into(),"operation_cancel".into(),"activity_search".into(),"benchmark_checkpoint".into()],
             target_seconds:300.0, deadline_seconds:1200, timing_calibrated:false,
             operational_required:assertions.iter().filter(|(id,_)| id != "report").map(|(id,_)| id.clone()).collect(),
-            assertions, report_schema:Value::Null, score_weights:[70,15,15],
+            assertions, report_schema:Value::Null, score_weights:[70,15,15], diagnostic:None,
             rules:json!({"composition":"Discover schemas and compose the cell from semantic requirements; no complete cell document is supplied. Component identity and semantic bindings are scored, not a particular configuration schema version.","report":"Exactly one JSON object earns format credit. A single trailing JSON object after prose can validate claims. The schema defines shape only; claims must match independent observations, including success and cleanup. Missing evidence cannot validate a claim. Duplicate keys, ambiguous or incorrect claims fail.","environment":"Cleanup and preservation required; otherwise accepted score/success are null.","tools":"All failures count; success deduplicated by semantic arguments excluding request IDs. Read/discovery cap 3; other calls cap 1. No expected-negative calls.","payment_flow":"Exactly one successful payer funding payment and one settled recipient invoice; no offsetting cycles. Retain terminal evidence before removal."}),
         };
         task.report_schema = json!({"type":"object","additionalProperties":false,"required":["success","minted_sat","paid_sat","remaining_sat","cleanup"],"properties":{"success":{"type":"boolean"},"minted_sat":{"type":"integer"},"paid_sat":{"type":"integer"},"remaining_sat":{"type":"integer"},"cleanup":{"type":"boolean"}}});
@@ -117,15 +155,58 @@ pub fn o1() -> &'static Task {
 }
 /// Only currently implemented contracts are regradable by this binary.
 pub fn lookup(id: &str, version: &str) -> Option<&'static Task> {
-    [o1(), o5()]
-        .into_iter()
-        .find(|task| task.id == id && task.version == version)
+    [
+        o1(),
+        o5(),
+        o1_diagnostic(),
+        o5_diagnostic(),
+        o1_v06(),
+        o5_v02(),
+        o1_v06_diagnostic(),
+        o5_v02_diagnostic(),
+    ]
+    .into_iter()
+    .find(|task| task.id == id && task.version == version)
 }
 
-pub fn o5() -> &'static Task {
+fn extended(base: &Task) -> Task {
+    let mut task = base.clone();
+    task.version = format!("{}-diagnostic.1", base.version);
+    task.scorer = format!("{}-diagnostic/1", base.id.to_lowercase());
+    task.deadline_seconds = 3600;
+    task.diagnostic = Some(DiagnosticProfile::ExtendedDeadlineV1);
+    task.rules["evaluation"] = json!(
+        "Unranked extended-deadline diagnostic. Retain completion, assertions, tool counts, actual elapsed time and environment validity. No aggregate or timing score is awarded."
+    );
+    task.prompt = prompt(&task);
+    task.prompt.push_str("This is an unranked diagnostic with an extended execution allowance. Task, evidence and cleanup requirements still apply; no aggregate or timing score is awarded.\n");
+    task
+}
+
+pub fn o1_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o1()))
+}
+
+pub fn o5_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o5()))
+}
+
+fn o1_v06_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o1_v06()))
+}
+
+fn o5_v02_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o5_v02()))
+}
+
+fn o5_v02() -> &'static Task {
     static TASK: OnceLock<Task> = OnceLock::new();
     TASK.get_or_init(|| {
-        let mut task = o1().clone();
+        let mut task = o1_v06().clone();
         task.id = "O5".into();
         task.version = "0.2".into();
         task.scorer = "o5-70-15-15/0.2".into();
@@ -235,6 +316,69 @@ Scoring separates operational completion from formatting. Extra prose before one
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extended_contracts_preserve_originals_and_bind_deadline_to_prompt() {
+        assert_eq!(
+            proofstorm_core::digest_json(lookup("O1", "0.6").unwrap()),
+            "sha256:c3a1ec902d511ea6cae4aaf4e33e6019ce61baa08f9cb80f1b7352c600768ce5"
+        );
+        assert_eq!(
+            proofstorm_core::digest_json(lookup("O5", "0.2").unwrap()),
+            "sha256:659ee06315a9695c93e6280f8e89bb08211b6a0fee0d5148593891e0eb45556f"
+        );
+        for (base, diagnostic) in [
+            (o1(), o1_diagnostic()),
+            (o5(), o5_diagnostic()),
+            (o1_v06(), o1_v06_diagnostic()),
+            (o5_v02(), o5_v02_diagnostic()),
+        ] {
+            assert_ne!(
+                proofstorm_core::digest_json(base),
+                proofstorm_core::digest_json(diagnostic)
+            );
+            assert!(lookup(&diagnostic.id, &diagnostic.version).is_some());
+            assert_eq!(diagnostic.deadline_seconds, 3600);
+            assert!(diagnostic.prompt.contains("You have 3600 seconds."));
+            assert!(!diagnostic.prompt.contains("You have 1200 seconds."));
+            assert_eq!(base.components, diagnostic.components);
+            assert_eq!(base.assertions, diagnostic.assertions);
+            assert_eq!(base.operational_required, diagnostic.operational_required);
+        }
+    }
+
+    #[test]
+    fn calibration_versions_only_change_the_declared_timing_contract() {
+        for (legacy, current, version) in [(o1_v06(), o1(), "0.7"), (o5_v02(), o5(), "0.3")] {
+            assert_eq!(current.version, version);
+            assert_eq!(current.target_seconds.to_bits(), 240.0_f64.to_bits());
+            assert_eq!(current.deadline_seconds, 1200);
+            assert!(current.timing_calibrated);
+            assert_eq!(current.score_weights, [70, 15, 15]);
+            assert!(!legacy.timing_calibrated);
+            assert_eq!(legacy.target_seconds.to_bits(), 300.0_f64.to_bits());
+            assert_ne!(
+                proofstorm_core::digest_json(current),
+                proofstorm_core::digest_json(legacy)
+            );
+            let mut restored = json!(current);
+            for field in [
+                "version",
+                "scorer",
+                "target_seconds",
+                "timing_calibrated",
+                "rules",
+            ] {
+                restored[field] = json!(legacy)[field].clone();
+            }
+            assert_eq!(restored, json!(legacy));
+            assert_eq!(
+                current.rules["timing"]["image_preparation_profile"],
+                super::super::preparation::PROFILE
+            );
+            assert!(lookup(&current.id, &current.version).is_some());
+        }
+    }
 
     #[test]
     fn registry_and_roles_are_explicit_and_order_independent() {

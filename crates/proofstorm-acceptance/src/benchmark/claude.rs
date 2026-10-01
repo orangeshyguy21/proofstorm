@@ -231,7 +231,7 @@ pub fn run(context: &Context) -> Result<()> {
         "built-in subagent definitions are listed but no delegation tool is available",
         "reported cost is Claude Code's estimate; subscription tokens are not billed per call",
         "default MAX_MCP_OUTPUT_TOKENS applies to tool results",
-        "no hard token/spend budget claimed","time target provisional"]}),
+        "no hard token/spend budget claimed","timing contract retained in task"]}),
     )?;
     match &credential {
         Some((kind, secret)) => execute(context, &[(kind, secret.as_os_str())]),

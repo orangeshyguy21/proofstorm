@@ -314,7 +314,7 @@ mod tests {
             task,
             &observed,
             &[call.clone()],
-            Some(300.0),
+            Some(task.target_seconds),
             "completed",
             true,
             Some(true),
@@ -338,7 +338,7 @@ mod tests {
                     task,
                     &missing,
                     std::slice::from_ref(&call),
-                    Some(300.0),
+                    Some(task.target_seconds),
                     "completed",
                     true,
                     Some(true)
@@ -352,7 +352,7 @@ mod tests {
                 task,
                 &observed,
                 &[call],
-                Some(300.0),
+                Some(task.target_seconds),
                 "completed",
                 false,
                 Some(true)
