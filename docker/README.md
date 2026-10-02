@@ -14,7 +14,8 @@ The `upstream/<registry>/<repository>` path records their original source.
 | CDK and Nutshell | docker.io/cashubtc images, with the existing management-client wrappers |
 | LDK Server and CDK LDK Server processor | Pinned upstream source builds; see [payment processor packaging](payment/README.md) |
 | Keycloak | quay.io/keycloak/keycloak |
-| PostgreSQL, Redis, BusyBox | Docker Official Images under docker.io/library |
+| PostgreSQL, Redis | Docker Official Images under docker.io/library |
+| BusyBox | Unmodified Docker Official Image mirrored to ghcr.io/orangeshyguy21/proofstorm/busybox |
 | Cocod | Frozen source and dependency lock in its wallet provenance record |
 
 The catalog no longer contains Bitcoin Core 30.0 or the old Polar LND builds.
@@ -115,6 +116,34 @@ Receipts do not claim release readiness. Review the new immutable digest and
 provenance, update the catalog deliberately, and run its contracts/live gates.
 CI then builds a matching controller with the normal release flow. A source
 rebuild is not a substitute for a missing approved artifact during installation.
+
+## BusyBox mirror
+
+The probe helper and default workspace use the same BusyBox image. Its complete
+OCI index is mirrored from `docker.io/library/busybox` to
+`ghcr.io/orangeshyguy21/proofstorm/busybox` at the unchanged digest
+`sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662`.
+The copy retains all architectures and attestations; there is no rebuild.
+
+`catalog_image_source` redirects only this exact upstream repository and digest.
+The logical local-registry name retains `upstream/docker.io/library/busybox`, so
+existing cell locks also download from GHCR. Other BusyBox pins retain their
+original source. Runtime image preparation remains anonymous.
+
+To publish the exact copy, use an isolated Docker configuration containing only
+the GHCR package-write login, then explicitly copy the approved digest:
+
+```sh
+docker buildx imagetools create --prefer-index=false \
+  --tag ghcr.io/orangeshyguy21/proofstorm/busybox:upstream-73aaf090f3d85aa3 \
+  docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+```
+
+Do not replace an existing tag with different content. Make the package Public,
+then verify the index digest and anonymous pulls for both Linux amd64 and arm64
+using an isolated Docker configuration with no login. Keep the copy receipt and
+verification output in local maintainer evidence. A future BusyBox pin requires
+its own verified mirror before adding it to the source mapping.
 
 ## Updating a component
 

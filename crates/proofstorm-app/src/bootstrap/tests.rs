@@ -152,6 +152,25 @@ fn renamed_mint_repositories_preserve_saved_locks_only_for_shipped_digests() {
 }
 
 #[test]
+fn probe_and_saved_workspace_locks_download_busybox_from_ghcr() {
+    let home = tempfile::tempdir().unwrap();
+    let installation = fixture_installation(home.path());
+    let mut lock = sample_lock();
+    let image = proofstorm_kube::images::PROBE_IMAGE;
+    lock.entries[0].catalog_id = "workspace".into();
+    lock.entries[0].image = image.into();
+    let selected = selected_images(&installation, &lock).unwrap();
+    assert!(selected.contains(image));
+    let public = source(image).unwrap();
+    assert!(public.starts_with("ghcr.io/orangeshyguy21/proofstorm/busybox@sha256:"));
+    assert_eq!(
+        image.split_once('@').unwrap().1,
+        public.split_once('@').unwrap().1
+    );
+    assert!(fs::read_dir(home.path()).unwrap().next().is_none());
+}
+
+#[test]
 fn public_sources_preserve_every_shipped_digest() {
     for image in images() {
         let public = source(&image).unwrap();
