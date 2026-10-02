@@ -1,7 +1,5 @@
 //! Checkout builds publish only into their verified installation-local registry.
-mod registry;
-
-use super::{cluster, digest, docker, process};
+use super::{cluster, digest, docker, process, registry};
 use crate::installation::{CATALOG_REGISTRY, Installation};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};

@@ -38,7 +38,7 @@ For example, replace every placeholder in this single-slot plan:
   "runner_sha256": "<sha256 of acceptance binary>",
   "revision": "<git rev-parse HEAD>",
   "checkout_home": "/absolute/path/to/proofstorm/.proofstorm-dev/state",
-  "gate_timeout_seconds": 1800,
+  "gate_timeout_seconds": 4200,
   "max_setup_attempts": 3,
   "runs": [
     {
@@ -62,7 +62,8 @@ Code login, OpenCode configuration). The plan contains no credentials. Executabl
 hashes pin the executable file, not an entire CLI installation or its dynamically
 loaded dependencies. Model aliases are still subject to provider changes.
 
-The acceptance gate timeout is 1,200–14,400 seconds. Each task also retains its
+The current acceptance gate timeout is 4,200–14,400 seconds: the common
+3,600-second model allowance plus at least 600 seconds for verification. Each task retains its
 own model deadline. Neither setting is a hard token or spending cap. All listed
 slots can incur model charges.
 
@@ -112,22 +113,40 @@ score from comparison.
 
 Ctrl-C or SIGTERM requests cancellation and lets the acceptance runner finish
 its owned cleanup before the driver exits. Avoid force-killing that cleanup.
-New Docker containers, networks and volumes without Proofstorm ownership are
-reported without invalidating the run. Ordinary unrelated services, including
-Compose services, can be started during a campaign. Installation labels and
-reserved current or legacy Proofstorm/k3d names prevent an ownership exemption;
-missing ownership evidence fails verification. Existing resources, configuration,
-and cleanup of benchmark-owned resources remain strict, with only the existing
-preobserved lifecycle exceptions. The runner never deletes unrelated additions.
+Benchmark gates use `benchmark-shared-host-v1`. Unrelated Docker containers,
+networks and volumes can be started, stopped, rebuilt or removed while models
+run. Changes to personal Codex, Claude Code, OpenCode and kube configuration are
+also reported; benchmark adapters retain their isolated configuration. Acceptance
+and score receipts expose `shared_host_activity` counts for additions, changes
+and removals. Private snapshots retain identities and hashes.
 
-Acceptance receipts record `preservation_policy`, `preservation_baseline_additions`
-and `preservation_additions` (counts by resource type); private snapshots retain
-identities. Networks and volumes include creation and ownership observations so
-a replacement cannot hide behind the same volume name. Continuation independently
-rechecks snapshots and addition counts using the recorded policy. Historical
-receipts without this policy keep their original strict interpretation.
+Proofstorm ownership labels and reserved current or legacy Proofstorm/k3d names
+remain protected in either snapshot, including label removal and renaming.
+Missing ownership evidence, changed checkout state, leaked Proofstorm resources
+and failed owned cleanup still fail verification. No new deletion authority is
+granted. Docker inventory collection tolerates a resource disappearing between
+listing and inspection only after a successful second list confirms absence.
+Continuation independently verifies snapshots and reported activity counts.
+
+Shared host activity is not evidence that the benchmark caused it, and this
+policy does not certify that every unrelated resource was preserved. Other work
+can affect elapsed time through resource contention; timing stays end-to-end,
+with no invented correction or automatic score penalty for background activity.
+Frozen source, binaries and task contracts still cannot change mid-campaign.
+
+Non-benchmark acceptance gates keep the stricter `report-unowned-additions-v1`
+policy. Historical receipts retain their original policies and grades; they are
+not silently reclassified under the shared-host policy.
 
 ## Pinned tool transfers
+
+Catalog image inspection and copying use a temporary Docker configuration with
+anonymous authentication, shared with installation-local controller publication.
+The selected local engine and Buildx executable are preserved; user credential
+helpers, registry credentials and builder overrides are not inherited. Public
+source reads and local registry writes keep their digest checks and bounded
+diagnostic logs. This avoids Docker Desktop credential permission dialogs during
+benchmark setup without changing global Docker or macOS permissions.
 
 Bootstrap retries failed transfers up to three times, including partial-transfer
 and TLS failures. Each transfer has a 15-second connection timeout, 60-second

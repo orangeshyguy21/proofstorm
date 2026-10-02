@@ -223,7 +223,9 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
             elapsed_ms: 0,
         }]
     });
-    let (mut calls, unauthorized) = telemetry::reconcile(captured, &rows);
+    let explicit_outcomes = read(&work.join("benchmark-task.json"))
+        .is_ok_and(|task| task["rules"]["interpretation"] == "explicit-outcomes-v1");
+    let (mut calls, unauthorized) = telemetry::reconcile(captured, &rows, explicit_outcomes);
     if !complete {
         let id = calls
             .iter()

@@ -3,7 +3,11 @@ use super::super::score::Call;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub fn reconcile(mut calls: Vec<Call>, transcript: &[Value]) -> (Vec<Call>, bool) {
+pub fn reconcile(
+    mut calls: Vec<Call>,
+    transcript: &[Value],
+    explicit_outcomes: bool,
+) -> (Vec<Call>, bool) {
     let mut available = BTreeMap::<String, VecDeque<usize>>::new();
     for (index, call) in calls.iter().enumerate() {
         available
@@ -45,13 +49,20 @@ pub fn reconcile(mut calls: Vec<Call>, transcript: &[Value]) -> (Vec<Call>, bool
         // Missing MCP success is unknown telemetry; a harness schema/permission
         // rejection is an attempted call failure even though no MCP frame existed.
         let failed = part["state"]["status"] == "error";
-        unauthorized |= name.is_none() && !failed;
+        unauthorized |= name.is_none() && (explicit_outcomes || !failed);
         next += 1;
         calls.push(Call {
             id: next,
             tool: name.unwrap_or(tool).into(),
             arguments,
-            success: if failed { Some(false) } else { None },
+            success: if failed {
+                Some(false)
+            } else if explicit_outcomes && name.is_none() && part["state"]["status"] == "completed"
+            {
+                Some(true)
+            } else {
+                None
+            },
             elapsed_ms: 0,
         });
     }
@@ -72,6 +83,22 @@ pub fn reconcile(mut calls: Vec<Call>, transcript: &[Value]) -> (Vec<Call>, bool
 mod tests {
     use super::*;
     #[test]
+    fn foreign_attempts_violate_scope_independently_of_their_outcome() {
+        for status in ["error", "completed", "running"] {
+            let event = json!({"type":"tool_use","part":{"callID":"a","tool":"bash","state":{"status":status,"input":{}}}});
+            let (calls, unauthorized) = reconcile(vec![], &[event], true);
+            assert!(unauthorized);
+            assert_eq!(
+                calls[0].success,
+                match status {
+                    "error" => Some(false),
+                    "completed" => Some(true),
+                    _ => None,
+                }
+            );
+        }
+    }
+    #[test]
     fn wrappers_count_once_and_rejected_arguments_count_as_failures() {
         let args = json!({"name":"benchmark-o1"});
         let call = Call {
@@ -83,7 +110,7 @@ mod tests {
         };
         let event = json!({"type":"tool_use","part":{"callID":"a","tool":"proofstorm_cell_inspect","state":{"status":"completed","input":args}}});
         let rejected = json!({"type":"tool_use","part":{"callID":"b","tool":"invalid","state":{"status":"error","input":{}}}});
-        let (calls, unauthorized) = reconcile(vec![call], &[event.clone(), event, rejected]);
+        let (calls, unauthorized) = reconcile(vec![call], &[event.clone(), event, rejected], false);
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[1].success, Some(false));
         assert!(!unauthorized);
@@ -91,7 +118,7 @@ mod tests {
     #[test]
     fn unobserved_success_never_becomes_perfect_telemetry() {
         let event = json!({"type":"tool_use","part":{"callID":"a","tool":"bash","state":{"status":"completed","input":{}}}});
-        let (calls, unauthorized) = reconcile(vec![], &[event]);
+        let (calls, unauthorized) = reconcile(vec![], &[event], false);
         assert!(unauthorized);
         assert!(calls[0].success.is_none());
     }
@@ -107,6 +134,7 @@ mod tests {
                 elapsed_ms: 1,
             }],
             &[],
+            false,
         );
         assert_eq!(calls.len(), 2);
         assert!(calls[1].success.is_none());
@@ -122,7 +150,7 @@ mod tests {
             elapsed_ms: 120_000,
         };
         let event = json!({"type":"tool_use","part":{"callID":"a","tool":"proofstorm_cell_up","state":{"status":"error","input":{}}}});
-        let (calls, _) = reconcile(vec![call], &[event]);
+        let (calls, _) = reconcile(vec![call], &[event], false);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].success, Some(false));
     }

@@ -2546,7 +2546,7 @@ fn compact_operation_wait(operation: CellOperation, timed_out: bool) -> Operatio
     let native_result = operation.artifact.as_ref().and_then(|artifact| {
         let content = &artifact.content;
         content.get("exit_code")?;
-        Some(serde_json::Value::Object(
+        let mut result = serde_json::Value::Object(
             [
                 "exit_code",
                 "exit_signal",
@@ -2561,7 +2561,13 @@ fn compact_operation_wait(operation: CellOperation, timed_out: bool) -> Operatio
             .into_iter()
             .filter_map(|key| content.get(key).map(|value| (key.into(), value.clone())))
             .collect(),
-        ))
+        );
+        result["command_succeeded"] = content["exit_code"].as_i64()
+            .map_or(serde_json::Value::Null, |code| serde_json::json!(code == 0));
+        result["guidance"] = serde_json::json!(
+            "Operation phase describes execution, not command or payment success. Check command_succeeded and exit_code; verify application settlement independently."
+        );
+        Some(result)
     });
     OperationResult {
         operation_digest: digest_json(&serde_json::json!(operation)),
@@ -4222,7 +4228,13 @@ mod tests {
         assert_eq!(query.phase, OperationPhase::Succeeded);
         let native = query.native_result.unwrap();
         assert_eq!(native["exit_code"], 0);
+        assert_eq!(native["command_succeeded"], true);
         assert!(native.get("projection_succeeded").is_none());
+        let mut denied = operation(1);
+        denied.artifact.as_mut().unwrap().content["exit_code"] = serde_json::json!(1);
+        let denied = compact_operation_wait(denied, false);
+        assert_eq!(denied.phase, OperationPhase::Succeeded);
+        assert_eq!(denied.native_result.unwrap()["command_succeeded"], false);
         let mut missing = operation(7);
         missing.phase = OperationPhase::Failed;
         missing.artifact = None;

@@ -388,10 +388,12 @@ fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
 
 fn assert_private_transfer_schema(tool: &Value) {
     let schema = &tool["inputSchema"];
-    let reference = schema["properties"]["transfer"]["$ref"].as_str().unwrap();
-    let transfer = schema
-        .pointer(reference.strip_prefix('#').unwrap())
-        .unwrap();
+    let property = &schema["properties"]["transfer"];
+    let transfer = property["$ref"].as_str().map_or(property, |reference| {
+        schema
+            .pointer(reference.strip_prefix('#').unwrap())
+            .unwrap()
+    });
     let branches = transfer["anyOf"]
         .as_array()
         .expect("method-specific schema");

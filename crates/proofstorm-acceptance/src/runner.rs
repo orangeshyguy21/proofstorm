@@ -555,23 +555,41 @@ pub fn run(
     save(&work, &report)?;
     // The new installation has not been initialized yet, so none of these
     // preexisting resources can belong to this run. Never adopt existing state.
+    let shared_benchmark = names.iter().any(|name| name.starts_with("benchmark-"));
     let mut samples = Vec::new();
-    let (before, exclusions) =
+    let (before, exclusions) = if shared_benchmark {
+        let before = crate::preservation::snapshot_benchmark(selection.checkout_home.as_deref())?;
+        let name = "preservation-before-00.json";
+        private_json(&work.join(name), &before)?;
+        samples.push(name.to_owned());
+        (before, json!({}))
+    } else {
         crate::preservation::baseline(selection.checkout_home.as_deref(), |index, value| {
             let name = format!("preservation-before-{index:02}.json");
             private_json(&work.join(&name), value)?;
             samples.push(name);
             Ok(())
-        })?;
+        })?
+    };
     private_json(&work.join("preservation-before.json"), &before)?;
     report["preservation_baseline_samples"] = json!(samples);
     report["preservation_exclusions"] = exclusions.clone();
-    report["preservation_policy"] = json!(crate::preservation::ADDITIONS_POLICY);
+    report["preservation_policy"] = json!(if shared_benchmark {
+        crate::preservation::shared::POLICY
+    } else {
+        crate::preservation::ADDITIONS_POLICY
+    });
     let initial: Value =
         serde_json::from_slice(&fs::read(work.join("preservation-before-00.json"))?)?;
-    report["preservation_baseline_additions"] =
-        crate::preservation::verify_run(&initial, &before, &exclusions)?;
-    report["preservation_config_scope"] = json!({"claude":"top-level and project mcpServers; normalized JSON","other_configuration":"whole-file sha256"});
+    if shared_benchmark {
+        report["shared_host_baseline_activity"] =
+            crate::preservation::shared::verify(&initial, &before, &exclusions)?;
+        report["preservation_config_scope"] = json!({"personal_configuration":"whole-file sha256; reported only; adapters retain isolated configuration","checkout_state":"strict whole-file sha256"});
+    } else {
+        report["preservation_baseline_additions"] =
+            crate::preservation::verify_run(&initial, &before, &exclusions)?;
+        report["preservation_config_scope"] = json!({"claude":"top-level and project mcpServers; normalized JSON","other_configuration":"whole-file sha256"});
+    }
     save(&work, &report)?;
     let operation = (|| -> Result<()> {
         if let Some((plan, case)) = &qualification {
@@ -761,9 +779,17 @@ pub fn run(
         save(&work, &report)
     }.and(crate::benchmark::cleanup_harness_secrets(&work));
     let preservation = (|| -> Result<Value> {
-        let after = crate::preservation::snapshot(selection.checkout_home.as_deref())?;
+        let after = if shared_benchmark {
+            crate::preservation::snapshot_benchmark(selection.checkout_home.as_deref())?
+        } else {
+            crate::preservation::snapshot(selection.checkout_home.as_deref())?
+        };
         private_json(&work.join("preservation-after.json"), &after)?;
-        crate::preservation::verify_run(&before, &after, &exclusions)
+        if shared_benchmark {
+            crate::preservation::shared::verify(&before, &after, &exclusions)
+        } else {
+            crate::preservation::verify_run(&before, &after, &exclusions)
+        }
     })();
     let mut report: Value = serde_json::from_slice(&fs::read(work.join("acceptance.json"))?)?;
     report["preservation"] = json!(if preservation.is_ok() {
@@ -775,8 +801,13 @@ pub fn run(
         report["preservation_error"] = json!(format!("{error:#}"));
     }
     if let Ok(additions) = &preservation {
-        report["preservation_additions"] = additions.clone();
-        eprintln!("Unrelated Docker additions (reported): {additions}");
+        if shared_benchmark {
+            report["shared_host_activity"] = additions.clone();
+            eprintln!("Shared host activity (reported): {additions}");
+        } else {
+            report["preservation_additions"] = additions.clone();
+            eprintln!("Unrelated Docker additions (reported): {additions}");
+        }
     }
     save(&work, &report)?;
     if let Some((plan, case)) = &qualification {

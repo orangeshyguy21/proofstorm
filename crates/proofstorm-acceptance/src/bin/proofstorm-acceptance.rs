@@ -128,10 +128,10 @@ async fn main() -> Result<()> {
         )
     });
     if benchmark && !args.benchmark_prepare_images {
-        if names.iter().any(|name| name.ends_with("-diagnostic")) && args.worker_home.is_none() {
+        if args.worker_home.is_none() {
             anyhow::ensure!(
                 args.timeout >= 4200,
-                "extended diagnostics require --timeout of at least 4200 seconds for the 3600-second model budget plus verification"
+                "model benchmarks require --timeout of at least 4200 seconds for the common 3600-second model budget plus verification"
             );
         }
         anyhow::ensure!(

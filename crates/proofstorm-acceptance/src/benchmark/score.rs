@@ -111,8 +111,8 @@ pub fn grade(
         .map(|r| f64::from(task.score_weights[1]) * r);
     let time_points = timing.map(|t| {
         f64::from(task.score_weights[2])
-            * ((f64::from(task.deadline_seconds) - t)
-                / (f64::from(task.deadline_seconds) - task.target_seconds))
+            * ((f64::from(task.time_zero_seconds()) - t)
+                / (f64::from(task.time_zero_seconds()) - task.target_seconds))
                 .clamp(0.0, 1.0)
     });
     let quality = f64::from(diagnostic) * f64::from(task.score_weights[0])
@@ -169,6 +169,29 @@ pub fn grade(
         "quality_points":quality,"tool_points":tool_points,"time_points":time_points,
         "accepted_score":accepted_score,"tools":calls,"elapsed_seconds":timing,
         "outcome":outcome,"runner_cleanup":cleanup});
+    if task.rules["interpretation"] == "explicit-outcomes-v1" {
+        record["failed_requirements"] = json!(
+            task.operational_required
+                .iter()
+                .filter(|key| observations[key.as_str()] != true)
+                .collect::<Vec<_>>()
+        );
+        record["workflow_success"] = json!(
+            task.operational_required
+                .iter()
+                .filter(|key| !matches!(key.as_str(), "autonomy" | "checkpoint_order"))
+                .all(|key| observations[key.as_str()] == true)
+                && outcome == "completed"
+                && within_deadline
+        );
+        record["autonomy_compliant"] = observations["autonomy"].clone();
+        record["checkpoint_order_valid"] = observations["checkpoint_order"].clone();
+    }
+    if task.time_zero_seconds.is_some() {
+        record["ranking_eligible"] = json!(task.diagnostic.is_none());
+        record["execution_deadline_seconds"] = json!(task.deadline_seconds);
+        record["time_zero_seconds"] = json!(task.time_zero_seconds());
+    }
     if task.diagnostic.is_some() {
         record["evaluation_profile"] = json!(task.diagnostic);
         record["ranking_eligible"] = json!(false);
@@ -191,8 +214,14 @@ mod tests {
     fn calibrated_boundaries_preserve_legacy_scores_and_completion_gates() {
         use super::super::task;
         for (current, previous) in [
-            (task::o1(), task::lookup("O1", "0.6").unwrap()),
-            (task::o5(), task::lookup("O5", "0.2").unwrap()),
+            (
+                task::lookup("O1", "0.8").unwrap(),
+                task::lookup("O1", "0.6").unwrap(),
+            ),
+            (
+                task::lookup("O5", "0.4").unwrap(),
+                task::lookup("O5", "0.2").unwrap(),
+            ),
         ] {
             let mut observations: Value = current
                 .assertions
@@ -300,8 +329,8 @@ mod tests {
             "completed",
             true,
         );
-        assert_eq!(standard["task_success"], false);
-        assert_eq!(standard["accepted_score"], 0.0);
+        assert_eq!(standard["task_success"], true);
+        assert_eq!(standard["accepted_score"], 85.0);
     }
     fn counts(calls: &[Call]) -> Value {
         super::counts(super::super::task::o1(), calls)
@@ -374,9 +403,54 @@ mod tests {
         }
         assert!(grade(&good(), &calls, Some(1.0), "completed", false)["accepted_score"].is_null());
         assert_eq!(
-            grade(&good(), &calls, Some(1200.1), "completed", true)["accepted_score"],
+            grade(&good(), &calls, Some(3600.1), "completed", true)["accepted_score"],
             0.0
         );
+    }
+    #[test]
+    fn common_allowance_scores_slow_correct_runs_without_relaxing_completion() {
+        for task in [super::super::task::o1(), super::super::task::o5()] {
+            let mut observations: Value = task
+                .assertions
+                .iter()
+                .map(|(key, _)| (key.clone(), json!(true)))
+                .collect();
+            observations["report_valid"] = json!(true);
+            observations["report_format"] = json!(true);
+            for (seconds, expected, completed) in [
+                (240.0, 100.0, true),
+                (720.0, 92.5, true),
+                (1200.0, 85.0, true),
+                (1200.1, 85.0, true),
+                (2400.0, 85.0, true),
+                (3600.0, 85.0, true),
+                (3600.1, 0.0, false),
+            ] {
+                let result = super::grade(
+                    task,
+                    &observations,
+                    &[call(1, Some(true))],
+                    Some(seconds),
+                    "completed",
+                    true,
+                    Some(true),
+                );
+                assert_eq!(result["accepted_score"], expected);
+                assert_eq!(result["accepted_success"], completed);
+                assert_eq!(result["ranking_eligible"], true);
+            }
+            observations["accounting"] = json!(false);
+            let failed = super::grade(
+                task,
+                &observations,
+                &[call(1, Some(true))],
+                Some(2400.0),
+                "completed",
+                true,
+                Some(true),
+            );
+            assert_eq!(failed["accepted_score"], 0.0);
+        }
     }
     #[test]
     fn report_format_and_environment_do_not_erase_operational_completion() {

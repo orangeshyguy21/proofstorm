@@ -11,6 +11,7 @@ pub mod reference;
 mod report;
 pub mod score;
 pub mod task;
+mod timing;
 use anyhow::{Context as _, Result, ensure};
 use report::Report;
 use serde::{Deserialize, Serialize};
@@ -306,7 +307,19 @@ pub fn finalize(work: &Path) -> Result<Value> {
     record["attempt"] = attempt_summary;
     record["runner_cleanup"] = json!(acceptance["cleanup"] == "passed");
     record["preservation"] = acceptance["preservation"].clone();
+    if acceptance["preservation_policy"] == crate::preservation::shared::POLICY {
+        record["preservation_policy"] = acceptance["preservation_policy"].clone();
+        record["shared_host_activity"] = acceptance["shared_host_activity"].clone();
+    }
     record["telemetry_error"] = json!(telemetry_error);
+    if config.task.rules["interpretation"] == "explicit-outcomes-v1" {
+        record["timing_breakdown"] = timing::summarize(&events(work)?, &record["elapsed_seconds"]);
+        let funded = read(&work.join("funded.json")).unwrap_or(Value::Null);
+        record["checkpoint_diagnostics"] = json!({
+            "funded_evidence_present":!funded.is_null(),
+            "recipient_invoice_count_at_funded":funded["recipient_invoices"]["invoices"].as_array().map(Vec::len),
+        });
+    }
     let mut evidence = BTreeMap::new();
     for name in EVIDENCE_FILES {
         if let Ok(bytes) = fs::read(work.join(name)) {
@@ -369,7 +382,7 @@ fn write_report(work: &Path, task: &task::Task, record: &Value) -> Result<()> {
             .map_or_else(|| "unscored".to_owned(), |n| format!("{n:.2}"))
     };
     let summary = format!(
-        "# {task_id} benchmark development pilot\n\nStatus: {}. Accepted score: {} / 100.\n\nOperational task complete: {}. Structured claims valid: {}. JSON-only format: {}.\n\nEnvironment valid: {}. Runner cleanup: {}. Preservation: {}.\n\nDiagnostic quality: {} / 100; quality points: {} / {quality_weight}; tool points: {} / {tool_weight}; time points: {} / {time_weight}. Task score before environment validation: {} / 100.\n\nTool calls: {} successes, {} failures, {} pending; {} successful calls excluded from scoring.\n\nElapsed seconds: {}. Agent cleanup: {}.\n\nInvalid environments are excluded from model comparisons; a diagnostic task score is not an accepted score. This single-task pilot is not a model ranking. Time targets remain uncalibrated. See benchmark-result.json and private retained evidence.\n",
+        "# {task_id} benchmark development pilot\n\nStatus: {}. Accepted score: {} / 100.\n\nOperational task complete: {}. Structured claims valid: {}. JSON-only format: {}.\n\nEnvironment valid: {}. Runner cleanup: {}. Preservation: {}.\n\nDiagnostic quality: {} / 100; quality points: {} / {quality_weight}; tool points: {} / {tool_weight}; time points: {} / {time_weight}. Task score before environment validation: {} / 100.\n\nTool calls: {} successes, {} failures, {} pending; {} successful calls excluded from scoring.\n\nElapsed seconds: {}. Agent cleanup: {}.\n\nInvalid environments are excluded from model comparisons; a diagnostic task score is not an accepted score. This single-task pilot is not a model ranking. Timing calibrated: {timing_calibrated}; target: {target_seconds}s; zero time credit: {time_zero_seconds}s; execution deadline: {deadline_seconds}s. See benchmark-result.json and private retained evidence.\n",
         record["status"].as_str().unwrap_or("unknown"),
         number(&record["accepted_score"]),
         record["task_success"],
@@ -389,12 +402,31 @@ fn write_report(work: &Path, task: &task::Task, record: &Value) -> Result<()> {
         record["tools"]["excluded_successes"],
         number(&record["elapsed_seconds"]),
         record["assertions"]["agent_cleanup"],
+        timing_calibrated = task.timing_calibrated,
+        target_seconds = task.target_seconds,
+        time_zero_seconds = task.time_zero_seconds(),
+        deadline_seconds = task.deadline_seconds,
         task_id = task.id,
         quality_weight = task.score_weights[0],
         tool_weight = task.score_weights[1],
         time_weight = task.score_weights[2],
     );
     let mut assertions = String::new();
+    if task.rules["interpretation"] == "explicit-outcomes-v1" {
+        writeln!(
+            assertions,
+            "Workflow outcome: {}. Autonomy compliant: {}. Checkpoint order valid: {}. Failed requirements: {}.\n",
+            record["workflow_success"],
+            record["autonomy_compliant"],
+            record["checkpoint_order_valid"],
+            record["failed_requirements"]
+        )?;
+        writeln!(
+            assertions,
+            "Timing breakdown (milliseconds, overlapping categories): {}.\n",
+            record["timing_breakdown"]
+        )?;
+    }
     if let Some(values) = record["assertions"].as_object() {
         for (name, passed) in values {
             writeln!(assertions, "- {name}: {passed}")?;

@@ -10,7 +10,7 @@ fn plan(work: &Path, count: usize) -> Plan {
         runner_sha256: "runner-digest".into(),
         revision: "source-revision".into(),
         checkout_home: work.join("checkout"),
-        gate_timeout_seconds: 1800,
+        gate_timeout_seconds: 4200,
         max_setup_attempts: 3,
         runs: (0..count)
             .map(|index| Run {
@@ -185,6 +185,67 @@ fn additions_do_not_relax_cleanup_ownership_or_recorded_policy_verification() {
             read(&plan.work.join("results.json")).unwrap()[0]["score"],
             Value::Null
         );
+    }
+}
+
+#[test]
+fn shared_host_activity_is_rechecked_and_does_not_relax_cleanup_or_ownership() {
+    for mode in [
+        "allowed",
+        "cleanup-failed",
+        "wrong-count",
+        "owned",
+        "legacy",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan(dir.path(), 1);
+        let result = drive(
+            &plan,
+            &NOT_CANCELLED,
+            || Ok(()),
+            |entry| {
+                receipt(&plan, entry, true);
+                let work = plan.attempt_path(entry);
+                let before = json!({"format_version":2,"containers":{"orchard":{"name":"/orchard","owner":null,"cluster":""}},"networks":{},"volumes":{},"configuration_sha256":{}});
+                let mut after = before.clone();
+                after["containers"] = json!({});
+                if mode == "owned" {
+                    after["containers"]["leak"] =
+                        json!({"name":"leak","owner":"this-run","cluster":""});
+                }
+                save(&work.join("preservation-before.json"), &before)?;
+                save(&work.join("preservation-after.json"), &after)?;
+                let mut acceptance = read(&work.join("acceptance.json"))?;
+                acceptance["preservation_policy"] = json!(crate::preservation::shared::POLICY);
+                acceptance["shared_host_activity"] =
+                    json!({"containers":{"added":0,"removed":1,"changed":0}});
+                match mode {
+                    "cleanup-failed" => acceptance["cleanup"] = json!("failed"),
+                    "wrong-count" => {
+                        acceptance["shared_host_activity"]["containers"]["removed"] = json!(0);
+                    }
+                    "legacy" => {
+                        acceptance["preservation_policy"] =
+                            json!(crate::preservation::ADDITIONS_POLICY);
+                    }
+                    _ => {}
+                }
+                save(&work.join("acceptance.json"), &acceptance)?;
+                let mut grade = read(&work.join("benchmark-result.json"))?;
+                grade["evidence_sha256"]["acceptance.json"] =
+                    json!(hash(&work.join("acceptance.json"))?);
+                save(&work.join("benchmark-result.json"), &grade)?;
+                Ok(Some(0))
+            },
+        );
+        assert_eq!(result.is_ok(), mode == "allowed", "{mode}: {result:?}");
+        let replay = drive(
+            &plan,
+            &NOT_CANCELLED,
+            || Ok(()),
+            |_| panic!("no model replay"),
+        );
+        assert_eq!(replay.is_ok(), mode == "allowed");
     }
 }
 
@@ -537,6 +598,24 @@ fn plan_rejects_changed_contracts_unknown_fields_and_duplicate_slots() {
 }
 
 #[test]
+fn gate_timeout_cannot_cut_short_the_common_model_allowance() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut plan = plan(dir.path(), 1);
+    assert!(plan.validate().is_ok());
+    for timeout in [1200, 1800, 3600, 4199] {
+        plan.gate_timeout_seconds = timeout;
+        assert!(
+            plan.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("model deadline")
+        );
+    }
+    plan.gate_timeout_seconds = 4200;
+    assert!(plan.validate().is_ok());
+}
+
+#[test]
 fn source_validation_checks_runner_and_cli_bytes_before_git_or_launch() {
     let dir = tempfile::tempdir().unwrap();
     let mut plan = plan(dir.path(), 1);
@@ -612,7 +691,7 @@ fn subprocess_uses_exact_cli_arguments_and_a_private_non_reusable_log() {
             "--work-dir",
             work.to_str().unwrap(),
             "--timeout",
-            "1800",
+            "4200",
             "--benchmark-harness",
             harness,
             option,
