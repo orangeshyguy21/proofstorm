@@ -1,13 +1,15 @@
 //! Reconcile harness tool events with the MCP boundary, counting wrappers once.
-use super::super::score::Call;
+use super::super::{score::Call, task::Task};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub fn reconcile(
     mut calls: Vec<Call>,
     transcript: &[Value],
-    explicit_outcomes: bool,
+    task: Option<&Task>,
 ) -> (Vec<Call>, bool) {
+    let explicit_outcomes =
+        task.is_some_and(|task| task.rules["interpretation"] == "explicit-outcomes-v1");
     let mut available = BTreeMap::<String, VecDeque<usize>>::new();
     for (index, call) in calls.iter().enumerate() {
         available
@@ -29,9 +31,23 @@ pub fn reconcile(
             continue;
         }
         let tool = part["tool"].as_str().unwrap_or("unknown");
-        let arguments = part["state"]["input"].clone();
-        let name = tool.strip_prefix("proofstorm_");
-        if let Some(name) = name {
+        let arguments = &part["state"]["input"];
+        // OpenCode rewrites rejected calls to `invalid`, retaining only the
+        // original tool name and error. Classify that attempt against the task,
+        // without inventing its original arguments or borrowing MCP evidence.
+        let rejected_tool =
+            if explicit_outcomes && tool == "invalid" && arguments["error"].is_string() {
+                arguments["tool"].as_str()
+            } else {
+                None
+            };
+        let tool = rejected_tool.unwrap_or(tool);
+        let name = tool
+            .strip_prefix("proofstorm_")
+            .filter(|name| rejected_tool.is_none() || task.is_some_and(|task| task.allowed(name)));
+        if rejected_tool.is_none()
+            && let Some(name) = name
+        {
             let key = proofstorm_core::digest_json(&json!([name, arguments]));
             if let Some(indices) = available.get_mut(&key)
                 && let Some(index) = indices.pop_front()
@@ -48,13 +64,15 @@ pub fn reconcile(
         }
         // Missing MCP success is unknown telemetry; a harness schema/permission
         // rejection is an attempted call failure even though no MCP frame existed.
-        let failed = part["state"]["status"] == "error";
+        // A completed rejection wrapper is still a failed original call.
+        let failed = part["state"]["status"] == "error"
+            || (rejected_tool.is_some() && part["state"]["status"] == "completed");
         unauthorized |= name.is_none() && (explicit_outcomes || !failed);
         next += 1;
         calls.push(Call {
             id: next,
             tool: name.unwrap_or(tool).into(),
-            arguments,
+            arguments: arguments.clone(),
             success: if failed {
                 Some(false)
             } else if explicit_outcomes && name.is_none() && part["state"]["status"] == "completed"
@@ -81,7 +99,106 @@ pub fn reconcile(
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::task;
     use super::*;
+
+    fn reconcile(calls: Vec<Call>, transcript: &[Value], explicit: bool) -> (Vec<Call>, bool) {
+        super::reconcile(
+            calls,
+            transcript,
+            Some(if explicit {
+                task::o1()
+            } else {
+                task::lookup("O1", "0.7").unwrap()
+            }),
+        )
+    }
+
+    fn rejection(input: &Value, status: &str) -> Value {
+        json!({"type":"tool_use","part":{"callID":"rejected","tool":"invalid","state":{"status":status,"input":input}}})
+    }
+
+    #[test]
+    fn rejected_wrappers_require_an_allowed_original_tool() {
+        for input in [
+            json!({"tool":"bash","error":"invalid arguments"}),
+            json!({"tool":"other_cell_up","error":"invalid arguments"}),
+            json!({"tool":"proofstorm_unknown","error":"unknown tool"}),
+            json!({"tool":"cell_up","error":"invalid arguments"}),
+            json!({"error":"original tool missing"}),
+            json!({"tool":null,"error":"original tool missing"}),
+            json!({"tool":"proofstorm_cell_up"}),
+        ] {
+            for status in ["error", "completed", "running"] {
+                let (_, unauthorized) = reconcile(vec![], &[rejection(&input, status)], true);
+                assert!(unauthorized, "{status}: {input}");
+            }
+        }
+        let mut restricted = task::o1().clone();
+        restricted.allowed_tools.retain(|tool| tool != "cell_up");
+        let (_, unauthorized) = super::reconcile(
+            vec![],
+            &[rejection(
+                &json!({"tool":"proofstorm_cell_up","error":"invalid arguments"}),
+                "error",
+            )],
+            Some(&restricted),
+        );
+        assert!(unauthorized);
+    }
+
+    #[test]
+    fn rejected_wrappers_never_consume_proxy_evidence_or_complete_pending_calls() {
+        let input = json!({"tool":"proofstorm_cell_up","error":"invalid arguments"});
+        for status in ["error", "completed", "running"] {
+            let captured = Call {
+                id: 1,
+                tool: "cell_up".into(),
+                arguments: input.clone(),
+                success: Some(true),
+                elapsed_ms: 1,
+            };
+            let (calls, unauthorized) =
+                reconcile(vec![captured], &[rejection(&input, status)], true);
+            assert!(!unauthorized);
+            assert_eq!(calls.len(), 3);
+            assert_eq!(calls[0].success, Some(true));
+            assert_eq!(calls[1].tool, "cell_up");
+            assert_eq!(calls[1].arguments, input);
+            assert_eq!(
+                calls[1].success,
+                if status == "running" {
+                    None
+                } else {
+                    Some(false)
+                }
+            );
+            assert_eq!(calls[2].tool, "telemetry_gap");
+            assert!(calls[2].success.is_none());
+        }
+    }
+
+    #[test]
+    fn legacy_rejected_wrappers_keep_their_original_normalization() {
+        for (id, version) in [("O1", "0.6"), ("O1", "0.7"), ("O5", "0.2"), ("O5", "0.3")] {
+            for status in ["error", "completed", "running"] {
+                let input = json!({"tool":"proofstorm_cell_up","error":"invalid arguments"});
+                let (calls, unauthorized) = super::reconcile(
+                    vec![],
+                    &[rejection(&input, status)],
+                    task::lookup(id, version),
+                );
+                assert_eq!(unauthorized, status != "error");
+                assert_eq!(calls[0].tool, "invalid");
+                assert_eq!(calls[0].arguments, input);
+                assert_eq!(
+                    calls[0].success,
+                    if status == "error" { Some(false) } else { None }
+                );
+            }
+        }
+    }
+
     #[test]
     fn foreign_attempts_violate_scope_independently_of_their_outcome() {
         for status in ["error", "completed", "running"] {

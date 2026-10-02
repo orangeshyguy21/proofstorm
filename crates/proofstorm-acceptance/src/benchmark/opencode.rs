@@ -223,9 +223,10 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
             elapsed_ms: 0,
         }]
     });
-    let explicit_outcomes = read(&work.join("benchmark-task.json"))
-        .is_ok_and(|task| task["rules"]["interpretation"] == "explicit-outcomes-v1");
-    let (mut calls, unauthorized) = telemetry::reconcile(captured, &rows, explicit_outcomes);
+    let task = read(&work.join("benchmark-task.json"))
+        .ok()
+        .and_then(|value| serde_json::from_value::<super::task::Task>(value).ok());
+    let (mut calls, unauthorized) = telemetry::reconcile(captured, &rows, task.as_ref());
     if !complete {
         let id = calls
             .iter()
@@ -274,6 +275,77 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permitted_rejections_reduce_tool_score_without_failing_autonomy() -> Result<()> {
+        for task in [super::super::task::o1(), super::super::task::o5()] {
+            for status in ["error", "completed"] {
+                let work = tempfile::tempdir()?;
+                save(&work.path().join("benchmark-task.json"), &json!(task))?;
+                save(
+                    &work.path().join("benchmark-attempt.json"),
+                    &json!({"outcome":"completed","elapsed_seconds":240.0}),
+                )?;
+                let args = json!({"name":task.cell_name});
+                let rejected_input =
+                    json!({"tool":"proofstorm_cell_up","error":"missing required field"});
+                let rejected = json!({"type":"tool_use","part":{"callID":"rejected","tool":"invalid","state":{"status":status,"input":rejected_input}}});
+                for (file, rows) in [
+                    (
+                        "events.jsonl",
+                        vec![
+                            json!({"kind":"start","id":1,"tool":"cell_inspect","arguments":args}),
+                            json!({"kind":"end","id":1,"success":true,"elapsed_ms":1}),
+                        ],
+                    ),
+                    (
+                        "harness.jsonl",
+                        vec![
+                            json!({"type":"tool_use","part":{"callID":"inspected","tool":"proofstorm_cell_inspect","state":{"status":"completed","input":args}}}),
+                            rejected.clone(),
+                            rejected,
+                        ],
+                    ),
+                ] {
+                    fs::write(
+                        work.path().join(file),
+                        rows.iter()
+                            .map(Value::to_string)
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    )?;
+                }
+                let outcome = retained(work.path())?;
+                assert!(!outcome.unauthorized);
+                assert_eq!(outcome.calls.len(), 2);
+                assert_eq!(outcome.calls[1].tool, "cell_up");
+                assert_eq!(outcome.calls[1].arguments, rejected_input);
+                assert_eq!(outcome.calls[1].success, Some(false));
+                let mut observations: Value = task
+                    .assertions
+                    .iter()
+                    .map(|(name, _)| (name.clone(), json!(true)))
+                    .collect();
+                observations["autonomy"] = json!(!outcome.unauthorized);
+                observations["report_valid"] = json!(true);
+                let score = super::super::score::grade(
+                    task,
+                    &observations,
+                    &outcome.calls,
+                    outcome.elapsed_seconds,
+                    &outcome.outcome,
+                    true,
+                    Some(true),
+                );
+                assert_eq!(score["tools"]["raw_failures"], 1);
+                assert_eq!(score["tool_points"], 7.5);
+                assert_eq!(score["accepted_score"], 92.5);
+                assert_eq!(score["status"], "accepted");
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn harness_directory_and_ambient_config_are_explicit() {
         let config = Context {

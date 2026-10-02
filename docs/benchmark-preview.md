@@ -74,6 +74,12 @@ restricted Proofstorm MCP tool set; direct host shell, filesystem, delegation,
 and web tools are denied. Component-native commands remain available through
 `cell_exec`.
 
+For current contracts, OpenCode's `invalid` rejection wrappers are classified
+using the original tool name and the task's allowlist. A rejected permitted call
+counts as one tool failure, even if the wrapper itself completed successfully;
+it does not violate autonomy. Foreign or unidentified tool attempts still do.
+The retained wrapper keeps the original tool name and error as evidence.
+
 For Codex, select the harness and exact Codex model ID instead:
 
 ```sh
