@@ -106,25 +106,37 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
                     || !item["error"].is_null()
                     || item["result"]["isError"] == true;
                 let owned = item["server"] == "proofstorm";
-                if explicit_outcomes && neutral_discovery(item) {
+                let key = proofstorm_core::digest_json(&json!([name, args]));
+                // Proxy evidence identifies actual tools/call requests, including a
+                // rejected call whose name happens to match a Codex discovery tool.
+                let captured_call = owned
+                    .then(|| available.get_mut(&key).and_then(VecDeque::pop_front))
+                    .flatten();
+                if let Some(index) = captured_call {
+                    if failed_call {
+                        calls[index].success = Some(false);
+                    } else if item["status"] != "completed" {
+                        calls[index].success = None;
+                    }
+                } else if explicit_outcomes && neutral_discovery(item) {
                     discovery.push(item.clone());
                     if !terminal.contains(&id)
                         || !matches!(item["status"].as_str(), Some("completed" | "failed"))
                     {
                         complete = false;
                     }
-                    continue;
-                }
-                let key = proofstorm_core::digest_json(&json!([name, args]));
-                if owned && let Some(index) = available.get_mut(&key).and_then(VecDeque::pop_front)
-                {
-                    if failed_call {
-                        calls[index].success = Some(false);
-                    } else if item["status"] != "completed" {
-                        calls[index].success = None;
-                    }
                 } else {
-                    unauthorized |= !owned && (explicit_outcomes || !failed_call);
+                    // A built-in resource read or disallowed listing remains a
+                    // foreign capability even when Codex labels it proofstorm.
+                    let foreign = !owned
+                        || (explicit_outcomes
+                            && matches!(
+                                name,
+                                "list_mcp_resources"
+                                    | "list_mcp_resource_templates"
+                                    | "read_mcp_resource"
+                            ));
+                    unauthorized |= foreign && (explicit_outcomes || !failed_call);
                     push(
                         &mut calls,
                         name,
@@ -132,7 +144,7 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
                         if failed_call {
                             Some(false)
                         } else if explicit_outcomes
-                            && !owned
+                            && foreign
                             && terminal.contains(&id)
                             && item["status"] == "completed"
                         {
@@ -192,7 +204,10 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
 }
 
 fn neutral_discovery(item: &Value) -> bool {
-    item["server"] == "codex"
+    // Codex emits built-in resource discovery under either its own namespace or
+    // the selected MCP server (observed with CLI 0.159.3). Only scoped listing is
+    // neutral; foreign servers, resource reads and malformed arguments are not.
+    matches!(item["server"].as_str(), Some("codex" | "proofstorm"))
         && matches!(
             item["tool"].as_str(),
             Some("list_mcp_resources" | "list_mcp_resource_templates")

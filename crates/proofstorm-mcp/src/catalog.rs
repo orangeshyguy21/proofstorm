@@ -10,7 +10,11 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::coded_invalid_request;
+use super::{
+    coded_invalid_request,
+    input_error::{self, Issue},
+    read_query,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -231,9 +235,15 @@ pub(super) fn catalog_config_schema_with_catalog(
     catalog: &CatalogResponse,
 ) -> Result<CatalogConfigSchemaResponse, ErrorData> {
     if !request.pointer.is_empty() && !request.pointer.starts_with('/') {
-        return Err(coded_invalid_request(
+        return Err(input_error::invalid(
             "catalog_schema_pointer_invalid",
             "configuration schema pointer must be empty or begin with '/'",
+            &[Issue {
+                path: "/pointer".into(),
+                code: "invalid_pointer",
+                expected: serde_json::json!({"format":"RFC 6901", "empty_selects_root":true}),
+                example: serde_json::json!(""),
+            }],
         ));
     }
     let entry = exact_catalog_entry(&catalog.entries, &request.id, &request.version)?;
@@ -246,11 +256,13 @@ pub(super) fn catalog_config_schema_with_catalog(
             .cloned()
             .ok_or_else(|| {
                 ErrorData::resource_not_found(
-                    format!(
-                        "configuration schema pointer {:?} was not found for {:?} version {:?}",
-                        request.pointer, request.id, request.version
-                    ),
-                    Some(serde_json::json!({"code": "catalog_schema_pointer_not_found"})),
+                    "Configuration schema pointer was not found; select an available child or the suggested existing parent",
+                    Some(serde_json::json!({
+                        "code": "catalog_schema_pointer_not_found",
+                        "issues":[read_query::missing_pointer(&entry.config_schema, &request.pointer)],
+                        "config_schema_digest":entry.config_schema_digest,
+                        "next_tool":"catalog_config_schema_read",
+                    })),
                 )
             })?
     };

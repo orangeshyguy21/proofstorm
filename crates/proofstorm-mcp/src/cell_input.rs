@@ -1,5 +1,5 @@
 //! Cell and link inputs share strict parsing across inline documents, JSON strings and files.
-mod diagnostics;
+pub(crate) mod diagnostics;
 use std::{fs::File, io::BufReader, path::Path};
 
 use proofstorm_core::{

@@ -33,6 +33,8 @@ pub use activity_search::ActivitySearchRequest;
 mod operation_read;
 pub use operation_read::OperationReadRequest;
 mod evidence;
+mod input_error;
+mod output_guidance;
 mod tool_error;
 mod tool_schema;
 pub use evidence::{
@@ -104,7 +106,9 @@ pub struct CellExecRequest {
     /// Optional run grouping; ordinary commands receive automatic attribution.
     #[serde(default)]
     pub run_id: String,
+    /// Native command deadline in 1..=300 seconds; distinct from `operation_wait`'s polling limit.
     #[serde(default = "default_wait_timeout_seconds")]
+    #[schemars(range(min = 1, max = 300))]
     pub timeout_seconds: u32,
     /// Choose before execution: `private` (default) hides both streams;
     /// `public` returns bounded stdout/stderr for help, addresses, node IDs,
@@ -146,7 +150,9 @@ pub struct CellRemoveRequest {
     pub name: String,
     /// Copy `instance_key` from `cell_inspect`.
     pub expected_instance_key: String,
+    /// Positive wait request; each call uses at most 30 seconds and reports that effective limit.
     #[serde(default = "default_wait_timeout_seconds")]
+    #[schemars(range(min = 1))]
     pub timeout_seconds: u32,
 }
 
@@ -158,6 +164,8 @@ pub struct CellRemoveReceipt {
     pub complete: bool,
     /// This call's wait ended; repeat `cell_remove` to advance or verify cleanup.
     pub timed_out: bool,
+    pub requested_timeout_seconds: u32,
+    pub effective_timeout_seconds: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub teardown_receipt: Option<CoreTeardownReceipt>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -362,12 +370,17 @@ pub struct CellWaitRequest {
     /// normal materialization and teardown targets.
     pub target_phase: InstancePhase,
     /// Server-side wait bound in 1..=120 seconds.
+    #[schemars(range(min = 1, max = 120))]
     pub timeout_seconds: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CellWaitResult {
+    pub requested_timeout_seconds: u32,
+    pub effective_timeout_seconds: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_tool: Option<String>,
     pub instance_key: String,
     pub observed_generation: u64,
     pub observed_revision_digest: String,
@@ -428,17 +441,22 @@ pub struct OperationWaitError {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OperationWaitRequest {
-    /// Unique operation IDs to await together. Start independent operations
-    /// first, then prefer this over repeated single-operation waits.
+    /// Unique IDs. Start with at most 10 per batch; this is guidance, not a count limit.
+    /// On response overflow, use `suggested_batch_size` and halve again if needed.
     #[schemars(length(min = 1))]
     pub operation_ids: Vec<String>,
     /// Shared server-side wait bound in 1..=120 seconds.
+    #[schemars(range(min = 1, max = 120))]
     pub timeout_seconds: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OperationWaitResult {
+    pub requested_timeout_seconds: u32,
+    pub effective_timeout_seconds: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_tool: Option<String>,
     /// Successful reads preserve their relative request order.
     pub operations: Vec<OperationResult>,
     /// Per-ID failures never discard successfully read operations.
@@ -609,6 +627,7 @@ impl ProofstormMcp {
         let capabilities = store.capabilities(&workspace, &principal)?;
         let mut tool_router = Self::tool_router();
         for route in tool_router.map.values_mut() {
+            input_error::wrap(route);
             route.attr.title = proofstorm_view::tool_title(&route.attr.name).map(str::to_owned);
             route.attr.input_schema = tool_schema::portable_input(&route.attr.input_schema);
         }
@@ -723,7 +742,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_up",
-        description = "Start or live-edit a named cell, preserving unchanged components. Supply exactly one of cell, patch or plan, plus request_id. Returns a small acceptance receipt; acceptance does not mean ready. Read cell_inspect for desired_generation and instance_key, and pass them as expected_generation/expected_instance_key to fence an edit. Keep the entire request unchanged for an exact retry. Omit preconditions for creation. Publication and materialization are resumable. Backend links require flat kind-specific fields: chain_backend network; payment_backend method/unit; database_backend role; authentication_backend protocol. Canonical cell_read specifications also work. Use cell_component_status_list for readiness, cell_search for configuration and activity_search for history."
+        description = "Start or live-edit a named cell, preserving unchanged components. For inline authoring supply components and links ([] if none), plus name and request_id; the current API version is automatic. Alternatives: cell document/file, patch or plan. Use exactly one form. Returns acceptance, not readiness; use cell_wait. For edits copy desired_generation/instance_key from cell_inspect into expected_generation/expected_instance_key. Keep the entire request unchanged for exact retries. Omit preconditions for creation. Backend links require id/kind/from/to and flat kind-specific fields: chain_backend network; payment_backend method/unit; database_backend role; authentication_backend protocol. Canonical cell_read specifications also work."
     )]
     async fn proofstorm_cell_up(
         &self,
@@ -808,7 +827,7 @@ impl ProofstormMcp {
             output: request.output.clone(),
         }
         .validate()
-        .map_err(native_command_error)?;
+        .map_err(|message| native_command_error(message, &request.output))?;
         let instance_id = self.resolve_reference(&request.name, Capability::ComponentExecLive)?;
         let operation = self
             .cells()?
@@ -937,18 +956,15 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_remove",
-        description = "Finish a named cell: revoke actions, collect owned work and verify teardown. Export evidence first. Returns complete and a verified teardown_receipt. Each call waits at most 30 seconds; complete=false is progress, so repeat with the same name and expected_instance_key. Exact retries verify absence even after records are removed. A replaced cell is never closed by an old request."
+        description = "Finish a named cell: revoke actions, collect owned work and verify teardown. Export evidence first. Returns complete, requested_timeout_seconds, effective_timeout_seconds and a verified teardown_receipt. Each call waits at most 30 seconds; complete=false is progress, so repeat with the same name and expected_instance_key. Exact retries verify absence even after records are removed. A replaced cell is never closed by an old request."
     )]
     async fn proofstorm_cell_remove(
         &self,
         Parameters(request): Parameters<CellRemoveRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         self.authorize(Capability::CellClose)?;
-        if request.timeout_seconds == 0 {
-            return Err(invalid_operation("timeout_seconds must be positive"));
-        }
+        let wait_seconds = remove_wait_seconds(request.timeout_seconds)?;
         let cells = self.cells()?;
-        let wait_seconds = request.timeout_seconds.min(30);
         let deadline =
             tokio::time::Instant::now() + std::time::Duration::from_secs(u64::from(wait_seconds));
         let result = tokio::time::timeout_at(
@@ -977,7 +993,19 @@ impl ProofstormMcp {
                 )
                 .await;
                 match verified {
-                    Ok(result) => result.map_err(app_error)?.status.teardown_receipt,
+                    Ok(result) => {
+                        result
+                            .map_err(|error| {
+                                wait_error(
+                                    app_error(error),
+                                    request.timeout_seconds,
+                                    wait_seconds,
+                                    "cell_remove",
+                                )
+                            })?
+                            .status
+                            .teardown_receipt
+                    }
                     Err(_) => None,
                 }
             }
@@ -990,7 +1018,14 @@ impl ProofstormMcp {
             {
                 None
             }
-            Ok(Err(error)) => return Err(app_error(error)),
+            Ok(Err(error)) => {
+                return Err(wait_error(
+                    app_error(error),
+                    request.timeout_seconds,
+                    wait_seconds,
+                    "cell_remove",
+                ));
+            }
             Err(_) => None,
         };
         let complete = receipt
@@ -1001,6 +1036,8 @@ impl ProofstormMcp {
             instance_key: request.expected_instance_key,
             complete,
             timed_out: !complete,
+            requested_timeout_seconds: request.timeout_seconds,
+            effective_timeout_seconds: wait_seconds,
             teardown_receipt: receipt,
             next_tool: (!complete).then(|| "cell_remove".into()),
         })
@@ -1166,7 +1203,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_plan",
-        description = "Preview a full specification or up to 100 stable-ID patch operations without changing the runtime. Uses the same validation as cell_up. Existing cells require expected_generation and expected_instance_key from cell_inspect. Returns an immutable plan reference, change counts and digests. Search/read large plans with plan_id; apply the exact reference with cell_up. Reuse request_id only for identical input."
+        description = "Preview without changing the runtime. For inline authoring supply components and links ([] if none), plus name and request_id; the current API version is automatic. Alternatives: cell document/file or up to 100 stable-ID patch operations. Use exactly one form. Same validation as cell_up. Existing cells require expected_generation/expected_instance_key from cell_inspect. Returns an immutable plan reference, change counts and digests; apply it with cell_up. Search/read large plans with plan_id. Reuse request_id only for identical input."
     )]
     fn proofstorm_cell_plan(
         &self,
@@ -1177,7 +1214,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_read",
-        description = "Read exact configuration pointers or Unicode/array slices from name or immutable plan_id. Bind expected_digest to cell_digest. Large objects return a scan of child paths and sizes; follow next_offset. Paths from cell_search are directly readable."
+        description = "Read exact configuration pointers or Unicode/array slices from name or immutable plan_id. Bind expected_digest to document_digest from a prior read; cell_digest from cell_search applies only to configuration reads. Large objects return a scan of child paths and sizes; follow next_offset. Paths from cell_search are directly readable."
     )]
     fn proofstorm_cell_read(
         &self,
@@ -1241,15 +1278,24 @@ impl ProofstormMcp {
                 timeout_seconds: request.timeout_seconds,
             })
             .await
-            .map_err(app_error)?;
+            .map_err(|error| {
+                wait_error(
+                    app_error(error),
+                    request.timeout_seconds,
+                    request.timeout_seconds,
+                    "cell_wait",
+                )
+            })?;
         let mut result = compact_cell_wait(
             waited.status,
             request.target_phase,
             waited.reached,
             waited.timed_out,
+            request.timeout_seconds,
         );
         result.superseded = waited.superseded;
         if waited.superseded {
+            result.next_tool = Some("cell_inspect".into());
             result.message = Some("The requested generation was superseded; inspect the current cell before waiting again.".into());
         }
         Ok(Json(result))
@@ -1638,7 +1684,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "operation_read",
-        description = "Read a recorded operation's selected JSON pointer without runtime polling. Returns value and operation_digest. Copy expected_digest from activity_search to reject changed data. For strings and arrays, follow next_offset with the same digest and pointer; offsets count Unicode characters or array items. Null next_offset means complete. Objects must fit; select a deeper pointer if too large. Only already recorded data is available, including the original output visibility and truncation limits."
+        description = "Read a recorded operation's selected JSON pointer without runtime polling. limit is 1..=4000 (default 1000) characters or array items. Returns value and operation_digest. Copy expected_digest from activity_search to reject changed data. Follow next_offset with the same digest and pointer; offsets count Unicode characters or array items. Null next_offset means complete. Objects must fit; select a deeper pointer if too large. Pending artifact reads return operation_wait guidance. Only recorded data is readable; output visibility is unchanged."
     )]
     fn proofstorm_operation_read(
         &self,
@@ -1702,7 +1748,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "operation_wait",
-        description = "Wait for independent operations together. Polling concurrency and complete response bytes are bounded; split large batches if compact receipts exceed the wire budget. Per-ID errors preserve other results. Native exit, cleanup, projection and truncation facts survive omitted artifact bodies; inspect native_result rather than phase alone. timeout_seconds must be 1..=120"
+        description = "Wait for independent operations together. Start with at most 10 IDs per batch (guidance, not a count limit). Complete responses must fit 32 KiB; on overflow use suggested_batch_size and halve again if needed. Per-ID errors preserve other results. Native exit, cleanup, projection and truncation facts survive omitted artifact bodies; inspect native_result rather than phase alone. timeout_seconds must be 1..=120"
     )]
     async fn proofstorm_operation_wait(
         &self,
@@ -1735,12 +1781,12 @@ impl ProofstormMcp {
                 Err(_) => {
                     return last_operations.map_or_else(
                         || {
-                            Err(coded_invalid_request(
+                            Err(wait_error(coded_invalid_request(
                                 "operation_wait_deadline_exceeded",
                                 "the runtime action backend did not answer before the requested batch wait deadline",
-                            ))
+                            ), request.timeout_seconds, request.timeout_seconds, "operation_wait"))
                         },
-                        |(operations, errors)| compact_operation_wait_many(operations, errors, true).map(Json),
+                        |(operations, errors)| compact_operation_wait_many(operations, errors, true, request.timeout_seconds).map(Json),
                     );
                 }
             };
@@ -1748,12 +1794,24 @@ impl ProofstormMcp {
                 .iter()
                 .all(|operation| operation_terminal(operation.phase))
             {
-                return compact_operation_wait_many(operations, errors, false).map(Json);
+                return compact_operation_wait_many(
+                    operations,
+                    errors,
+                    false,
+                    request.timeout_seconds,
+                )
+                .map(Json);
             }
             last_operations = Some((operations.clone(), errors.clone()));
             let now = tokio::time::Instant::now();
             if now >= deadline {
-                return compact_operation_wait_many(operations, errors, true).map(Json);
+                return compact_operation_wait_many(
+                    operations,
+                    errors,
+                    true,
+                    request.timeout_seconds,
+                )
+                .map(Json);
             }
             tokio::time::sleep(backoff.min(deadline - now)).await;
             backoff = (backoff * 2).min(std::time::Duration::from_secs(2));
@@ -2266,13 +2324,56 @@ impl ProofstormMcp {
     }
 }
 
+fn remove_wait_seconds(timeout_seconds: u32) -> Result<u32, ErrorData> {
+    if timeout_seconds == 0 {
+        return Err(input_error::invalid(
+            "invalid_operation",
+            "timeout_seconds must be positive",
+            &[input_error::Issue::schema_range::<CellRemoveRequest>(
+                "timeout_seconds",
+                30,
+            )],
+        ));
+    }
+    Ok(timeout_seconds.min(30))
+}
+
+fn wait_error(
+    mut error: ErrorData,
+    requested_seconds: u32,
+    effective_seconds: u32,
+    next_tool: &str,
+) -> ErrorData {
+    if error
+        .data
+        .as_ref()
+        .and_then(|data| data["code"].as_str())
+        .is_some_and(|code| {
+            matches!(
+                code,
+                "cell_wait_deadline_exceeded" | "operation_wait_deadline_exceeded"
+            )
+        })
+    {
+        let data = error.data.as_mut().expect("checked error data");
+        data["requested_timeout_seconds"] = serde_json::json!(requested_seconds);
+        data["effective_timeout_seconds"] = serde_json::json!(effective_seconds);
+        data["next_tool"] = serde_json::json!(next_tool);
+    }
+    error
+}
+
 fn validate_wait_timeout(timeout_seconds: u32) -> Result<(), ErrorData> {
     if (1..=120).contains(&timeout_seconds) {
         return Ok(());
     }
-    Err(ErrorData::invalid_request(
-        "timeout_seconds must be between 1 and 120".to_owned(),
-        Some(serde_json::json!({"code": "wait_timeout_invalid"})),
+    Err(input_error::invalid(
+        "wait_timeout_invalid",
+        "timeout_seconds must be between 1 and 120",
+        &[input_error::Issue::schema_range::<OperationWaitRequest>(
+            "timeout_seconds",
+            30,
+        )],
     ))
 }
 
@@ -2493,6 +2594,7 @@ fn compact_cell_wait(
     target_phase: InstancePhase,
     reached: bool,
     timed_out: bool,
+    timeout_seconds: u32,
 ) -> CellWaitResult {
     let blockers = startup_blockers(&status);
     if status.phase == InstancePhase::Pending && !blockers.is_empty() {
@@ -2504,6 +2606,15 @@ fn compact_cell_wait(
         .filter(|component| component.ready)
         .count();
     CellWaitResult {
+        requested_timeout_seconds: timeout_seconds,
+        effective_timeout_seconds: timeout_seconds,
+        next_tool: if timed_out {
+            Some("cell_wait".into())
+        } else if !reached {
+            Some("cell_inspect".into())
+        } else {
+            None
+        },
         instance_key: status.instance.instance_key.clone(),
         observed_generation: status.observed_generation,
         observed_revision_digest: status.observed_revision_digest,
@@ -2543,6 +2654,7 @@ fn operation_result(operation: CellOperation) -> Result<CallToolResult, ErrorDat
 }
 
 fn compact_operation_wait(operation: CellOperation, timed_out: bool) -> OperationResult {
+    let operation_digest = digest_json(&serde_json::json!(operation));
     let native_result = operation.artifact.as_ref().and_then(|artifact| {
         let content = &artifact.content;
         content.get("exit_code")?;
@@ -2567,10 +2679,13 @@ fn compact_operation_wait(operation: CellOperation, timed_out: bool) -> Operatio
         result["guidance"] = serde_json::json!(
             "Operation phase describes execution, not command or payment success. Check command_succeeded and exit_code; verify application settlement independently."
         );
+        if let Some(guidance) = output_guidance::describe(&operation, &operation_digest) {
+            result["output"] = guidance;
+        }
         Some(result)
     });
     OperationResult {
-        operation_digest: digest_json(&serde_json::json!(operation)),
+        operation_digest,
         run_id: operation.experiment_id.clone(),
         operation_id: operation.id,
         sequence: operation.sequence,
@@ -2609,12 +2724,16 @@ fn compact_operation_wait_many(
     operations: Vec<CellOperation>,
     errors: Vec<OperationWaitError>,
     timed_out: bool,
+    timeout_seconds: u32,
 ) -> Result<OperationWaitResult, ErrorData> {
     let all_terminal = errors.is_empty()
         && operations
             .iter()
             .all(|operation| operation_terminal(operation.phase));
     let mut result = OperationWaitResult {
+        requested_timeout_seconds: timeout_seconds,
+        effective_timeout_seconds: timeout_seconds,
+        next_tool: timed_out.then(|| "operation_wait".into()),
         operations: operations
             .into_iter()
             .map(|operation| {
@@ -2634,9 +2753,20 @@ fn compact_operation_wait_many(
         result.artifact_bodies_omitted = true;
     }
     if read_query::wire_size(&serde_json::json!(result))? > MAX_AGENT_RESPONSE_BYTES {
-        return Err(coded_invalid_request(
-            "operation_wait_response_too_large",
-            "The compact receipts exceed the wire budget; split operation_ids into smaller independent batches",
+        let count = result.operations.len() + result.errors.len();
+        return Err(ErrorData::invalid_request(
+            if count > 1 {
+                "The compact receipts exceed 32 KiB. Retry operation_wait in batches of at most suggested_batch_size IDs; halve again if needed. A single oversized receipt can be read field by field with operation_read."
+            } else {
+                "The single compact receipt exceeds 32 KiB. Use operation_read to select smaller recorded fields instead of waiting for the same receipt again."
+            },
+            Some(serde_json::json!({
+                "code":"operation_wait_response_too_large",
+                "operation_count":count,
+                "maximum_response_bytes":MAX_AGENT_RESPONSE_BYTES,
+                "suggested_batch_size":(count / 2).clamp(1, 10),
+                "next_tool":if count > 1 { "operation_wait" } else { "operation_read" },
+            })),
         ));
     }
     Ok(result)
@@ -2650,8 +2780,24 @@ fn coded_invalid_request(code: &str, message: impl Into<String>) -> ErrorData {
     ErrorData::invalid_request(message.into(), Some(serde_json::json!({"code": code})))
 }
 
-fn native_command_error(message: &str) -> ErrorData {
+fn native_command_error(
+    message: &str,
+    output: &proofstorm_core::native::NativeOutput,
+) -> ErrorData {
     if message.contains("field") {
+        let allowed: Vec<_> = proofstorm_core::native::receipt_fields().collect();
+        let (expected, example) = if output.mode == proofstorm_core::native::OutputMode::JsonFields
+        {
+            (
+                serde_json::json!({"minimum_items":1,"maximum_items":16,"allowed_values":allowed}),
+                serde_json::json!(["confirmed_balance"]),
+            )
+        } else {
+            (
+                serde_json::json!({"maximum_items":0}),
+                serde_json::json!([]),
+            )
+        };
         return ErrorData::invalid_params(
             format!(
                 "{message}. The command was not executed. json_fields only supports the fixed receipt fields listed in output's schema. For addresses, node IDs, help, or other native JSON, use output: {{\"mode\":\"public\"}} with no fields. For LND addinvoice, use output: {{\"mode\":\"lnd_invoice\"}}."
@@ -2659,6 +2805,7 @@ fn native_command_error(message: &str) -> ErrorData {
             Some(serde_json::json!({
                 "code": "native_output_invalid",
                 "executed": false,
+                "issues":[input_error::Issue { path:"/output/fields".into(), code:"invalid_output_fields", expected, example }],
                 "public_output_example": {"mode": "public"},
                 "receipt_output_example": {"mode": "json_fields", "fields": ["confirmed_balance"]}
             })),
@@ -3524,6 +3671,24 @@ mod tests {
             data["public_output_example"],
             serde_json::json!({"mode": "public"})
         );
+        assert_eq!(data["issues"][0]["path"], "/output/fields");
+        assert_eq!(
+            data["issues"][0]["expected"]["allowed_values"],
+            serde_json::json!(proofstorm_core::native::receipt_fields().collect::<Vec<_>>())
+        );
+        for mode in [
+            proofstorm_core::native::OutputMode::Private,
+            proofstorm_core::native::OutputMode::Public,
+        ] {
+            let output = proofstorm_core::native::NativeOutput {
+                mode,
+                fields: vec!["status".into()],
+            };
+            let data = native_command_error("fields requires json_fields output mode", &output)
+                .data
+                .unwrap();
+            assert_eq!(data["issues"][0]["example"], serde_json::json!([]));
+        }
     }
 
     #[tokio::test]
@@ -4195,6 +4360,8 @@ mod tests {
                 "cleanup_verified": true, "output_truncated": true,
                 "streams_complete": true, "stdout": format!("{{\"status\":\"FAILED\"}}{}", "x".repeat(14_000)),
                 "private_output_ref": "private-reference",
+                "output_mode":"public",
+                "private_output":{"stdout":{"bytes_observed":14019,"retained_bytes":14019,"sha256":"private-hash"}},
             });
             CellOperation {
                 revision_digest: String::new(),
@@ -4256,7 +4423,8 @@ mod tests {
         );
         assert_eq!(errors[0].operation_id, "missing");
         let result =
-            compact_operation_wait_many((1..=6).map(operation).collect(), errors, false).unwrap();
+            compact_operation_wait_many((1..=6).map(operation).collect(), errors, false, 30)
+                .unwrap();
         assert!(result.artifact_bodies_omitted);
         assert!(!result.all_terminal);
         assert!(!result.timed_out);
@@ -4277,11 +4445,28 @@ mod tests {
         );
         let json = serde_json::to_string(&result).unwrap();
         assert!(!json.contains("private-reference"));
+        assert!(!json.contains("private-hash"));
+        assert_eq!(
+            result.operations[0].native_result.as_ref().unwrap()["output"]["streams"]["stdout"]["retained_bytes"],
+            14019
+        );
+        assert_eq!(
+            result.operations[0].native_result.as_ref().unwrap()["output"]["reads"][0]["arguments"]
+                ["expected_digest"],
+            result.operations[0].operation_digest
+        );
         assert!(json.len() < MAX_AGENT_RESPONSE_BYTES);
     }
 
     #[test]
     fn wait_contracts_are_bounded_terminal_and_capability_filtered() {
+        for (requested, effective) in [(1, 1), (30, 30), (120, 30), (u32::MAX, 30)] {
+            assert_eq!(remove_wait_seconds(requested).unwrap(), effective);
+        }
+        assert_eq!(
+            remove_wait_seconds(0).unwrap_err().data.unwrap()["issues"][0]["path"],
+            "/timeout_seconds"
+        );
         assert!(validate_wait_timeout(1).is_ok());
         assert!(validate_wait_timeout(120).is_ok());
         for timeout in [0, 121] {
@@ -4296,6 +4481,15 @@ mod tests {
             timeout_seconds: 120,
         };
         assert!(validate_operation_wait_request(&valid_batch).is_ok());
+        let deadline = wait_error(
+            coded_invalid_request("operation_wait_deadline_exceeded", "backend did not answer"),
+            120,
+            120,
+            "operation_wait",
+        );
+        let data = deadline.data.unwrap();
+        assert_eq!(data["effective_timeout_seconds"], 120);
+        assert_eq!(data["next_tool"], "operation_wait");
         assert!(
             validate_operation_wait_request(&OperationWaitRequest {
                 operation_ids: (0..150).map(|index| format!("operation-{index}")).collect(),
@@ -4425,7 +4619,7 @@ mod tests {
         live.components[0].id = "replacement".into();
         assert_ne!(component_status_identity(&live), identity);
 
-        let close_receipt = compact_cell_wait(status, InstancePhase::Closed, false, false);
+        let close_receipt = compact_cell_wait(status, InstancePhase::Closed, false, false, 30);
         assert_eq!(close_receipt.phase, InstancePhase::Ready);
         assert_eq!(close_receipt.target_phase, InstancePhase::Closed);
         assert!(!close_receipt.reached);
@@ -4540,6 +4734,9 @@ mod tests {
         .0;
         assert!(!result.reached);
         assert!(!result.timed_out);
+        assert_eq!(result.requested_timeout_seconds, 120);
+        assert_eq!(result.effective_timeout_seconds, 120);
+        assert_eq!(result.next_tool.as_deref(), Some("cell_inspect"));
         assert_eq!(result.blockers[0].component_id, "wallet-cdk");
         assert_eq!(result.blockers[0].reason, Reason::ImagePullBackoff);
         assert!(result.blockers[0].message.contains("storm doctor"));

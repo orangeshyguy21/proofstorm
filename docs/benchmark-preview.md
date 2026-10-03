@@ -39,6 +39,13 @@ telemetry. Resource reads and other servers remain forbidden; forbidden MCP
 calls violate autonomy whether they succeed or fail. A completed forbidden call
 is not incorrectly represented as pending.
 
+Codex may record resource discovery under either `codex` or the target server
+`proofstorm`. Both representations follow this rule. Independent proxy records
+take precedence: a real `tools/call` request is never exempted merely because its
+name matches a built-in discovery capability. Accounting corrections can be
+applied offline to copies of retained evidence; preserve the original grades and
+record their relationship to each corrected grade.
+
 New results expose `workflow_success`, `failed_requirements`, autonomy and
 checkpoint-order fields, plus checkpoint diagnostics and timing intervals.
 `timing_breakdown` reports the union of completed MCP call intervals, separately

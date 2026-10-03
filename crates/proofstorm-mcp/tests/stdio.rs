@@ -347,19 +347,34 @@ fn private_transfer_stdio_requires_method_fields_before_operation_admission() {
         .unwrap();
     assert_private_transfer_schema(tool);
     let request = |transfer| json!({"name":"unmaterialized", "run_id":"test", "request_id":"must-not-exist", "transfer":transfer});
-    for (transfer, field) in invalid_private_transfer_requests() {
+    for (transfer, field, code) in invalid_private_transfer_requests() {
         let response = client
             .call_response("private_transfer", request(transfer))
             .unwrap();
-        // rmcp returns parameter decoding failures as a textual tool error.
         assert_eq!(response["result"]["isError"], true, "{response}");
-        assert!(
-            response["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap()
-                .contains(field),
-            "{response}"
-        );
+        let structured = &response["result"]["structuredContent"];
+        let text: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(&text, structured);
+        let data = &structured["data"];
+        assert_eq!(data["code"], "tool_input_invalid", "{response}");
+        assert_eq!(data["executed"], false, "{response}");
+        let issue = data["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|issue| issue["path"] == format!("/transfer/{field}"))
+            .unwrap_or_else(|| panic!("missing diagnostic for {field}: {response}"));
+        assert_eq!(issue["code"], code, "{response}");
+        if code == "invalid_type" {
+            let expected_type = if field == "maximumBytes" {
+                "integer"
+            } else {
+                "string"
+            };
+            assert_eq!(issue["expected"]["type"], expected_type, "{response}");
+        }
     }
     for size in [0, 1_048_577] {
         let error = client.call_error("private_transfer", request(json!({
@@ -429,47 +444,57 @@ fn assert_private_transfer_schema(tool: &Value) {
     }
 }
 
-fn invalid_private_transfer_requests() -> Vec<(Value, &'static str)> {
+fn invalid_private_transfer_requests() -> Vec<(Value, &'static str, &'static str)> {
     vec![
         (
             json!({"transferMethod":"prepare","component":"wallet-a"}),
             "destinationComponent",
+            "missing_field",
         ),
         (
             json!({"transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b"}),
             "maximumBytes",
+            "missing_field",
         ),
         (
             json!({"transferMethod":"prepare","component":"wallet-a","destinationComponent":null,"maximumBytes":65536}),
-            "string",
+            "destinationComponent",
+            "invalid_type",
         ),
         (
             json!({"transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":null}),
-            "u32",
+            "maximumBytes",
+            "invalid_type",
         ),
         (
             json!({"transferMethod":"prepare","component":"wallet-a","destinationComponent":"wallet-b","maximumBytes":65536,"reference":"wrong-method"}),
             "reference",
+            "unknown_field",
         ),
         (
             json!({"transferMethod":"handoff","component":"wallet-a","reference":"opaque"}),
             "recipientGrantId",
+            "missing_field",
         ),
         (
             json!({"transferMethod":"status","component":"wallet-a"}),
             "reference",
+            "missing_field",
         ),
         (
             json!({"transferMethod":"deliver","component":"wallet-a"}),
             "reference",
+            "missing_field",
         ),
         (
             json!({"transferMethod":"release","component":"wallet-a"}),
             "reference",
+            "missing_field",
         ),
         (
             json!({"transferMethod":"deliver","component":"wallet-a","reference":"opaque","maximumBytes":1}),
             "maximumBytes",
+            "unknown_field",
         ),
     ]
 }

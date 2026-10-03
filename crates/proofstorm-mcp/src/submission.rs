@@ -1,7 +1,7 @@
 //! One immutable preview path for complete specifications and bounded stable-ID edits.
 use crate::{
-    AddLinkInput, CellInput, ErrorData, ProofstormMcp, app_error, coded_invalid_request,
-    store_error,
+    AddLinkInput, AuthoredCellSpec, CellInput, ErrorData, ProofstormMcp, app_error,
+    coded_invalid_request, store_error,
 };
 use proofstorm_core::{
     CellPolicy, CellSpec, CellUpdateTarget, ComponentSpec, LinkSpec, apply_cell_patch, digest_json,
@@ -11,15 +11,42 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubmissionRequest {
     pub name: String,
     /// Stable ID for this submission. Reuse the entire request for exact retries.
     pub request_id: String,
-    /// Supply exactly one of cell, patch, or plan. Files are read inside the MCP working directory.
+    /// Alternative complete document, JSON string or workspace file. Omit with components/links, patch or plan.
     #[serde(default)]
     pub cell: Option<CellInput>,
+    /// Inline cell components. Supply with links; the outer name and current API version are used.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    #[schemars(schema_with = "inline_components_schema")]
+    pub components: Option<Vec<ComponentSpec>>,
+    /// Inline links, including an empty array. Supply with components; backend links use flat kind-specific fields.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    #[schemars(with = "Vec<AddLinkInput>")]
+    pub links: Option<Vec<AddLinkInput>>,
+    /// Optional policy for inline components/links; omit for the safe default. Invalid with other forms.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    #[schemars(with = "CellPolicy")]
+    pub policy: Option<CellPolicy>,
     /// Up to 100 ordered operations, validated atomically against the fenced desired revision.
     #[serde(default)]
     pub patch: Option<Vec<CellPatch>>,
@@ -36,6 +63,23 @@ pub struct SubmissionRequest {
     pub delete_data: bool,
     #[serde(default)]
     pub delete_retained: Vec<String>,
+}
+
+// Optional means absent, not an explicitly null or malformed inline payload.
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
+}
+
+fn inline_components_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let mut schema = schemars::schema_for!(Vec<ComponentSpec>);
+    schema.remove("$schema");
+    // This small, independent schema expands without duplication. Keep the
+    // component fields at the parameter's array-item level in every client.
+    schemars::Schema::from(
+        (*crate::tool_schema::portable_input(schema.as_object().unwrap())).clone(),
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -79,12 +123,17 @@ impl ProofstormMcp {
                 "name must fit 63 bytes and request_id must contain 1..=128 bytes",
             ));
         }
-        if usize::from(request.cell.is_some())
+        let inline =
+            request.components.is_some() || request.links.is_some() || request.policy.is_some();
+        if usize::from(inline)
+            + usize::from(request.cell.is_some())
             + usize::from(request.patch.is_some())
             + usize::from(request.plan.is_some())
             != 1
         {
-            return Err(invalid("Supply exactly one of cell, patch or plan"));
+            return Err(invalid(
+                "Supply exactly one of components with links, cell, patch or plan",
+            ));
         }
         if let Some(reference) = &request.plan {
             if !applying
@@ -110,11 +159,30 @@ impl ProofstormMcp {
             }
             return Ok(preview);
         }
-        let input = request
-            .cell
-            .map(CellSpec::try_from)
-            .transpose()
-            .map_err(invalid)?;
+        let input = if inline {
+            Some(
+                CellSpec::try_from(AuthoredCellSpec {
+                    api_version: proofstorm_core::API_VERSION.into(),
+                    name: request.name.clone(),
+                    components: request
+                        .components
+                        .ok_or_else(|| invalid("Inline authoring requires components and links"))?,
+                    links: request.links.ok_or_else(|| {
+                        invalid(
+                            "Inline authoring requires components and links; use [] for no links",
+                        )
+                    })?,
+                    policy: request.policy.unwrap_or_default(),
+                })
+                .map_err(invalid)?,
+            )
+        } else {
+            request
+                .cell
+                .map(CellSpec::try_from)
+                .transpose()
+                .map_err(invalid)?
+        };
         let request_digest = digest_json(&(
             &request.name,
             &input,

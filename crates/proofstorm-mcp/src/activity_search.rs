@@ -1,6 +1,7 @@
 //! Passive, bounded search over recorded operations across a cell's actors and runs.
 use crate::{
     CallToolResult, ErrorData, MAX_AGENT_RESPONSE_BYTES, coded_invalid_request, developer_result,
+    input_error::{self, Issue},
     read_query, serialized_size, store_error,
 };
 use proofstorm_core::{CellOperation, OperationKind, OperationPhase, digest_json};
@@ -102,13 +103,34 @@ struct SelectedField {
 }
 
 fn pattern(request: &ActivitySearchRequest) -> Result<Regex, ErrorData> {
-    if request.query.len() > proofstorm_app::query::MAX_QUERY_BYTES
-        || request.fields.len() > 16
-        || !(1..=50).contains(&request.limit)
-    {
-        return Err(coded_invalid_request(
+    let mut issues = Vec::new();
+    if request.query.len() > proofstorm_app::query::MAX_QUERY_BYTES {
+        issues.push(Issue {
+            path: "/query".into(),
+            code: "too_long",
+            expected: serde_json::json!({"maximum_bytes":proofstorm_app::query::MAX_QUERY_BYTES}),
+            example: serde_json::json!(""),
+        });
+    }
+    if request.fields.len() > 16 {
+        issues.push(Issue {
+            path: "/fields".into(),
+            code: "too_many_items",
+            expected: serde_json::json!({"maximum_items":16}),
+            example: serde_json::json!(["/artifact/content/exit_code"]),
+        });
+    }
+    if !(1..=50).contains(&request.limit) {
+        issues.push(Issue::schema_range::<ActivitySearchRequest>(
+            "limit",
+            default_limit(),
+        ));
+    }
+    if !issues.is_empty() {
+        return Err(input_error::invalid(
             "activity_search_limits",
             "Use a query of at most 4096 bytes, at most 16 fields, and limit between 1 and 50",
+            &issues,
         ));
     }
     if let (Some(start), Some(end)) = (request.accepted_after_unix, request.accepted_before_unix)
@@ -119,8 +141,8 @@ fn pattern(request: &ActivitySearchRequest) -> Result<Regex, ErrorData> {
             "accepted_after_unix must be less than accepted_before_unix",
         ));
     }
-    for field in &request.fields {
-        read_query::validate_pointer(field)?;
+    for (index, field) in request.fields.iter().enumerate() {
+        read_query::validate_pointer_at(field, &format!("/fields/{index}"))?;
     }
     proofstorm_app::query::pattern(&request.query, request.regex, request.case_insensitive)
         .map_err(|error| coded_invalid_request("activity_search_regex_invalid", error.message))

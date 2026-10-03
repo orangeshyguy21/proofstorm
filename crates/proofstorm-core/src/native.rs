@@ -120,6 +120,16 @@ const NUMBER_FIELDS: &[&str] = &[
     "unconfirmed_balance",
 ];
 
+/// Receipt fields accepted by native output projection, for discovery and diagnostics.
+pub fn receipt_fields() -> impl Iterator<Item = &'static str> {
+    STATUS_FIELDS
+        .iter()
+        .chain(BOOLEAN_FIELDS)
+        .chain(NUMBER_FIELDS)
+        .chain(LIFECYCLE_FIELDS)
+        .copied()
+}
+
 impl NativeCommand {
     /// Validate before creating an action or starting a process.
     ///
@@ -146,12 +156,12 @@ impl NativeCommand {
             if self.output.fields.is_empty() || self.output.fields.len() > 16 {
                 return Err("json_fields requires 1..=16 receipt fields");
             }
-            if self.output.fields.iter().any(|field| {
-                !STATUS_FIELDS.contains(&field.as_str())
-                    && !BOOLEAN_FIELDS.contains(&field.as_str())
-                    && !NUMBER_FIELDS.contains(&field.as_str())
-                    && !LIFECYCLE_FIELDS.contains(&field.as_str())
-            }) {
+            if self
+                .output
+                .fields
+                .iter()
+                .any(|field| !receipt_fields().any(|allowed| allowed == field))
+            {
                 return Err("output field is not an allowlisted receipt field");
             }
         } else if !self.output.fields.is_empty() {

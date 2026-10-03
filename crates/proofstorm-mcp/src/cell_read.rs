@@ -1,7 +1,9 @@
 //! Bounded reads of complete desired configurations and immutable previews.
 use crate::{
     CallToolResult, CellReadResponse, ErrorData, ProofstormMcp, coded_invalid_request,
-    developer_result, read_query, store_error,
+    developer_result,
+    input_error::{self, Issue},
+    read_query, store_error,
 };
 use proofstorm_core::{Capability, digest_json};
 use schemars::JsonSchema;
@@ -45,6 +47,7 @@ pub struct CellReadRequest {
     #[serde(default)]
     pub offset: usize,
     #[serde(default = "default_limit")]
+    #[schemars(range(min = 1, max = 4000))]
     pub limit: usize,
     /// Return immediate child paths and sizes; useful before selecting a large object.
     #[serde(default)]
@@ -159,16 +162,20 @@ pub(super) fn read(
     read_value(document, &value, request)
 }
 
-fn read_value(
+fn select_value<'a>(
     document: &CellReadResponse,
-    value: &Value,
+    value: &'a Value,
     request: &CellReadRequest,
-) -> Result<CallToolResult, ErrorData> {
+) -> Result<(&'a Value, String), ErrorData> {
     crate::read_query::validate_pointer(&request.pointer)?;
     if !(1..=4000).contains(&request.limit) {
-        return Err(coded_invalid_request(
+        return Err(input_error::invalid(
             "cell_read_limit",
             "limit must be 1..=4000",
+            &[Issue::schema_range::<CellReadRequest>(
+                "limit",
+                default_limit(),
+            )],
         ));
     }
     let digest = if request.document == CellDocumentSection::Configuration {
@@ -187,11 +194,26 @@ fn read_value(
         ));
     }
     let selected = value.pointer(&request.pointer).ok_or_else(|| {
-        coded_invalid_request(
+        let mut error = input_error::invalid(
             "cell_read_pointer_missing",
-            "Pointer is absent; scan its parent for available paths",
-        )
+            "Pointer is absent; select an available child or read the suggested existing parent",
+            &[read_query::missing_pointer(value, &request.pointer)],
+        );
+        let data = error.data.as_mut().expect("structured issue data");
+        data["document_digest"] = json!(digest);
+        data["document"] = json!(request.document);
+        data["next_tool"] = json!("cell_read");
+        error
     })?;
+    Ok((selected, digest))
+}
+
+fn read_value(
+    document: &CellReadResponse,
+    value: &Value,
+    request: &CellReadRequest,
+) -> Result<CallToolResult, ErrorData> {
+    let (selected, digest) = select_value(document, value, request)?;
     let mut scan = request.scan;
     if selected.is_object()
         && read_query::wire_size(selected)? > crate::MAX_AGENT_RESPONSE_BYTES / 2
@@ -205,9 +227,10 @@ fn read_value(
         _ => None,
     };
     if total.map_or(request.offset != 0, |n| request.offset > n) {
-        return Err(coded_invalid_request(
+        return Err(input_error::invalid(
             "cell_read_offset",
             "offset exceeds the selected value",
+            &[Issue::range("/offset", 0, total.unwrap_or(0), 0)],
         ));
     }
     let mut length = total.map_or(0, |n| (n - request.offset).min(request.limit));
@@ -228,9 +251,15 @@ fn read_value(
                     .map(|(index, value)| (index.to_string(), value))
                     .collect(),
                 _ => {
-                    return Err(coded_invalid_request(
+                    return Err(input_error::invalid(
                         "cell_read_scan",
                         "scan requires an object or array",
+                        &[Issue {
+                            path: "/scan".into(),
+                            code: "invalid_scan",
+                            expected: json!({"allowed_values":[false],"reason":"selected value is not an object or array"}),
+                            example: json!(false),
+                        }],
                     ));
                 }
             };
@@ -265,3 +294,6 @@ fn read_value(
         length /= 2;
     }
 }
+
+#[cfg(test)]
+mod tests;
