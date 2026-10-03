@@ -43,13 +43,34 @@ Plans explicitly bind their suite (`pull`, `documentation`, `compatibility`, or
 `full`), so receipts cannot be reused between suites. The planner verifies every
 catalog claim is covered by scheduled cases in both compatibility and full plans.
 
-Qualification pulls published images anonymously by digest and records the
-selected platform manifest and config digest. A source build cannot replace a
-catalog artifact. `Candidate component packaging` separately rebuilds images on
-recipe/provenance changes or manual dispatch. Host binaries and the controller
-are built once per architecture and transferred within the current CI run;
-controller reuse verifies its source identity, platform and executable metadata.
-PR jobs have no package-write permissions.
+Qualification prepares published images anonymously once per workflow attempt,
+before the native tests fan out. The validated plan supplies the unique component
+sources and the default workspace/probe image. Preparation copies complete
+indexes without changing their digests, checks each required platform's manifest,
+config and layer availability, and uploads checksummed public registry content.
+A missing upstream image or exhausted pull quota fails this preparation job;
+it cannot fan out into dozens of independently failing cases.
+
+Each native job restores the same artifact into a read-only loopback registry.
+Image checks and standalone Lightning fixtures pull from that registry, while
+each managed case copies its exact planned images and probe helper into its own
+fresh registry before running. Receipts retain the original public source and
+observed platform manifest/config digests. Missing, corrupt or stale cache inputs
+fail closed; cache consumers do not fall back to a public registry. Catalog
+images are never rebuilt or replaced with new pins to make a test pass.
+
+The cache contains only public image content, never cells, databases, kubeconfigs,
+installation state or registry credentials. Each case still owns its runtime and
+verifies cleanup and preservation. The cache wrapper deletes only its recorded
+container and preparation volume, including on failure. It binds the downloaded
+image files directly to avoid duplicating the full catalog on each runner.
+
+`Candidate component packaging` separately rebuilds images on recipe/provenance
+changes or manual dispatch. Host binaries, the controller and k3d's native startup
+images are saved once per architecture and transferred within the current run.
+Controller reuse verifies its source identity, platform and executable metadata.
+PR jobs have no package-write permissions and image preparation publishes no
+packages or custom upstream mirrors.
 
 Both native architectures must restore their build artifacts on fresh runners,
 start an owned runtime, pass the Bitcoin smoke scenario and verify cleanup before
@@ -105,6 +126,20 @@ Hermetic checks work without a runtime:
 just check
 cargo test -p proofstorm-qualification
 ```
+
+An opt-in Docker regression checks full-index preservation, read-only restoration,
+two fresh registry copies and blob hashes with upstream references blocked,
+and corrupt-artifact rejection. On Linux it also runs native daemon pulls and
+the image probe; Docker Desktop's separate daemon loopback cannot run that part:
+
+```sh
+CARGO_TARGET_DIR=target/check cargo test -p proofstorm-qualification --test image_cache -- --ignored
+```
+
+It uses the pinned upstream BusyBox and disposable registries; it does not run a
+model benchmark. The ordinary hermetic tests additionally reject missing manifests
+or layers, wrong architectures, stale plans and failed consumers, checking cleanup
+at every boundary.
 
 To inspect the required compatibility plan (use `full` for the opt-in suite):
 

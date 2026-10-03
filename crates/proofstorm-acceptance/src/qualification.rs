@@ -132,6 +132,26 @@ pub fn run(context: &GateContext) -> Result<()> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn prepared_inventory_contains_the_runtime_probe_for_every_architecture() {
+        let plan = proofstorm_qualification::plan(
+            proofstorm_qualification::Identity {
+                revision: "a".repeat(40),
+                run_id: "1".into(),
+                attempt: 1,
+            },
+            proofstorm_qualification::Mode::Pull,
+        )
+        .unwrap();
+        let inputs = proofstorm_qualification::image_inputs(&plan).unwrap();
+        let probe =
+            proofstorm_core::catalog_image_source(proofstorm_kube::images::PROBE_IMAGE).unwrap();
+        assert_eq!(
+            inputs.images[&probe],
+            ["linux/amd64".into(), "linux/arm64".into()].into()
+        );
+    }
+
+    #[test]
     fn every_planned_native_platform_can_bootstrap_a_checkout_runtime() {
         use proofstorm_core::tool_pins::{LINUX_AMD64, LINUX_ARM64, Pins};
         let plan = proofstorm_qualification::plan(

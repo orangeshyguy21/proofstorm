@@ -27,6 +27,7 @@ pub struct Selection {
     pub benchmark_claude: PathBuf,
     pub benchmark_claude_auth: String,
     pub qualification: Option<(PathBuf, String)>,
+    pub qualification_image_cache: Option<String>,
     pub checkout_home: Option<PathBuf>,
     pub bundle: Option<PathBuf>,
     pub allow_development: bool,
@@ -483,6 +484,59 @@ fn start_runtime(
     Ok(())
 }
 
+fn seed_qualification_images(
+    root: &Path,
+    work: &Path,
+    cache: &str,
+    case: Option<&proofstorm_qualification::Case>,
+    cancelled: &AtomicBool,
+) -> Result<()> {
+    proofstorm_qualification::validate_cache_endpoint(cache)?;
+    let installation = Installation::load(&work.join("state"))?;
+    proofstorm_app::bootstrap::verify_runtime_identity(&installation)?;
+    let mut images =
+        std::collections::BTreeSet::from([proofstorm_kube::images::PROBE_IMAGE.to_owned()]);
+    if let Some(case) = case {
+        images.extend(
+            case.components
+                .iter()
+                .map(|component| component.image.clone()),
+        );
+    } else {
+        // The native preflight runs only the default Bitcoin smoke scenario.
+        images.insert(
+            proofstorm_core::default_catalog()
+                .entries
+                .iter()
+                .find(|entry| {
+                    entry.id == "bitcoin-core"
+                        && entry.support_lifecycle == proofstorm_core::SupportLifecycle::Preferred
+                })
+                .context("missing smoke image")?
+                .image
+                .clone(),
+        );
+    }
+    let inputs = images.iter().map(|image| -> Result<Value> {
+        Ok(json!({"image":image,"source":proofstorm_core::catalog_image_source(image).map_err(anyhow::Error::msg)?}))
+    }).collect::<Result<Vec<_>>>()?;
+    private_json(&work.join("image-cache-seed.json"), &json!(inputs))?;
+    let mut seed = Command::new("bash");
+    seed.arg(root.join("scripts/qualification-cache.sh"))
+        .arg("seed")
+        .arg(cache)
+        .arg(installation.host_registry())
+        .arg(work.join("image-cache-seed.json"))
+        .arg(work);
+    execute(
+        seed,
+        &work.join("image-cache-seed.log"),
+        1200,
+        Some(cancelled),
+    )?;
+    proofstorm_app::bootstrap::verify_runtime_identity(&installation)
+}
+
 fn tool_snapshot(home: &Path) -> Result<Value> {
     let mut tools = std::collections::BTreeMap::new();
     for entry in fs::read_dir(home.join("tools"))? {
@@ -518,6 +572,13 @@ pub fn run(
         selection.qualification.is_some() == (names == ["qualification"]),
         "qualification requires one exact planned case"
     );
+    if let Some(cache) = &selection.qualification_image_cache {
+        proofstorm_qualification::validate_cache_endpoint(cache)?;
+        ensure!(
+            selection.qualification.is_some() || names == ["smoke"],
+            "prepared image cache requires qualification or the native smoke preflight"
+        );
+    }
     let qualification = if let Some((path, id)) = &selection.qualification {
         let plan: proofstorm_qualification::Plan = serde_json::from_slice(&fs::read(path)?)?;
         plan.validate()?;
@@ -606,6 +667,9 @@ pub fn run(
                 .arg(root.join("scripts/qualification-images.sh"))
                 .arg(work.join("qualification-case.json"))
                 .arg(&work);
+            if let Some(cache) = &selection.qualification_image_cache {
+                check.arg(cache);
+            }
             execute(
                 check,
                 &work.join("image-qualification.log"),
@@ -630,6 +694,17 @@ pub fn run(
             cancelled,
             &mut report,
         )?;
+        if let Some(cache) = &selection.qualification_image_cache {
+            seed_qualification_images(
+                &root,
+                &work,
+                cache,
+                qualification.as_ref().map(|(_, case)| case),
+                cancelled,
+            )?;
+            report["image_cache"] = json!("seeded");
+            save(&work, &report)?;
+        }
         if let Some(name) = names
             .iter()
             .find(|name| crate::benchmark::preparation::selected(name).is_some())
@@ -888,6 +963,7 @@ mod tests {
             benchmark_claude: "claude".into(),
             benchmark_claude_auth: "login".into(),
             qualification: None,
+            qualification_image_cache: None,
             checkout_home: None,
             bundle: None,
             allow_development: false,

@@ -152,7 +152,7 @@ fn renamed_mint_repositories_preserve_saved_locks_only_for_shipped_digests() {
 }
 
 #[test]
-fn probe_and_saved_workspace_locks_download_busybox_from_ghcr() {
+fn probe_and_saved_workspace_locks_download_the_upstream_busybox_pin() {
     let home = tempfile::tempdir().unwrap();
     let installation = fixture_installation(home.path());
     let mut lock = sample_lock();
@@ -162,7 +162,7 @@ fn probe_and_saved_workspace_locks_download_busybox_from_ghcr() {
     let selected = selected_images(&installation, &lock).unwrap();
     assert!(selected.contains(image));
     let public = source(image).unwrap();
-    assert!(public.starts_with("ghcr.io/orangeshyguy21/proofstorm/busybox@sha256:"));
+    assert!(public.starts_with("docker.io/library/busybox@sha256:"));
     assert_eq!(
         image.split_once('@').unwrap().1,
         public.split_once('@').unwrap().1

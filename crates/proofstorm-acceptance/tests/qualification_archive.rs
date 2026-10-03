@@ -111,7 +111,23 @@ fn package(root: &Path, base: &Path) {
         include_str!("../../../scripts/qualification-build.sh"),
         0o700,
     );
+    write(
+        &root.join("scripts/qualification-docker.sh"),
+        include_str!("../../../scripts/qualification-docker.sh"),
+        0o700,
+    );
+    write(
+        &root.join("tools/versions.env"),
+        include_str!("../../../tools/versions.env"),
+        0o600,
+    );
     let stubs = base.join("stubs");
+    write(
+        &stubs.join("timeout"),
+        "#!/bin/sh\nshift\nexec \"$@\"\n",
+        0o700,
+    );
+    write(&stubs.join("buildx"), "#!/bin/sh\nexit 1\n", 0o700);
     for name in ["just", "cargo"] {
         write(&stubs.join(name), "#!/bin/sh\nexit 0\n", 0o700);
     }
@@ -125,7 +141,12 @@ fn package(root: &Path, base: &Path) {
         r#"#!/bin/sh
 case "$1 $2" in
   'buildx build') exit 0 ;;
-  'image save') test "$4" = --output && printf 'fixture controller\n' > "$5" ;;
+  'image save')
+    if [ "$3" = --output ]; then printf 'fixture runtime images\n' > "$4"
+    else test "$4" = --output && printf 'fixture controller\n' > "$5"; fi ;;
+  'context inspect') printf '{"Host":"unix:///fixture/docker.sock"}\n' ;;
+  'info --format') printf '[{"Name":"buildx","Path":"%s/buildx"}]\n' "$(dirname "$0")" ;;
+  'pull --platform') exit 0 ;;
   *) exit 1 ;;
 esac
 "#,

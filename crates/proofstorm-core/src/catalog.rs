@@ -339,16 +339,6 @@ pub fn catalog_image_source(image: &str) -> Result<String, String> {
     } else {
         repository.to_owned()
     };
-    // This exact upstream image is mirrored unchanged to avoid Docker Hub pull
-    // quotas. Keep local repository names stable so saved locks use the mirror
-    // too; other BusyBox digests still resolve to their original publisher.
-    let source = match (source.as_str(), sha) {
-        (
-            "docker.io/library/busybox",
-            "73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
-        ) => "ghcr.io/orangeshyguy21/proofstorm/busybox",
-        _ => &source,
-    };
     Ok(format!("{source}@sha256:{sha}"))
 }
 
@@ -1857,18 +1847,17 @@ mod tests {
     }
 
     #[test]
-    fn busybox_mirror_preserves_saved_locks_and_only_redirects_the_verified_digest() {
+    fn busybox_and_saved_workspace_locks_use_the_upstream_pin() {
         let sha = "73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
         let upstream = format!("docker.io/library/busybox@sha256:{sha}");
-        let mirrored = format!("ghcr.io/orangeshyguy21/proofstorm/busybox@sha256:{sha}");
         let workspace = default_catalog()
             .entries
             .iter()
             .find(|entry| entry.id == "workspace")
             .unwrap();
         assert_eq!(workspace.image, mirror_image(&upstream));
-        for image in [&upstream, &workspace.image, &mirrored] {
-            assert_eq!(catalog_image_source(image).unwrap(), mirrored);
+        for image in [&upstream, &workspace.image] {
+            assert_eq!(catalog_image_source(image).unwrap(), upstream);
         }
         for image in [
             format!("docker.io/library/busybox@sha256:{}", "a".repeat(64)),
