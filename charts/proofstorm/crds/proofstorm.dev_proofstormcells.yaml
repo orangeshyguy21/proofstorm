@@ -24,6 +24,9 @@ spec:
               cell:
                 properties:
                   api_version:
+                    description: Cell format version. Use exactly `proofstorm/v1alpha1`.
+                    enum:
+                    - proofstorm/v1alpha1
                     type: string
                   components:
                     items:

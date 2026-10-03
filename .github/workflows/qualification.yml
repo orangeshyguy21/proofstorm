@@ -55,6 +55,33 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  images:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: qualification-plan-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/plan
+      - name: Prepare and verify every required public image once
+        env:
+          CARGO_TARGET_DIR: target/check
+        run: |
+          cargo build --locked -p proofstorm-qualification
+          bash scripts/qualification-cache.sh prepare "$RUNNER_TEMP/plan/plan.json" "$RUNNER_TEMP/images" "$RUNNER_TEMP/image-preparation"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-images-${{ github.sha }}-${{ github.run_attempt }}
+          # Public registry content only. Never a runtime home or Docker config.
+          path: ${{ runner.temp }}/images/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 2
+
   build:
     needs: plan
     strategy:
@@ -92,7 +119,7 @@ jobs:
           retention-days: 2
 
   preflight:
-    needs: build
+    needs: [build, images]
     strategy:
       fail-fast: false
       matrix:
@@ -116,15 +143,27 @@ jobs:
           (cd "$RUNNER_TEMP/artifacts" && sha256sum --check SHA256SUMS)
           tar -xf "$RUNNER_TEMP/artifacts/host.tar"
           docker image load --input "$RUNNER_TEMP/artifacts/controller.tar"
+          docker image load --input "$RUNNER_TEMP/artifacts/runtime-images.tar"
+          rm "$RUNNER_TEMP/artifacts/host.tar" "$RUNNER_TEMP/artifacts/controller.tar" "$RUNNER_TEMP/artifacts/runtime-images.tar"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: qualification-plan-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: qualification-images-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/images
       - name: Validate native runtime startup and owned cleanup before fanout
         # Private runtime state and logs remain on this disposable runner.
         run: |
+          bash scripts/qualification-cache.sh with "$RUNNER_TEMP/plan/plan.json" "$RUNNER_TEMP/images" "$RUNNER_TEMP/image-cache" bash -c '
           target/check/debug/proofstorm-acceptance --root "$PWD" \
+            --qualification-image-cache "$QUALIFICATION_IMAGE_CACHE" \
             --checkout-home "$PWD/.proofstorm-dev/state" \
-            --work-dir "$RUNNER_TEMP/native-runtime-smoke" --timeout 300 smoke
+            --work-dir "$RUNNER_TEMP/native-runtime-smoke" --timeout 300 smoke'
 
   execute:
-    needs: [plan, build, preflight]
+    needs: [plan, build, images, preflight]
     strategy:
       fail-fast: false
       max-parallel: 8
@@ -148,6 +187,12 @@ jobs:
           (cd "$RUNNER_TEMP/artifacts" && sha256sum --check SHA256SUMS)
           tar -xf "$RUNNER_TEMP/artifacts/host.tar"
           docker image load --input "$RUNNER_TEMP/artifacts/controller.tar"
+          docker image load --input "$RUNNER_TEMP/artifacts/runtime-images.tar"
+          rm "$RUNNER_TEMP/artifacts/host.tar" "$RUNNER_TEMP/artifacts/controller.tar" "$RUNNER_TEMP/artifacts/runtime-images.tar"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: qualification-images-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/images
       - name: Run every planned case and verify owned cleanup
         env:
           CASES: ${{ toJSON(matrix.cases) }}
@@ -163,7 +208,8 @@ jobs:
               echo '::warning::age install failed; private logs stay on the runner'
             fi
           fi
-          bash scripts/qualification-shard.sh "$RUNNER_TEMP/plan/plan.json" "$RUNNER_TEMP/cases.json" "$RUNNER_TEMP/cases" "$RUNNER_TEMP/receipts"
+          bash scripts/qualification-cache.sh with "$RUNNER_TEMP/plan/plan.json" "$RUNNER_TEMP/images" "$RUNNER_TEMP/image-cache" \
+            bash scripts/qualification-shard.sh "$RUNNER_TEMP/plan/plan.json" "$RUNNER_TEMP/cases.json" "$RUNNER_TEMP/cases" "$RUNNER_TEMP/receipts"
       - name: Save redacted execution receipts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -185,14 +231,14 @@ jobs:
 
   verify:
     if: always()
-    needs: [plan, build, preflight, execute]
+    needs: [plan, build, images, preflight, execute]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Require every planned lane to succeed
         env:
           NEEDS: ${{ toJSON(needs) }}
-        run: jq -e 'keys==["build","execute","plan","preflight"] and all(.[]; .result=="success")' <<< "$NEEDS"
+        run: jq -e 'keys==["build","execute","images","plan","preflight"] and all(.[]; .result=="success")' <<< "$NEEDS"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

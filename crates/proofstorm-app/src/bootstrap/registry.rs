@@ -1,4 +1,4 @@
-//! Anonymous access to the installation's loopback registry, on the selected engine.
+//! Anonymous catalog reads and installation-local publication, on the selected engine.
 use super::{Installation, docker, process};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
@@ -57,10 +57,10 @@ impl Registry {
         ensure!(
             host.strip_prefix("unix://")
                 .is_some_and(|path| Path::new(path).is_absolute()),
-            "checkout controller publication requires a local Docker Unix socket; select a local Docker context"
+            "local registry access requires a local Docker Unix socket; select a local Docker context"
         );
         let config = tempfile::Builder::new()
-            .prefix("controller-registry-")
+            .prefix("local-registry-")
             .tempdir_in(home)?;
         fs::set_permissions(config.path(), fs::Permissions::from_mode(0o700))?;
         // A literal {} lets Docker auto-discover a platform credential helper.
@@ -98,6 +98,17 @@ impl Registry {
         command.args(args);
         self.isolate(&mut command);
         process::configured(home, &mut command, seconds)
+    }
+
+    pub(super) fn image_preparation(
+        &self,
+        home: &Path,
+        args: &[&str],
+        seconds: u64,
+    ) -> Result<String> {
+        let mut command = process::image_command(args, std::env::var_os("GODEBUG"));
+        self.isolate(&mut command);
+        process::image_preparation(home, &mut command, seconds)
     }
 }
 
@@ -184,3 +195,7 @@ mod tests {
         assert_eq!(fs::read_dir(home.path()).unwrap().count(), 0);
     }
 }
+
+#[cfg(test)]
+#[path = "registry_live_tests.rs"]
+mod live_tests;

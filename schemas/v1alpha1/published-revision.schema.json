@@ -404,6 +404,8 @@
       "additionalProperties": false,
       "properties": {
         "api_version": {
+          "const": "proofstorm/v1alpha1",
+          "description": "Cell format version. Use exactly `proofstorm/v1alpha1`.",
           "type": "string"
         },
         "components": {

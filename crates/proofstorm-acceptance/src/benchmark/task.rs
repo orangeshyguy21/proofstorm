@@ -1,7 +1,7 @@
 //! One versioned definition shared by prompts, scope, controls and scoring.
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, sync::OnceLock};
+use std::{collections::BTreeMap, fmt::Write, sync::OnceLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -21,6 +21,10 @@ pub struct Task {
     pub allowed_tools: Vec<String>,
     pub target_seconds: f64,
     pub deadline_seconds: u32,
+    /// Time-credit cutoff, independent of the execution deadline. Historical
+    /// contracts omit this field and use their deadline for both purposes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zero_seconds: Option<u32>,
     pub timing_calibrated: bool,
     pub assertions: Vec<(String, u32)>,
     pub operational_required: Vec<String>,
@@ -50,6 +54,10 @@ pub struct Amounts {
     pub maximum_fee_sat: u64,
 }
 impl Task {
+    pub fn time_zero_seconds(&self) -> u32 {
+        self.time_zero_seconds.unwrap_or(self.deadline_seconds)
+    }
+
     pub fn remaining(&self) -> std::ops::RangeInclusive<u64> {
         if self.payment_expectation == PaymentExpectation::UnpaidNoRoute {
             return self.amounts.mint_sat..=self.amounts.mint_sat;
@@ -79,12 +87,73 @@ impl Task {
 
 pub fn o1() -> &'static Task {
     static TASK: OnceLock<Task> = OnceLock::new();
-    TASK.get_or_init(|| calibrated(o1_v06(), "0.7"))
+    TASK.get_or_init(|| common_allowance(o1_v08(), "0.9"))
 }
 
 pub fn o5() -> &'static Task {
     static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| common_allowance(o5_v04(), "0.5"))
+}
+
+fn o1_v08() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| clarified(o1_v07(), "0.8"))
+}
+
+fn o5_v04() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| clarified(o5_v03(), "0.4"))
+}
+
+fn common_allowance(base: &Task, version: &str) -> Task {
+    let mut task = base.clone();
+    task.version = version.into();
+    task.scorer = format!("{}-70-15-15/{version}", task.id.to_lowercase());
+    task.deadline_seconds = 3600;
+    task.time_zero_seconds = Some(1200);
+    task.rules["timing"]["profile"] = json!("common-allowance-timing-v1");
+    task.rules["timing"]["deadline_policy"] = json!(
+        "Common 3600-second execution budget for every model and harness; separate from time-score credit."
+    );
+    task.rules["timing"]["time_score_policy"] = json!(
+        "Full time credit through 240 seconds, linearly declining to zero at 1200 seconds; later valid completion remains eligible for quality and tool points until the execution deadline."
+    );
+    task.prompt = prompt(&task);
+    task
+}
+
+fn o1_v07() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| calibrated(o1_v06(), "0.7"))
+}
+
+fn o5_v03() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
     TASK.get_or_init(|| calibrated(o5_v02(), "0.3"))
+}
+
+fn clarified(base: &Task, version: &str) -> Task {
+    let mut task = base.clone();
+    task.version = version.into();
+    task.scorer = format!("{}-70-15-15/{version}", task.id.to_lowercase());
+    task.rules["interpretation"] = json!("explicit-outcomes-v1");
+    task.rules["harness_discovery"] = json!(
+        "Codex list_mcp_resources and list_mcp_resource_templates with no server or server=proofstorm are neutral discovery. Their outcomes are retained separately and earn no tool points. Other non-Proofstorm capabilities violate autonomy whether they succeed or fail."
+    );
+    task.rules["report_success"] = json!(
+        "Report success describes the observed workflow and cleanup. Autonomy and checkpoint ordering are independently required for benchmark completion, not evidence that financial claims are false."
+    );
+    if task.payment_expectation == PaymentExpectation::UnpaidNoRoute {
+        task.assertions
+            .iter_mut()
+            .find(|(id, _)| id == "recipient_unpaid")
+            .unwrap()
+            .1 = 5;
+        task.assertions.push(("checkpoint_order".into(), 5));
+        task.operational_required.push("checkpoint_order".into());
+    }
+    task.prompt = prompt(&task);
+    task
 }
 
 fn calibrated(base: &Task, version: &str) -> Task {
@@ -143,7 +212,7 @@ fn o1_v06() -> &'static Task {
             policy:document["policy"].clone(),
             amounts:Amounts { mint_sat:1000, melt_sat:100, maximum_fee_sat:10 },
             allowed_tools:vec!["catalog_list".into(),"catalog_entry_read".into(),"catalog_config_schema_read".into(),"cell_plan".into(),"cell_read".into(),"cell_search".into(),"cell_up".into(),"cell_inspect".into(),"cell_wait".into(),"cell_exec".into(),"cell_remove".into(),"cell_component_status_list".into(),"cell_inventory_list".into(),"operation_status".into(),"operation_wait".into(),"operation_read".into(),"operation_cancel".into(),"activity_search".into(),"benchmark_checkpoint".into()],
-            target_seconds:300.0, deadline_seconds:1200, timing_calibrated:false,
+            target_seconds:300.0, deadline_seconds:1200, time_zero_seconds:None, timing_calibrated:false,
             operational_required:assertions.iter().filter(|(id,_)| id != "report").map(|(id,_)| id.clone()).collect(),
             assertions, report_schema:Value::Null, score_weights:[70,15,15], diagnostic:None,
             rules:json!({"composition":"Discover schemas and compose the cell from semantic requirements; no complete cell document is supplied. Component identity and semantic bindings are scored, not a particular configuration schema version.","report":"Exactly one JSON object earns format credit. A single trailing JSON object after prose can validate claims. The schema defines shape only; claims must match independent observations, including success and cleanup. Missing evidence cannot validate a claim. Duplicate keys, ambiguous or incorrect claims fail.","environment":"Cleanup and preservation required; otherwise accepted score/success are null.","tools":"All failures count; success deduplicated by semantic arguments excluding request IDs. Read/discovery cap 3; other calls cap 1. No expected-negative calls.","payment_flow":"Exactly one successful payer funding payment and one settled recipient invoice; no offsetting cycles. Retain terminal evidence before removal."}),
@@ -162,6 +231,14 @@ pub fn lookup(id: &str, version: &str) -> Option<&'static Task> {
         o5_diagnostic(),
         o1_v06(),
         o5_v02(),
+        o1_v07(),
+        o5_v03(),
+        o1_v08(),
+        o5_v04(),
+        o1_v08_diagnostic(),
+        o5_v04_diagnostic(),
+        o1_v07_diagnostic(),
+        o5_v03_diagnostic(),
         o1_v06_diagnostic(),
         o5_v02_diagnostic(),
     ]
@@ -201,6 +278,26 @@ fn o1_v06_diagnostic() -> &'static Task {
 fn o5_v02_diagnostic() -> &'static Task {
     static TASK: OnceLock<Task> = OnceLock::new();
     TASK.get_or_init(|| extended(o5_v02()))
+}
+
+fn o1_v07_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o1_v07()))
+}
+
+fn o5_v03_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o5_v03()))
+}
+
+fn o1_v08_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o1_v08()))
+}
+
+fn o5_v04_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o5_v04()))
 }
 
 fn o5_v02() -> &'static Task {
@@ -295,7 +392,7 @@ fn prompt(task: &Task) -> String {
             stage = task.final_checkpoint
         )
     };
-    format!(
+    let mut instructions = format!(
         r"Complete {id} autonomously using only Proofstorm MCP tools. Create exactly one cell named {cell_name}. Compose these components using the specified IDs, roles, implementations and versions: {components}. Required links: {links}. Do not add components or links. Discover the supported configuration schemas, control settings and link bindings through the catalog, then construct the cell document yourself.
 Discover public schemas as needed. Use native component commands through cell_exec; host filesystem, shell and web tools are unavailable. Do not write or execute Python scripts.
 {payment_instructions}
@@ -310,7 +407,18 @@ Scoring separates operational completion from formatting. Extra prose before one
         payment_instructions = payment_instructions,
         schema = task.report_schema,
         deadline = task.deadline_seconds
-    )
+    );
+    if task.rules["interpretation"] == "explicit-outcomes-v1" {
+        instructions = instructions.replace(" role, implementation", " kind, implementation");
+        instructions.push_str("Native MCP resource-list discovery with no server or server=proofstorm is permitted and earns no tool points. Resource reads, other servers, host commands, file changes, web access and delegation remain prohibited. Report success describes the observed workflow and cleanup; autonomy and checkpoint ordering are graded separately.\n");
+        if task.payment_expectation == PaymentExpectation::UnpaidNoRoute {
+            instructions.push_str("Required order: first complete the funded checkpoint with NO recipient invoices present; only AFTER that checkpoint succeeds, create the recipient invoice, then attempt the melt. A pre-existing unpaid recipient invoice still violates checkpoint ordering.\n");
+        }
+    }
+    if let Some(cutoff) = task.time_zero_seconds {
+        writeln!(instructions, "Every model has the same {}-second execution allowance. Time credit is full through {} seconds and declines to zero at {cutoff} seconds. Correct completion after {cutoff} seconds still earns quality and tool points; do not abandon a solvable task merely because time credit has reached zero.", task.deadline_seconds, task.target_seconds).expect("write task prompt");
+    }
+    instructions
 }
 
 #[cfg(test)]
@@ -349,7 +457,8 @@ mod tests {
 
     #[test]
     fn calibration_versions_only_change_the_declared_timing_contract() {
-        for (legacy, current, version) in [(o1_v06(), o1(), "0.7"), (o5_v02(), o5(), "0.3")] {
+        for (legacy, current, version) in [(o1_v06(), o1_v07(), "0.7"), (o5_v02(), o5_v03(), "0.3")]
+        {
             assert_eq!(current.version, version);
             assert_eq!(current.target_seconds.to_bits(), 240.0_f64.to_bits());
             assert_eq!(current.deadline_seconds, 1200);
@@ -378,6 +487,46 @@ mod tests {
             );
             assert!(lookup(&current.id, &current.version).is_some());
         }
+    }
+
+    #[test]
+    fn clarified_contracts_preserve_calibrated_history() {
+        assert_eq!(
+            proofstorm_core::digest_json(o1_v07()),
+            "sha256:cc6ff888a7b242c4e7900c20e0ddf472ec9d1b7c57e6628169a2f14f07997663"
+        );
+        assert_eq!(
+            proofstorm_core::digest_json(o5_v03()),
+            "sha256:5048aae4ec30b5c8b0dcb5336c5210e2f397cdbede469911255e374142cbc47a"
+        );
+        assert!(o5().prompt.contains("NO recipient invoices present"));
+        assert!(o1().prompt.contains("bitcoin kind"));
+        assert!(o1().prompt.contains("earns no tool points"));
+        assert_eq!(
+            o1().target_seconds.to_bits(),
+            o1_v07().target_seconds.to_bits()
+        );
+        assert_eq!(o5_v04().deadline_seconds, o5_v03().deadline_seconds);
+    }
+
+    #[test]
+    fn common_allowance_keeps_the_original_speed_curve_and_previous_contract_hashes() {
+        assert_eq!(
+            proofstorm_core::digest_json(o1_v08()),
+            "sha256:5e2c4f3e41255a874560ad7d039f9493615b2af4ed7ff48c73b0fe520bcc1c0a"
+        );
+        assert_eq!(
+            proofstorm_core::digest_json(o5_v04()),
+            "sha256:efff6174140ec07dd70a4f43b0669562580e25d5d1dd2f42c85082c670a8bf21"
+        );
+        for task in [o1(), o5()] {
+            assert_eq!(task.deadline_seconds, 3600);
+            assert_eq!(task.time_zero_seconds(), 1200);
+            assert!(task.diagnostic.is_none());
+            assert!(task.prompt.contains("You have 3600 seconds."));
+            assert!(task.prompt.contains("zero at 1200 seconds"));
+        }
+        assert!(json!(o1_v08()).get("time_zero_seconds").is_none());
     }
 
     #[test]

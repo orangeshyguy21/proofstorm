@@ -293,6 +293,28 @@ fn refusals_foreign_tools_gaps_and_errors_stay_visible() {
 }
 
 #[test]
+fn new_contract_classifies_foreign_attempts_independently_of_their_result() {
+    for failed in [true, false] {
+        let work = tempfile::tempdir().unwrap();
+        let ctx = context(work.path());
+        fixture(
+            work.path(),
+            &[
+                init(&ctx),
+                tool_use("bash", "Bash"),
+                tool_result("bash", failed),
+                done("{}"),
+            ],
+        );
+        save(&work.path().join("benchmark-task.json"), &json!(ctx.task)).unwrap();
+        let output = retained(work.path()).unwrap();
+        assert!(output.unauthorized);
+        assert_eq!(output.calls.last().unwrap().success, Some(!failed));
+        assert!(output.telemetry_error.is_none());
+    }
+}
+
+#[test]
 fn proxy_call_without_harness_counterpart_is_a_gap() {
     let work = tempfile::tempdir().unwrap();
     let ctx = context(work.path());

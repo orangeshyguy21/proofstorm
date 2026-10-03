@@ -353,6 +353,8 @@ pub struct CellPolicy {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CellSpec {
+    /// Cell format version. Use exactly `proofstorm/v1alpha1`.
+    #[schemars(extend("const" = crate::API_VERSION))]
     pub api_version: String,
     pub name: String,
     pub components: Vec<ComponentSpec>,

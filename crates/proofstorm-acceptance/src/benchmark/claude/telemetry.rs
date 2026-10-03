@@ -19,6 +19,8 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
         .ok()
         .and_then(|value| serde_json::from_value::<Context>(value).ok())
         .map(|context| expected_tools(&context.task));
+    let explicit_outcomes = read(&work.join("benchmark-task.json"))
+        .is_ok_and(|task| task["rules"]["interpretation"] == "explicit-outcomes-v1");
     let mut unauthorized = false;
     let mut inits = Vec::new();
     let mut result = None;
@@ -162,12 +164,18 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
         }
         // A permission refusal is a failed attempt; an unobserved success elsewhere
         // is unauthorized. Missing proxy counterparts stay unknown.
-        unauthorized |= owned.is_none() && !failed;
+        unauthorized |= owned.is_none() && (explicit_outcomes || !failed);
         push(
             &mut calls,
             owned.unwrap_or(&name),
             input,
-            if failed { Some(false) } else { None },
+            if failed {
+                Some(false)
+            } else if explicit_outcomes && owned.is_none() && finished {
+                Some(true)
+            } else {
+                None
+            },
         )?;
     }
     if available.values().any(|v| !v.is_empty()) {

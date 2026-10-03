@@ -1,5 +1,6 @@
-//! Read-only evidence that a live run left preexisting Docker resources and
-//! user configuration alone. Image-cache growth is expected and not compared.
+//! Read-only Docker and configuration evidence. Benchmark runs report unrelated
+//! activity; other acceptance gates retain stricter preservation policies.
+//! Image-cache growth is expected and not compared.
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -13,6 +14,7 @@ use std::{
 
 const LIFECYCLE_FIELDS: [&str; 4] = ["running", "restarting", "started", "restarts"];
 pub const ADDITIONS_POLICY: &str = "report-unowned-additions-v1";
+pub mod shared;
 
 #[cfg(test)]
 mod additions_tests;
@@ -283,16 +285,33 @@ fn unowned(resource: &Value) -> Result<bool> {
 }
 
 pub fn snapshot(checkout_home: Option<&Path>) -> Result<Value> {
+    capture(checkout_home, false)
+}
+
+pub fn snapshot_benchmark(checkout_home: Option<&Path>) -> Result<Value> {
+    capture(checkout_home, true)
+}
+
+fn capture(checkout_home: Option<&Path>, concurrent: bool) -> Result<Value> {
     let mut containers = BTreeMap::new();
-    for id in docker(&["ps", "-a", "--no-trunc", "--format", "{{.ID}}"])?.lines() {
-        let mut value: Value = serde_json::from_str(&docker(&[
-            "inspect",
-            "--type",
-            "container",
-            "--format",
-            r#"{"id":{{json .Id}},"name":{{json .Name}},"owner":{{json (index .Config.Labels "proofstorm.dev/installation")}},"cluster":{{json (index .Config.Labels "k3d.cluster")}},"running":{{json .State.Running}},"restarting":{{json .State.Restarting}},"started":{{json .State.StartedAt}},"restarts":{{json .RestartCount}},"mounts":{{json .Mounts}},"networks":{{json .NetworkSettings.Networks}}}"#,
+    let container_list = ["ps", "-a", "--no-trunc", "--format", "{{.ID}}"];
+    for id in docker(&container_list)?.lines() {
+        let Some(mut value) = inspect_resource(
+            &[
+                "inspect",
+                "--type",
+                "container",
+                "--format",
+                r#"{"id":{{json .Id}},"name":{{json .Name}},"owner":{{json (index .Config.Labels "proofstorm.dev/installation")}},"cluster":{{json (index .Config.Labels "k3d.cluster")}},"running":{{json .State.Running}},"restarting":{{json .State.Restarting}},"started":{{json .State.StartedAt}},"restarts":{{json .RestartCount}},"mounts":{{json .Mounts}},"networks":{{json .NetworkSettings.Networks}}}"#,
+                id,
+            ],
+            &container_list,
             id,
-        ])?)?;
+            concurrent,
+        )?
+        else {
+            continue;
+        };
         // Mount ordering is not part of identity.
         value["mounts"]
             .as_array_mut()
@@ -300,8 +319,8 @@ pub fn snapshot(checkout_home: Option<&Path>) -> Result<Value> {
             .sort_by_cached_key(Value::to_string);
         containers.insert(id.to_owned(), value);
     }
-    let networks = resource_inventory("network", "{{.ID}}")?;
-    let volumes = resource_inventory("volume", "{{.Name}}")?;
+    let networks = resource_inventory("network", "{{.ID}}", concurrent)?;
+    let volumes = resource_inventory("volume", "{{.Name}}", concurrent)?;
     let mut files = BTreeMap::new();
     if let Some(home) = std::env::var_os("HOME") {
         for name in [
@@ -311,7 +330,18 @@ pub fn snapshot(checkout_home: Option<&Path>) -> Result<Value> {
             ".config/opencode/opencode.json",
         ] {
             let path = Path::new(&home).join(name);
-            files.insert(path.display().to_string(), configuration(&path)?);
+            let observed = if concurrent {
+                // Personal config is informational for isolated benchmark
+                // adapters. Hash raw bytes even while a user is editing JSON.
+                match fs::read(&path) {
+                    Ok(bytes) => json!(format!("{:x}", Sha256::digest(bytes))),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Value::Null,
+                    Err(error) => return Err(error.into()),
+                }
+            } else {
+                configuration(&path)?
+            };
+            files.insert(path.display().to_string(), observed);
         }
     }
     if let Some(home) = checkout_home {
@@ -331,7 +361,11 @@ pub fn snapshot(checkout_home: Option<&Path>) -> Result<Value> {
     )
 }
 
-fn resource_inventory(kind: &str, identity: &str) -> Result<BTreeMap<String, Value>> {
+fn resource_inventory(
+    kind: &str,
+    identity: &str,
+    concurrent: bool,
+) -> Result<BTreeMap<String, Value>> {
     let mut resources = BTreeMap::new();
     let format = if kind == "network" {
         r#"{"name":{{json .Name}},"created":{{json .Created}},"driver":{{json .Driver}},"owner":{{json (index .Labels "proofstorm.dev/installation")}},"cluster":{{json (index .Labels "k3d.cluster")}}}"#
@@ -344,10 +378,52 @@ fn resource_inventory(kind: &str, identity: &str) -> Result<BTreeMap<String, Val
         vec![kind, "ls", "--format", identity]
     };
     for id in docker(&args)?.lines() {
-        let value = serde_json::from_str(&docker(&[kind, "inspect", "--format", format, id])?)?;
-        resources.insert(id.to_owned(), value);
+        if let Some(value) = inspect_resource(
+            &[kind, "inspect", "--format", format, id],
+            &args,
+            id,
+            concurrent,
+        )? {
+            resources.insert(id.to_owned(), value);
+        }
     }
     Ok(resources)
+}
+
+fn inspect_resource(
+    args: &[&str],
+    list: &[&str],
+    id: &str,
+    concurrent: bool,
+) -> Result<Option<Value>> {
+    let result = docker(args);
+    let observed = if concurrent {
+        inspected_or_removed(id, result, || docker(list))?
+    } else {
+        Some(result?)
+    };
+    observed
+        .map(|value| Ok(serde_json::from_str(&value)?))
+        .transpose()
+}
+
+fn inspected_or_removed(
+    id: &str,
+    result: Result<String>,
+    relist: impl FnOnce() -> Result<String>,
+) -> Result<Option<String>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) => {
+            // Docker's list/inspect sequence is not atomic. A failed inspect
+            // is tolerable only when a successful new inventory proves absence.
+            if relist()?.lines().any(|current| current == id) {
+                Err(error)
+            } else {
+                Ok(None)
+            }
+        }
+    }
 }
 
 pub fn verify(before: &Value, after: &Value) -> Result<()> {
@@ -395,6 +471,38 @@ fn differences(before: &Value, after: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_removal_requires_a_successful_inventory_proving_absence() {
+        assert_eq!(
+            inspected_or_removed("gone", Err(anyhow::anyhow!("inspect failed")), || Ok(
+                "other\n".into()
+            ))
+            .unwrap(),
+            None
+        );
+        assert!(
+            inspected_or_removed(
+                "still-present",
+                Err(anyhow::anyhow!("inspect failed")),
+                || Ok("still-present\n".into())
+            )
+            .is_err()
+        );
+        assert!(
+            inspected_or_removed("gone", Err(anyhow::anyhow!("inspect failed")), || Err(
+                anyhow::anyhow!("Docker unavailable")
+            ))
+            .is_err()
+        );
+        assert_eq!(
+            inspected_or_removed("present", Ok("observed".into()), || panic!(
+                "no retry needed"
+            ))
+            .unwrap(),
+            Some("observed".into())
+        );
+    }
     #[test]
     fn claude_session_metadata_is_ignored_but_every_mcp_map_is_preserved() {
         let before = json!({"mcpServers":{"global":{"command":"proofstorm","env":{"B":"2","A":"1"}}},"projects":{"/one":{"mcpServers":{"local":{"args":["a","b"]}},"lastSessionId":"old"}},"numStartups":1});

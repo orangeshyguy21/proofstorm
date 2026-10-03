@@ -38,6 +38,66 @@ fn tool(id: &str, status: &str) -> Value {
 fn captured(work: &Path) {
     fs::write(work.join("events.jsonl"), "{\"kind\":\"start\",\"id\":1,\"tool\":\"catalog_list\",\"arguments\":{}}\n{\"kind\":\"end\",\"id\":1,\"success\":true,\"elapsed_ms\":9}\n").unwrap();
 }
+
+#[test]
+fn discovery_is_neutral_but_foreign_capabilities_are_unauthorized_on_success_or_failure() {
+    for status in ["completed", "failed", "in_progress"] {
+        for name in [
+            "list_mcp_resources",
+            "list_mcp_resource_templates",
+            "read_mcp_resource",
+        ] {
+            for args in [
+                json!({}),
+                json!({"server":"proofstorm"}),
+                json!({"server":"other"}),
+            ] {
+                let work = tempfile::tempdir().unwrap();
+                captured(work.path());
+                save(
+                    &work.path().join("benchmark-task.json"),
+                    &json!(context(work.path()).task),
+                )
+                .unwrap();
+                let mut discovery = tool("discovery", status);
+                discovery["item"]["server"] = json!("codex");
+                discovery["item"]["tool"] = json!(name);
+                discovery["item"]["arguments"] = args.clone();
+                fixture(
+                    work.path(),
+                    &[
+                        tool("one", "completed"),
+                        discovery,
+                        json!({"type":"turn.completed"}),
+                    ],
+                );
+                let output = retained(work.path()).unwrap();
+                let neutral = name != "read_mcp_resource" && args["server"] != "other";
+                assert_eq!(output.unauthorized, !neutral);
+                if neutral {
+                    assert_eq!(
+                        output.usage["neutral_discovery"].as_array().unwrap().len(),
+                        1
+                    );
+                    assert_eq!(
+                        output.calls.iter().filter(|call| call.tool == name).count(),
+                        0
+                    );
+                    assert_eq!(output.telemetry_error.is_some(), status == "in_progress");
+                } else {
+                    assert_eq!(
+                        output.calls[1].success,
+                        match status {
+                            "completed" => Some(true),
+                            "failed" => Some(false),
+                            _ => None,
+                        }
+                    );
+                }
+            }
+        }
+    }
+}
 #[test]
 fn codex_lifecycles_reconcile_once_and_preserve_usage_and_report() {
     let work = tempfile::tempdir().unwrap();

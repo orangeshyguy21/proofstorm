@@ -3,6 +3,7 @@ mod cluster;
 pub mod lifecycle;
 mod local_controller;
 mod process;
+mod registry;
 pub mod teardown;
 mod tools;
 
@@ -547,6 +548,9 @@ fn mirror_with_progress(
 ) -> Result<()> {
     cluster::owned(installation)?;
     cluster::verify_kubeconfig(installation)?;
+    // Catalog sources are public and the owned loopback registry is anonymous.
+    // Never consult the user's credential helper for either end of the copy.
+    let registry = registry::Registry::new(installation)?;
     let total = selected.len();
     for (index, image) in selected.into_iter().enumerate() {
         progress(&format!("Checking catalog image {} of {total}", index + 1));
@@ -560,18 +564,19 @@ fn mirror_with_progress(
                 .split_once("@sha256:")
                 .context("unpinned catalog image")?;
             let destination = format!("{}/{repository}@sha256:{sha}", installation.host_registry());
-            if docker(
-                &installation.home,
-                &["buildx", "imagetools", "inspect", &destination],
-                30,
-            )
-            .is_err()
+            if registry
+                .run(
+                    &installation.home,
+                    &["buildx", "imagetools", "inspect", &destination],
+                    30,
+                )
+                .is_err()
             {
                 let tag = format!(
                     "{}/{repository}:catalog-{sha}",
                     installation.host_registry()
                 );
-                process::image_preparation(
+                registry.image_preparation(
                     &installation.home,
                     &[
                         "buildx",
@@ -585,7 +590,7 @@ fn mirror_with_progress(
                     900,
                 )?;
             }
-            let manifest: Value = serde_json::from_str(&process::image_preparation(
+            let manifest: Value = serde_json::from_str(&registry.image_preparation(
                 &installation.home,
                 &[
                     "buildx",
@@ -604,7 +609,7 @@ fn mirror_with_progress(
         }
         for node in cluster::nodes(installation) {
             cluster::owned(installation)?;
-            process::image_preparation(
+            registry.image_preparation(
                 &installation.home,
                 &["exec", &node, "crictl", "--timeout=120s", "pull", &image],
                 150,

@@ -1,4 +1,5 @@
 //! Cell and link inputs share strict parsing across inline documents, JSON strings and files.
+mod diagnostics;
 use std::{fs::File, io::BufReader, path::Path};
 
 use proofstorm_core::{
@@ -203,6 +204,8 @@ impl TryFrom<LinkSpec> for AddLinkInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AuthoredCellSpec {
+    /// Cell format version. Use exactly `proofstorm/v1alpha1`.
+    #[schemars(extend("const" = proofstorm_core::API_VERSION))]
     pub api_version: String,
     pub name: String,
     pub components: Vec<ComponentSpec>,
@@ -242,11 +245,19 @@ where
             })
         });
     if !has_canonical_binding {
-        return Err(serde::de::Error::custom(authored_error));
+        return Err(serde::de::Error::custom(diagnostics::describe(
+            &value,
+            false,
+            &authored_error,
+        )));
     }
-    let canonical: CellSpec = match serde_json::from_value(value) {
+    let canonical: CellSpec = match serde_json::from_value(value.clone()) {
         Ok(canonical) => canonical,
-        Err(_) => return Err(serde::de::Error::custom(authored_error)),
+        Err(error) => {
+            return Err(serde::de::Error::custom(diagnostics::describe(
+                &value, true, &error,
+            )));
+        }
     };
     Ok(AuthoredCellSpec {
         api_version: canonical.api_version,

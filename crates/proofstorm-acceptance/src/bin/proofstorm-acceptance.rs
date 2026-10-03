@@ -45,6 +45,9 @@ struct Arguments {
     qualification_plan: Option<PathBuf>,
     #[arg(long, requires = "qualification_plan")]
     qualification_case: Option<String>,
+    /// Explicit loopback registry restored from this qualification run's image bundle.
+    #[arg(long)]
+    qualification_image_cache: Option<String>,
     /// Verified checkout artifact source. Its runtime is never used or modified.
     #[arg(long, conflicts_with = "bundle")]
     checkout_home: Option<PathBuf>,
@@ -110,6 +113,7 @@ async fn main() -> Result<()> {
         benchmark_claude: args.benchmark_claude,
         benchmark_claude_auth: args.benchmark_claude_auth,
         qualification: args.qualification_plan.zip(args.qualification_case),
+        qualification_image_cache: args.qualification_image_cache,
         checkout_home: args.checkout_home,
         bundle: args.bundle,
         allow_development: args.allow_development,
@@ -128,10 +132,10 @@ async fn main() -> Result<()> {
         )
     });
     if benchmark && !args.benchmark_prepare_images {
-        if names.iter().any(|name| name.ends_with("-diagnostic")) && args.worker_home.is_none() {
+        if args.worker_home.is_none() {
             anyhow::ensure!(
                 args.timeout >= 4200,
-                "extended diagnostics require --timeout of at least 4200 seconds for the 3600-second model budget plus verification"
+                "model benchmarks require --timeout of at least 4200 seconds for the common 3600-second model budget plus verification"
             );
         }
         anyhow::ensure!(
@@ -150,17 +154,7 @@ async fn main() -> Result<()> {
         }
         return runner::worker(&selection, &root, &home, &names[0]);
     }
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let signal = Arc::clone(&cancelled);
-    tokio::spawn(async move {
-        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("register SIGTERM");
-        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
-        eprintln!(
-            "Interrupted. Finishing the current setup operation, then cleaning up the owned runtime..."
-        );
-        signal.store(true, Ordering::SeqCst);
-    });
+    let cancelled = cancellation_signal();
     tokio::task::spawn_blocking(move || {
         let result = runner::run(
             &selection,
@@ -180,4 +174,19 @@ async fn main() -> Result<()> {
         result
     })
     .await?
+}
+
+fn cancellation_signal() -> Arc<AtomicBool> {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&cancelled);
+    tokio::spawn(async move {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("register SIGTERM");
+        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
+        eprintln!(
+            "Interrupted. Finishing the current setup operation, then cleaning up the owned runtime..."
+        );
+        signal.store(true, Ordering::SeqCst);
+    });
+    cancelled
 }

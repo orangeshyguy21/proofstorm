@@ -10,6 +10,10 @@ use std::{
 };
 
 pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
+    // Historical contracts retain their exact normalization for offline regrading.
+    let explicit_outcomes = read(&work.join("benchmark-task.json"))
+        .is_ok_and(|task| task["rules"]["interpretation"] == "explicit-outcomes-v1");
+    let mut discovery = Vec::new();
     let attempt =
         read(&work.join("benchmark-attempt.json")).unwrap_or(json!({"outcome":"not_started"}));
     let transcript = fs::read_to_string(work.join("harness.jsonl")).unwrap_or_default();
@@ -102,6 +106,15 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
                     || !item["error"].is_null()
                     || item["result"]["isError"] == true;
                 let owned = item["server"] == "proofstorm";
+                if explicit_outcomes && neutral_discovery(item) {
+                    discovery.push(item.clone());
+                    if !terminal.contains(&id)
+                        || !matches!(item["status"].as_str(), Some("completed" | "failed"))
+                    {
+                        complete = false;
+                    }
+                    continue;
+                }
                 let key = proofstorm_core::digest_json(&json!([name, args]));
                 if owned && let Some(index) = available.get_mut(&key).and_then(VecDeque::pop_front)
                 {
@@ -111,12 +124,22 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
                         calls[index].success = None;
                     }
                 } else {
-                    unauthorized |= !owned && !failed_call;
+                    unauthorized |= !owned && (explicit_outcomes || !failed_call);
                     push(
                         &mut calls,
                         name,
                         args,
-                        if failed_call { Some(false) } else { None },
+                        if failed_call {
+                            Some(false)
+                        } else if explicit_outcomes
+                            && !owned
+                            && terminal.contains(&id)
+                            && item["status"] == "completed"
+                        {
+                            Some(true)
+                        } else {
+                            None
+                        },
                     )?;
                 }
             }
@@ -153,15 +176,34 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
     if outcome == "completed" && (!finished || failed) {
         outcome = "provider_or_harness_failure".into();
     }
+    let mut usage = json!({"turns":usages,"cost":null});
+    if explicit_outcomes {
+        usage["neutral_discovery"] = json!(discovery);
+    }
     Ok(AttemptOutput {
         outcome,
         elapsed_seconds: attempt["elapsed_seconds"].as_f64(),
         final_text,
-        usage: json!({"turns":usages,"cost":null}),
+        usage,
         calls,
         unauthorized,
         telemetry_error,
     })
+}
+
+fn neutral_discovery(item: &Value) -> bool {
+    item["server"] == "codex"
+        && matches!(
+            item["tool"].as_str(),
+            Some("list_mcp_resources" | "list_mcp_resource_templates")
+        )
+        && item["arguments"].as_object().is_some_and(|args| {
+            args.iter().all(|(key, value)| match key.as_str() {
+                "server" => value == "proofstorm",
+                "cursor" => value.is_string(),
+                _ => false,
+            })
+        })
 }
 
 fn push(calls: &mut Vec<Call>, tool: &str, arguments: Value, success: Option<bool>) -> Result<()> {

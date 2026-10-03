@@ -34,10 +34,14 @@ seal_logs() {
 # Run one attempt in a new work directory and set $reason ('' on success).
 run_attempt() {
   local id=$1 dir=$2 status=0 detail stage
+  local cache_args=(--timeout 1200)
+  if [[ -n "${QUALIFICATION_IMAGE_CACHE:-}" ]]; then
+    cache_args+=(--qualification-image-cache "$QUALIFICATION_IMAGE_CACHE")
+  fi
   reason=''
   "$root/target/check/debug/proofstorm-acceptance" --root "$root" \
     --checkout-home "$root/.proofstorm-dev/state" --work-dir "$dir" \
-    --qualification-plan "$plan" --qualification-case "$id" --timeout 1200 qualification || status=$?
+    --qualification-plan "$plan" --qualification-case "$id" "${cache_args[@]}" qualification || status=$?
   if (( status != 0 )); then
     reason="acceptance exited $status"
     if [[ -f "$dir/gate-failure.json" ]]; then

@@ -67,11 +67,13 @@ pub(super) fn assertions(task: &Task, funded: &Value, evaluated: &Value, asserti
         && isolated(funded)
         && isolated(evaluated)
         && attempt.is_some_and(|payment| payment["failure_reason"] == "FAILURE_REASON_NO_ROUTE");
+    let checkpoint_order = empty(&funded["recipient_invoices"]["invoices"]);
+    let explicit_outcomes = task.rules["interpretation"] == "explicit-outcomes-v1";
     let unpaid = identity
         && recipient["settled"] == false
         && recipient["state"] == "OPEN"
         && sat(&recipient["amt_paid_sat"], 0)
-        && empty(&funded["recipient_invoices"]["invoices"])
+        && (explicit_outcomes || checkpoint_order)
         && one(&evaluated["recipient_invoices"], "invoices").is_some_and(|invoice| {
             invoice["r_hash"] == *hash
                 && invoice["settled"] == false
@@ -100,6 +102,9 @@ pub(super) fn assertions(task: &Task, funded: &Value, evaluated: &Value, asserti
         .remove("recipient_settled");
     assertions["payment_attempt"] = json!(attempted);
     assertions["recipient_unpaid"] = json!(unpaid);
+    if explicit_outcomes {
+        assertions["checkpoint_order"] = json!(checkpoint_order);
+    }
     assertions["no_route"] = json!(no_route);
     assertions["accounting"] = json!(accounting);
     assertions["evidence"] = json!(
@@ -287,6 +292,40 @@ mod tests {
             false
         );
     }
+    #[test]
+    fn early_invoice_is_an_ordering_failure_not_a_false_financial_report() {
+        let (mut funded, evaluated) = fixture();
+        funded["recipient_invoices"] = evaluated["recipient_invoices"].clone();
+        let task = super::super::task::o5();
+        let mut observed = super::super::observer::assertions(task, &funded, &evaluated);
+        for key in ["autonomy", "terminal", "agent_cleanup"] {
+            observed[key] = json!(true);
+        }
+        assert_eq!(observed["recipient_unpaid"], true);
+        assert_eq!(observed["accounting"], true);
+        assert_eq!(observed["checkpoint_order"], false);
+        let truth = super::super::observer::report_truth(task, &funded, &evaluated, &observed);
+        assert_eq!(truth["success"], true);
+        observed["report_valid"] = json!(true);
+        observed["report_format"] = json!(true);
+        let grade = super::super::score::grade(
+            task,
+            &observed,
+            &[],
+            Some(250.0),
+            "completed",
+            true,
+            Some(true),
+        );
+        assert_eq!(grade["accepted_score"], 0.0);
+        assert_eq!(grade["workflow_success"], true);
+        assert_eq!(grade["failed_requirements"], json!(["checkpoint_order"]));
+        let old = super::super::task::lookup("O5", "0.3").unwrap();
+        let legacy = super::super::observer::assertions(old, &funded, &evaluated);
+        assert_eq!(legacy["recipient_unpaid"], false);
+        assert_eq!(legacy["accounting"], false);
+    }
+
     #[test]
     fn honest_negative_earns_completion_but_false_or_incomplete_claims_do_not() {
         let task = super::super::task::o5();

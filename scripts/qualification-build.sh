@@ -19,6 +19,21 @@ docker buildx build --platform "$platform" --load --provenance=false \
   --file "$resources/controller-source/Dockerfile.proofstormd" \
   --tag "proofstorm-checkout-source:$sha" "$resources/controller-source"
 docker image save "proofstorm-checkout-source:$sha" --output "$output/controller.tar"
+# Save k3d's native startup images once as well. Fresh case runtimes reuse these
+# daemon images; catalog content is prepared separately for both architectures.
+# shellcheck source=tools/versions.env
+source "$root/tools/versions.env"
+# shellcheck source=scripts/qualification-docker.sh
+source "$root/scripts/qualification-docker.sh"
+anonymous=$(mktemp -d)
+trap 'rm -rf -- "$anonymous"' EXIT
+qualification_docker_config "$anonymous/config"
+runtime_images=(docker.io/library/registry:2 "docker.io/rancher/k3s:$K3S_VERSION"
+  "ghcr.io/k3d-io/k3d-proxy:${K3D_VERSION#v}" "ghcr.io/k3d-io/k3d-tools:${K3D_VERSION#v}")
+for image in "${runtime_images[@]}"; do
+  timeout 300 docker pull --platform "$platform" "$image"
+done
+docker image save --output "$output/runtime-images.tar" "${runtime_images[@]}"
 # Preserve the registration's absolute checkout path and executable permissions.
 # Hosted runners use the same workspace path for every job in this repository.
 # The registration is bound to installation.json. Include that identity only,
@@ -28,4 +43,4 @@ tar -cf "$output/host.tar" .proofstorm-dev/owner.json .proofstorm-dev/build.json
   .proofstorm-dev/resources .proofstorm-dev/web \
   .proofstorm-dev/target/debug/proofstorm .proofstorm-dev/target/debug/proofstorm-mcp \
   target/check/debug/proofstorm-acceptance target/check/debug/proofstorm-qualification target/check/debug/proofstorm-xtask
-(cd "$output" && sha256sum host.tar controller.tar > SHA256SUMS)
+(cd "$output" && sha256sum host.tar controller.tar runtime-images.tar > SHA256SUMS)

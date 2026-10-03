@@ -10,13 +10,41 @@ benchmark product or a model leaderboard.
 For fixed-order multi-model runs with retained receipts and explicit continuation,
 see [local benchmark campaigns](benchmark-campaign.md).
 
-O1 0.7 keeps schema discovery and composition in scope. The prompt supplies
+O1 0.9 and O5 0.5 keep schema discovery and composition in scope. The prompt supplies
 component IDs, roles, implementations, versions and semantic link requirements,
 not a complete cell document. The agent discovers configuration versions, control
 settings and bindings from the catalog. Component grading checks IDs,
 implementations and versions; bindings are checked semantically. The reference
 control alone uses the complete document retained in `Task`. This replaces 0.4's
 ready-to-submit document; no model attempts used the 0.4 contract.
+
+These versions separate workflow outcomes from autonomy and checkpoint ordering.
+O5 explicitly requires an empty recipient invoice list at the funded checkpoint;
+creating the invoice early fails `checkpoint_order`, while independently correct
+unpaid-state and accounting checks can still pass. Report `success` describes the
+observed workflow and cleanup, so a procedural failure alone does not make the
+financial report false. Strict benchmark completion still requires every
+operational check, and incomplete contracts still score zero. The 70/15/15
+weights and 240-second full-credit target are unchanged. Every model now gets a
+3,600-second execution allowance. Speed credit reaches zero at 1,200 seconds; a
+correct later completion can still earn up to 85/100. Local and hosted models use
+the same ranked contracts. Older task versions retain their original grading
+and transcript interpretation.
+
+Codex's `list_mcp_resources` and `list_mcp_resource_templates`, scoped to
+`proofstorm` or without a server, are neutral discovery. Their completed outcomes
+are retained in `harness-outcome.json` under `usage.neutral_discovery`, without
+tool-score credit or penalties. Incomplete discovery still means incomplete
+telemetry. Resource reads and other servers remain forbidden; forbidden MCP
+calls violate autonomy whether they succeed or fail. A completed forbidden call
+is not incorrectly represented as pending.
+
+New results expose `workflow_success`, `failed_requirements`, autonomy and
+checkpoint-order fields, plus checkpoint diagnostics and timing intervals.
+`timing_breakdown` reports the union of completed MCP call intervals, separately
+including checkpoint and cleanup time. Categories may overlap: do not sum them
+or interpret remaining wall time as pure model reasoning. No time is subtracted
+from the end-to-end score.
 
 ## Run
 
@@ -32,7 +60,7 @@ CARGO_TARGET_DIR=.proofstorm-dev/target cargo build --locked -p proofstorm-accep
   --checkout-home "$PWD/.proofstorm-dev/state" \
   --root "$PWD" \
   --work-dir "$PWD/dev/benchmark-o1-kimi-v06-01" \
-  --timeout 1500 \
+  --timeout 4200 \
   --benchmark-model kimi-code-plan-global/kimi-for-coding \
   --benchmark-opencode /absolute/path/to/opencode \
   benchmark-o1
@@ -46,6 +74,12 @@ restricted Proofstorm MCP tool set; direct host shell, filesystem, delegation,
 and web tools are denied. Component-native commands remain available through
 `cell_exec`.
 
+For current contracts, OpenCode's `invalid` rejection wrappers are classified
+using the original tool name and the task's allowlist. A rejected permitted call
+counts as one tool failure, even if the wrapper itself completed successfully;
+it does not violate autonomy. Foreign or unidentified tool attempts still do.
+The retained wrapper keeps the original tool name and error as evidence.
+
 For Codex, select the harness and exact Codex model ID instead:
 
 ```sh
@@ -53,7 +87,7 @@ For Codex, select the harness and exact Codex model ID instead:
   --checkout-home "$PWD/.proofstorm-dev/state" \
   --root "$PWD" \
   --work-dir "$PWD/dev/benchmark-o1-codex-01" \
-  --timeout 1500 \
+  --timeout 4200 \
   --benchmark-harness codex \
   --benchmark-codex /absolute/path/to/codex \
   --benchmark-model gpt-6-astra \
@@ -108,7 +142,7 @@ plan are recorded, never the account email or organization.
   --checkout-home "$PWD/.proofstorm-dev/state" \
   --root "$PWD" \
   --work-dir "$PWD/dev/benchmark-o1-claude-01" \
-  --timeout 1500 \
+  --timeout 4200 \
   --benchmark-harness claude-code \
   --benchmark-claude /absolute/path/to/claude \
   --benchmark-model claude-opus-5-5 \
@@ -159,9 +193,13 @@ ancestor project configuration, and uses OpenCode's `--pure` mode. A model-free
 connection probe must reach the owned capture proxy before the attempt starts.
 
 The run creates its own installation, runtime, and storage. It retains evidence
-in a private directory and verifies that pre-existing resources were preserved.
+in a private directory and verifies protected resources and owned cleanup.
+Benchmark preservation protects Proofstorm resources and checkout state. Unrelated
+Docker rebuilds, restarts and removals, plus personal CLI configuration changes,
+are retained as `shared_host_activity` and do not disqualify a run. Owned cleanup
+is still mandatory. See the shared-host policy in [campaigns](benchmark-campaign.md).
 Setup is outside the timed task. Agent discovery, provisioning, payment,
-reporting, and agent cleanup are inside it. The task deadline is 1,200 seconds;
+reporting, and agent cleanup are inside it. The task deadline is 3,600 seconds;
 the harness step limit is 150. These are not token or spending limits.
 
 Ctrl-C requests owned cleanup. After a crash, retry cleanup with the retained
@@ -180,7 +218,7 @@ start over. Acceptance command success describes the runner lifecycle; read
 ## O5: honest negative
 
 Select `benchmark-o5` instead of `benchmark-o1` with the same model/harness
-options and a fresh work directory. O5 0.3 funds a 1,000-sat wallet normally, then
+options and a fresh work directory. O5 0.5 funds a 1,000-sat wallet normally, then
 attempts a 100-sat melt to a third, isolated LND node. Its recipient must never
 have a channel. The agent investigates the refusal, preserves all wallet funds,
 reports the result and removes the cell. Give the backend spendable outbound
@@ -212,10 +250,11 @@ Task success is distinct from payment success. A successful MCP receipt describi
 a failed native payment is a successful tool call; actual MCP/harness errors still
 count as failures, without blanket exemptions for O5.
 
-Scorer `o5-70-15-15/0.3` keeps 70/15/15 weights with a calibrated 240-second
-full-credit target and a fixed 1,200-second execution budget. Its quality weights are 10 each for components, bindings, issuance,
-recorded attempt, unpaid recipient, accounting, no-route diagnosis and reporting;
-5 each for terminal operations, evidence, autonomy and agent cleanup. All eleven
+Scorer `o5-70-15-15/0.5` keeps 70/15/15 weights with a calibrated 240-second
+full-credit target, zero speed credit at 1,200 seconds, and a common 3,600-second
+execution budget. Its quality weights are 10 each for components, bindings, issuance,
+recorded attempt, accounting, no-route diagnosis and reporting;
+5 each for unpaid recipient, checkpoint order, terminal operations, evidence, autonomy and agent cleanup. All twelve
 operational assertions are required; reporting retains its separate validity and
 format rules. A timeout fails completion without redefining autonomy as failure.
 
@@ -248,7 +287,7 @@ retains terminal operation evidence immediately before the first removal request
 because cell teardown deletes those records. Either a verified `cell_wait` or a
 completed `cell_remove` receipt can demonstrate closure.
 
-For O1, scorer `o1-70-15-15/0.7` computes:
+For O1, scorer `o1-70-15-15/0.9` computes:
 
 - **Quality (70):** 70% of the weighted assertion score. Nine operational
   assertions are required. Correct JSON-only reporting contributes seven points;
@@ -260,8 +299,9 @@ For O1, scorer `o1-70-15-15/0.7` computes:
   native commands can still game this measure; it is a pilot metric.
 - **Time (15):** `15 × clamp((1200 − elapsed_seconds) / 960, 0, 1)`.
   The 240-second full-credit target comes from the prepared reference cohort
-  below. The 1,200-second deadline is a fixed execution budget, not an estimate
-  of how long a model needs to succeed.
+  below. This cutoff is independent of the 3,600-second execution deadline.
+  A valid 40-minute completion receives zero time points and retains its quality
+  and tool points; incomplete work or exceeding 60 minutes still fails completion.
 
 The report schema describes shape only: required fields, types and no extra
 fields. It does not prescribe success, amounts or the grading balance window.
@@ -319,17 +359,16 @@ The O1 0.1 and 0.2 attempts remain retained and cannot be regraded with the
 current task contracts. The O1 0.3, 0.4 and 0.5 runners are retained separately;
 no model attempts used those contracts. Keep the original runner for offline reproduction of older
 results; upgrading the scorer does not rewrite them.
-O1 0.6, O5 0.2 and their `-diagnostic.1` contracts remain registered for exact
-offline regrading with their original hashes and provisional timing. New runs
-use O1 0.7/O5 0.3 (or their separate diagnostic versions). Historical scores
-must not be relabeled or pooled with the calibrated versions.
+O1 0.6–0.8, O5 0.2–0.4 and their `-diagnostic.1` contracts remain registered for
+exact offline regrading with their original hashes and timing. New ranked runs
+use O1 0.9/O5 0.5 for every model. Historical scores must not be relabeled or
+pooled with the current versions.
 
-For slower local inference, `benchmark-o1-diagnostic` and
-`benchmark-o5-diagnostic` provide separate versioned, unranked contracts with a
-3600-second model deadline. Select the model and CLI as usual and pass
-`--timeout 4200` (or greater) to leave room for verification. The ordinary
-O1/O5 contracts and their 1200-second deadlines remain unchanged. Increasing
-the outer gate timeout alone never increases a model deadline.
+Optional `benchmark-o1-diagnostic` and `benchmark-o5-diagnostic` gates retain
+separate unranked contracts for explicit diagnostics. They are not required for
+local models: ordinary O1/O5 now also allow 3,600 seconds and award ranked scores.
+For either profile, pass `--timeout 4200` (or greater) to leave room for verification.
+Increasing the outer gate timeout alone never increases a model deadline.
 
 Diagnostic prompts, task hashes, manifests and retained results identify the
 extended allowance. Results retain completion, assertions, tool counts, actual
@@ -338,7 +377,7 @@ wall time and environment validity, but `ranking_eligible` is false and
 attempts. Cleanup and preservation are still mandatory. These gates are invoked
 directly with the acceptance CLI; the ranked campaign driver does not accept
 them. Record local model/runtime identity and hardware alongside the receipts.
-The 60-minute allowance is provisional and does not calibrate timing scores.
+The 60-minute allowance is a common execution budget, not a calibrated latency percentile.
 
 The shared MCP schema layer expands bounded, acyclic local `$ref` definitions
 when the expanded tool schema is no larger than the original. This exposes
@@ -427,8 +466,9 @@ The task rules retain the combined evidence summary's SHA-256 digest.
 
 Three references on a shared host establish only an infrastructure baseline;
 they do not estimate tail latency or model reasoning/discovery time. The
-20-minute deadline remains a chosen execution budget. No contestant ordering
-was used to fit the target. The freeze changes timing/version metadata only;
+original 20-minute deadline was a chosen execution budget. The current contracts
+retain it only as the zero-credit cutoff and allow every model 60 minutes. No
+contestant ordering was used to fit the target. The original calibration freeze changed timing/version metadata only;
 prompts, task actions, assertions and scoring gates are unchanged. Model
 comparisons still require a frozen roster, environment and campaign budget.
 

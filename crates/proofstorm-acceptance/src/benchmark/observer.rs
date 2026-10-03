@@ -276,7 +276,10 @@ pub(super) fn report_truth(
             None => false,
         });
     let mut truth = json!({
-        "success":task.operational_required.iter().all(|key| observations[key] == true),
+        "success":task.operational_required.iter().filter(|key| {
+            task.rules["interpretation"] != "explicit-outcomes-v1"
+                || !matches!(key.as_str(), "autonomy" | "checkpoint_order")
+        }).all(|key| observations[key] == true),
         "minted_sat":minted,
         "paid_sat":paid_sat,
         "remaining_sat":paid["wallet"]["balance_sat"].as_u64(),

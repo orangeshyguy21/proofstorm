@@ -62,7 +62,7 @@ pub fn contracts() -> Value {
 }
 
 fn contract(task: &task::Task) -> Value {
-    json!({"id":task.id,"version":task.version,"sha256":proofstorm_core::digest_json(task),"model_wall_seconds":task.deadline_seconds})
+    json!({"id":task.id,"version":task.version,"sha256":proofstorm_core::digest_json(task),"model_wall_seconds":task.deadline_seconds,"time_zero_seconds":task.time_zero_seconds()})
 }
 
 fn hash(path: &Path) -> Result<String> {
@@ -137,6 +137,12 @@ impl Plan {
                 contracts[&run.task]["sha256"].as_str() == Some(&run.task_sha256),
                 "task contract changed or unknown task: {}",
                 run.task
+            );
+            ensure!(
+                contracts[&run.task]["model_wall_seconds"]
+                    .as_u64()
+                    .is_some_and(|seconds| self.gate_timeout_seconds >= seconds + 600),
+                "gate timeout must allow the model deadline plus 600 seconds for verification"
             );
         }
         Ok(())

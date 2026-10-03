@@ -1,8 +1,11 @@
 //! Catalog-derived qualification plans and strict execution evidence.
 //! This maintainer crate is shared by CI and the owned acceptance runner; it is
 //! not linked into the installed application.
+mod images;
 mod planner;
 mod receipt;
+
+pub use images::{ImageInputs, image_inputs, validate_cache_endpoint};
 
 pub use planner::{catalog, plan};
 pub use receipt::{ImageEvidence, Receipt, aggregate, verify_receipts};

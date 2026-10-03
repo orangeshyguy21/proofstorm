@@ -14,7 +14,8 @@ The `upstream/<registry>/<repository>` path records their original source.
 | CDK and Nutshell | docker.io/cashubtc images, with the existing management-client wrappers |
 | LDK Server and CDK LDK Server processor | Pinned upstream source builds; see [payment processor packaging](payment/README.md) |
 | Keycloak | quay.io/keycloak/keycloak |
-| PostgreSQL, Redis, BusyBox | Docker Official Images under docker.io/library |
+| PostgreSQL, Redis | Docker Official Images under docker.io/library |
+| BusyBox | Unmodified Docker Official Image from docker.io/library/busybox |
 | Cocod | Frozen source and dependency lock in its wallet provenance record |
 
 The catalog no longer contains Bitcoin Core 30.0 or the old Polar LND builds.

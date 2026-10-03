@@ -117,6 +117,14 @@ fn verify_preservation(work: &Path, acceptance: &Value) -> Result<()> {
     let after = regular_read(&work.join("preservation-after.json"))?;
     let excluded = &acceptance["preservation_exclusions"];
     match acceptance["preservation_policy"].as_str() {
+        Some(crate::preservation::shared::POLICY) => {
+            let activity = crate::preservation::shared::verify(&before, &after, excluded)?;
+            ensure!(
+                acceptance["shared_host_activity"] == activity,
+                "shared host activity report differs from observed inventory"
+            );
+            Ok(())
+        }
         Some(crate::preservation::ADDITIONS_POLICY) => {
             let additions = crate::preservation::verify_run(&before, &after, excluded)?;
             ensure!(

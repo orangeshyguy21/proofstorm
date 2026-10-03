@@ -104,8 +104,15 @@ fn main() -> Result<()> {
             plan.validate()?;
             println!("{}", serde_json::to_string(plan.case(id)?)?);
         }
+        ["images", input] => {
+            let plan: Plan = read(input)?;
+            println!(
+                "{}",
+                serde_json::to_string(&proofstorm_qualification::image_inputs(&plan)?)?
+            );
+        }
         _ => bail!(
-            "usage: qualification plan REVISION RUN_ID ATTEMPT compatibility|full|documentation|pull OUTPUT; matrix PLAN; case PLAN ID; verify PLAN RECEIPTS; aggregate NEEDS"
+            "usage: qualification plan REVISION RUN_ID ATTEMPT compatibility|full|documentation|pull OUTPUT; matrix PLAN; case PLAN ID; images PLAN; verify PLAN RECEIPTS; aggregate NEEDS"
         ),
     }
     Ok(())

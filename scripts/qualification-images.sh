@@ -3,31 +3,38 @@
 # Public receipts contain identities/assertions; command output stays private.
 set -Eeuo pipefail
 umask 077
-[[ $# == 2 ]] || exit 2
+[[ $# == 2 || $# == 3 ]] || exit 2
 case_file=$1 work=$2
+cache=${3:-}
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 platform=$(jq -er '.platform' "$case_file")
 case "$platform:$(uname -s)/$(uname -m)" in
   linux/amd64:Linux/x86_64|linux/arm64:Linux/aarch64) ;;
   *) echo 'A native Linux machine is required' >&2; exit 1 ;;
 esac
-# An empty configuration deliberately bypasses all ambient registry credentials.
-export DOCKER_CONFIG="$work/anonymous-docker"
-mkdir "$DOCKER_CONFIG"
-printf '{}\n' > "$DOCKER_CONFIG/config.json"
+# shellcheck source=scripts/qualification-docker.sh
+source "$root/scripts/qualification-docker.sh"
+qualification_docker_config "$work/anonymous-docker"
+if [[ -n "$cache" ]]; then qualification_cache_endpoint "$cache"; fi
+resolve() {
+  if [[ -n "$cache" ]]; then qualification_cache_ref "$cache" "$1"; else printf '%s\n' "$1"; fi
+}
 printf '{}\n' > "$work/images.json"
 image_stage() { printf '"%s"\n' "$1" > "$work/qualification-image-stage.json"; }
 while IFS= read -r source; do
+  resolved=$(resolve "$source")
   image_stage registry-manifest
-  timeout 90 docker buildx imagetools inspect --raw "$source" > "$work/manifest.json"
+  timeout 90 docker buildx imagetools inspect --raw "$resolved" > "$work/manifest.json"
   digest=${source##*@}
+  [[ "sha256:$(sha256sum "$work/manifest.json" | cut -d' ' -f1)" == "$digest" ]] || exit 1
   if jq -e '.manifests' "$work/manifest.json" >/dev/null; then
     digest=$(jq -er --arg arch "${platform#linux/}" '[.manifests[]|select(.platform.os=="linux" and .platform.architecture==$arch)]|select(length==1)|.[0].digest' "$work/manifest.json")
   fi
   [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
-  selected="${source%@*}@$digest"
+  selected="${resolved%@*}@$digest"
   image_stage registry-platform-manifest
   timeout 90 docker buildx imagetools inspect --raw "$selected" > "$work/selected-manifest.json"
+  [[ "sha256:$(sha256sum "$work/selected-manifest.json" | cut -d' ' -f1)" == "$digest" ]] || exit 1
   config=$(jq -er '.config.digest' "$work/selected-manifest.json")
   [[ "$config" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
   image_stage image-pull
@@ -48,7 +55,8 @@ if [[ "$kind" == image ]]; then
   version=$(jq -er '.scenario.component.version' "$case_file")
   source=$(jq -er '.scenario.component.source' "$case_file")
   digest=$(jq -er --arg source "$source" '.[$source].manifest' "$work/images.json")
-  selected="${source%@*}@$digest"
+  resolved=$(resolve "$source")
+  selected="${resolved%@*}@$digest"
   case "$implementation" in
     bitcoin-core) probe='bitcoind -nosettings --version | head -n 1'; expected="Bitcoin Core daemon version v$version.0 bitcoind" ;;
     lnd) probe='lnd --version'; expected="lnd version $version commit=v$version" ;;
@@ -88,7 +96,8 @@ if [[ "$kind" == image ]]; then
     *) [[ "$output" == "$expected" ]] ;;
   esac
 elif [[ "$kind" == lightning ]]; then
-  jq '{bitcoin:[.components[]|select(.implementation=="bitcoin-core")|{version,image:.source}],lightning:[.scenario.component|{implementation,version,image:.source}]}' \
+  jq --arg cache "$cache" 'def image: if $cache=="" then .source else ($cache + "/images/" + (.source|split("@sha256:")[1]) + "@" + (.source|split("@")[1])) end;
+    {bitcoin:[.components[]|select(.implementation=="bitcoin-core")|{version,image:image}],lightning:[.scenario.component|{implementation,version,image:image}]}' \
     "$case_file" > "$work/lightning-input.json"
   image_stage lightning-compatibility
   bash "$root/tests/component-compat/bitcoin-lightning.sh" "$work/lightning-input.json" "$platform" "$work/lightning"

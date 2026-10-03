@@ -32,17 +32,21 @@ pub(super) fn controller_build(home: &Path, args: &[&str]) -> Result<String> {
     )
 }
 
-pub(super) fn image_preparation(home: &Path, args: &[&str], seconds: u64) -> Result<String> {
+pub(super) fn image_preparation(
+    home: &Path,
+    command: &mut Command,
+    seconds: u64,
+) -> Result<String> {
     run_command(
         home,
-        &mut image_command(args, std::env::var_os("GODEBUG")),
+        command,
         seconds,
         Some(&home.join("image-preparation.log")),
         OUTPUT_LIMIT,
     )
 }
 
-fn image_command(args: &[&str], inherited_debug: Option<std::ffi::OsString>) -> Command {
+pub(super) fn image_command(args: &[&str], inherited_debug: Option<std::ffi::OsString>) -> Command {
     let mut command = Command::new("docker");
     command.args(args);
     if args.starts_with(&["buildx", "imagetools", "create"]) {

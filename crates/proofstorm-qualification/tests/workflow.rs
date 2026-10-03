@@ -79,7 +79,10 @@ fn native_execution_and_evidence_cannot_be_optional_or_publish_packages() {
         .iter()
         .map(|name| name.as_str().unwrap())
         .collect();
-    assert_eq!(needs, ["plan", "build", "preflight", "execute"].into());
+    assert_eq!(
+        needs,
+        ["plan", "build", "images", "preflight", "execute"].into()
+    );
     let platforms: BTreeSet<_> = jobs["build"]["strategy"]["matrix"]["include"]
         .as_array()
         .unwrap()
@@ -87,7 +90,7 @@ fn native_execution_and_evidence_cannot_be_optional_or_publish_packages() {
         .map(|entry| entry["platform"].as_str().unwrap())
         .collect();
     assert_eq!(platforms, ["linux/amd64", "linux/arm64"].into());
-    assert_eq!(jobs["preflight"]["needs"], "build");
+    assert_eq!(jobs["preflight"]["needs"], json!(["build", "images"]));
     let preflight_arches: BTreeSet<_> = jobs["preflight"]["strategy"]["matrix"]["include"]
         .as_array()
         .unwrap()
@@ -121,7 +124,49 @@ fn native_execution_and_evidence_cannot_be_optional_or_publish_packages() {
     }));
     assert_eq!(
         jobs["execute"]["needs"],
-        json!(["plan", "build", "preflight"])
+        json!(["plan", "build", "images", "preflight"])
+    );
+}
+
+#[test]
+fn image_preparation_is_shared_and_required_before_native_execution() {
+    let workflow = workflow(include_str!("../../../.github/workflows/qualification.yml"));
+    let jobs = &workflow["jobs"];
+    assert_eq!(jobs["images"]["needs"], "plan");
+    assert!(jobs["images"]["strategy"].is_null());
+    for job in ["preflight", "execute"] {
+        let steps = jobs[job]["steps"].as_array().unwrap();
+        let download = steps
+            .iter()
+            .position(|step| {
+                step["with"]["name"]
+                    == "qualification-images-${{ github.sha }}-${{ github.run_attempt }}"
+            })
+            .unwrap();
+        let consumer = steps
+            .iter()
+            .position(|step| {
+                step["run"]
+                    .as_str()
+                    .is_some_and(|run| run.contains("qualification-cache.sh with"))
+            })
+            .unwrap();
+        assert!(download < consumer);
+        assert!(
+            steps
+                .iter()
+                .any(|step| step["run"].as_str().is_some_and(|run| {
+                    run.contains(
+                        "docker image load --input \"$RUNNER_TEMP/artifacts/runtime-images.tar\"",
+                    )
+                }))
+        );
+    }
+    assert!(
+        jobs["verify"]["steps"][0]["run"]
+            .as_str()
+            .unwrap()
+            .contains("\"images\"")
     );
 }
 

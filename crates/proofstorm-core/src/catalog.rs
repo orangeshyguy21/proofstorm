@@ -1847,6 +1847,29 @@ mod tests {
     }
 
     #[test]
+    fn busybox_and_saved_workspace_locks_use_the_upstream_pin() {
+        let sha = "73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
+        let upstream = format!("docker.io/library/busybox@sha256:{sha}");
+        let workspace = default_catalog()
+            .entries
+            .iter()
+            .find(|entry| entry.id == "workspace")
+            .unwrap();
+        assert_eq!(workspace.image, mirror_image(&upstream));
+        for image in [&upstream, &workspace.image] {
+            assert_eq!(catalog_image_source(image).unwrap(), upstream);
+        }
+        for image in [
+            format!("docker.io/library/busybox@sha256:{}", "a".repeat(64)),
+            format!("docker.io/example/busybox@sha256:{sha}"),
+            format!("example.org/library/busybox@sha256:{sha}"),
+        ] {
+            assert_eq!(catalog_image_source(&image).unwrap(), image);
+            assert_eq!(catalog_image_source(&mirror_image(&image)).unwrap(), image);
+        }
+    }
+
+    #[test]
     fn bitcoin_release_provenance_and_publisher_mirrors_are_pinned() {
         use sha2::{Digest, Sha256};
         let catalog = default_catalog();
