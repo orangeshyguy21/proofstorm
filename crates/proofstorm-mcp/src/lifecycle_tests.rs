@@ -326,7 +326,7 @@ async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
     let finish = CellRemoveRequest {
         name: "cli-name".into(),
         expected_instance_key: named.instance_key.clone(),
-        timeout_seconds: 2,
+        timeout_seconds: 120,
     };
     let closed = mcp
         .proofstorm_cell_remove(Parameters(finish.clone()))
@@ -335,6 +335,22 @@ async fn mcp_creation_and_cli_lifecycle_share_identity_and_teardown() {
     assert_eq!(
         closed.structured_content.as_ref().unwrap()["complete"],
         true
+    );
+    assert_eq!(
+        closed.structured_content.as_ref().unwrap()["requested_timeout_seconds"],
+        120
+    );
+    assert_eq!(
+        closed.structured_content.as_ref().unwrap()["effective_timeout_seconds"],
+        30
+    );
+    assert!(
+        closed
+            .structured_content
+            .as_ref()
+            .unwrap()
+            .get("next_tool")
+            .is_none()
     );
     assert!(store.cell_handle("alpha", "designer", "cli-name").is_err());
     let replay = mcp

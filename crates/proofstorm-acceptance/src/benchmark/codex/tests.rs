@@ -2,6 +2,9 @@ use super::*;
 use std::fmt::Write as _;
 use std::os::unix::fs::PermissionsExt;
 
+#[path = "discovery_tests.rs"]
+mod discovery;
+
 fn context(work: &Path) -> Context {
     Context {
         root: work.into(),
@@ -347,6 +350,19 @@ fn installed_cli_contract_without_paid_model() -> Result<()> {
     ensure!(listed.status.success(), "real CLI MCP list failed");
     config::audit_mcp(&ctx, &serde_json::from_slice(&listed.stdout)?)?;
     let fixture = work.join("fixture-mcp.sh");
+    // Optional local schema probe uses the same real CLI/fake-provider path.
+    // No live model or runtime is needed to inspect the rendered declaration.
+    let fixture_schema = std::env::var_os("PROOFSTORM_CODEX_TEST_SCHEMA")
+        .map(|path| read(Path::new(&path)))
+        .transpose()?
+        .unwrap_or_else(|| json!({"type":"object","properties":{},"additionalProperties":false}));
+    let fixture_tools = work.join("fixture-tools.json");
+    fs::write(
+        &fixture_tools,
+        serde_json::to_vec(
+            &json!({"tools":[{"name":"catalog_list","description":"fixture","inputSchema":fixture_schema}]}),
+        )?,
+    )?;
     // JSON-RPC IDs are integers in this CLI. The fixture has no host/runtime authority.
     fs::write(
         &fixture,
@@ -356,7 +372,7 @@ while IFS= read -r line; do
  test -n "$id" || continue
  case "$line" in
  *'"initialize"'*) result='{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}';;
- *'"tools/list"'*) result='{"tools":[{"name":"catalog_list","description":"fixture","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}]}';;
+ *'"tools/list"'*) result=$(cat "$1");;
  *'"tools/call"'*) result='{"content":[{"type":"text","text":"fixture ok"}],"isError":false}';;
  *) result='{}';;
  esac
@@ -380,6 +396,7 @@ done
     doc["mcp_servers"]["proofstorm"]["command"] = toml_edit::value("/bin/sh");
     let mut args = toml_edit::Array::new();
     args.push(fixture.to_str().context("fixture path")?);
+    args.push(fixture_tools.to_str().context("fixture tools path")?);
     doc["mcp_servers"]["proofstorm"]["args"] = toml_edit::value(args);
     if let Some(proxy) = &real_proxy {
         doc["mcp_servers"]["proofstorm"]["command"] =
@@ -429,7 +446,7 @@ done
         )
         .collect();
     let script = format!(
-        "const allowed={}; if(ALL_TOOLS.some(t=>!allowed.includes(t.name))) throw new Error('unexpected tool surface'); const result=await tools.mcp__proofstorm__catalog_list({{}}); if(result.isError) throw new Error('MCP failed'); text('fixture ok');",
+        "const allowed={}; if(ALL_TOOLS.some(t=>!allowed.includes(t.name))) throw new Error('unexpected tool surface'); text(ALL_TOOLS.filter(t=>['catalog_list','cell_plan','cell_up','operation_read','operation_wait'].some(n=>t.name==='mcp__proofstorm__'+n))); const result=await tools.mcp__proofstorm__catalog_list({{}}); if(result.isError) throw new Error('MCP failed'); text('fixture ok');",
         serde_json::to_string(&allowed)?
     );
     let server = std::thread::spawn(move || -> Result<Vec<Value>> {
@@ -518,6 +535,46 @@ done
     );
     for (index, request) in requests.iter().enumerate() {
         save(&work.join(format!("fixture-request-{index}.json")), request)?;
+    }
+    if real_proxy.is_some() {
+        let metadata: Vec<Value> = requests[1]["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["type"] == "custom_tool_call_output")
+            .flat_map(|item| item["output"].as_array().into_iter().flatten())
+            .filter_map(|part| serde_json::from_str::<Vec<Value>>(part["text"].as_str()?).ok())
+            .flatten()
+            .collect();
+        for name in ["cell_plan", "cell_up"] {
+            let declaration = metadata
+                .iter()
+                .find(|tool| tool["name"] == format!("mcp__proofstorm__{name}"))
+                .and_then(|tool| tool["description"].as_str())
+                .context("missing rendered cell tool")?;
+            for visible in [
+                "components?: Array<{",
+                "config_version: string",
+                "control:",
+                "kind:",
+            ] {
+                ensure!(declaration.contains(visible), "{name} hides {visible}");
+            }
+        }
+        for (name, visible) in [
+            ("operation_read", "1..=4000"),
+            ("operation_read", "default 1000"),
+            ("operation_wait", "at most 10"),
+            ("operation_wait", "32 KiB"),
+            ("operation_wait", "suggested_batch_size"),
+        ] {
+            let declaration = metadata
+                .iter()
+                .find(|tool| tool["name"] == format!("mcp__proofstorm__{name}"))
+                .and_then(|tool| tool["description"].as_str())
+                .context("missing rendered operation tool")?;
+            ensure!(declaration.contains(visible), "{name} hides {visible}");
+        }
     }
     if real_proxy.is_none() {
         captured(&work);

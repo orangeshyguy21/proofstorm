@@ -1,0 +1,2 @@
+{"type":"item.started","item":{"id":"item_6","type":"mcp_tool_call","server":"proofstorm","tool":"list_mcp_resources","arguments":{"server":"proofstorm"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_6","type":"mcp_tool_call","server":"proofstorm","tool":"list_mcp_resources","arguments":{"server":"proofstorm"},"result":null,"error":{"message":"resources/list failed: resources/list failed for `proofstorm`: Mcp error: -32601: method outside benchmark profile"},"status":"failed"}}

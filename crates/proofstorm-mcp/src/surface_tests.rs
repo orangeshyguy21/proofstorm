@@ -27,6 +27,44 @@ fn value(result: CallToolResult) -> Value {
     structured
 }
 
+#[tokio::test]
+async fn inline_authoring_uses_the_same_admission_retry_and_edit_fences() {
+    let mcp = service();
+    let document = spec();
+    let flat = json!({"name":"inline-cell","request_id":"inline-create",
+        "components":document["components"],"policy":document["policy"],
+        "links":[{"id":"mint-chain","kind":"chain_backend","from":"mint","to":"chain","network":"regtest"}]});
+    let created = value(
+        mcp.proofstorm_cell_up(Parameters(request(flat.clone())))
+            .await
+            .unwrap(),
+    );
+    let replay = value(
+        mcp.proofstorm_cell_up(Parameters(request(flat.clone())))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(created["instance_key"], replay["instance_key"]);
+    assert_eq!(replay["accepted_generation"], 1);
+    let mut edited = flat;
+    edited["request_id"] = json!("inline-edit");
+    edited["components"][0]["config"]["txindex"] = json!(false);
+    let error = mcp
+        .proofstorm_cell_up(Parameters(request(edited.clone())))
+        .await
+        .unwrap_err();
+    assert_eq!(error.data.unwrap()["code"], "cell_update_conflict");
+    edited["expected_generation"] = json!(1);
+    edited["expected_instance_key"] = created["instance_key"].clone();
+    let updated = value(
+        mcp.proofstorm_cell_up(Parameters(request(edited)))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(updated["instance_key"], created["instance_key"]);
+    assert_eq!(updated["accepted_generation"], 2);
+}
+
 #[test]
 fn offline_preview_preparation_resumes_existing_publication_receipts() {
     let store = tests::seeded_store();

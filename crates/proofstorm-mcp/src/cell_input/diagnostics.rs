@@ -5,6 +5,35 @@ use std::sync::OnceLock;
 
 const LIMIT: usize = 32;
 
+/// Match the custom `CellInput` parser without opening files or changing admission.
+pub(crate) fn input(value: &Value) -> Option<(Value, &'static Value)> {
+    static AUTHORED: OnceLock<Value> = OnceLock::new();
+    static CANONICAL: OnceLock<Value> = OnceLock::new();
+    static FILE: OnceLock<Value> = OnceLock::new();
+    let encoded = value.is_string();
+    let value = if let Some(encoded) = value.as_str() {
+        serde_json::from_str(encoded).ok()?
+    } else {
+        value.clone()
+    };
+    let schema = if !encoded
+        && value
+            .as_object()
+            .is_some_and(|object| object.contains_key("file"))
+    {
+        FILE.get_or_init(|| json!(schemars::schema_for!(super::CellFile)))
+    } else if value
+        .get("links")
+        .and_then(Value::as_array)
+        .is_some_and(|links| links.iter().any(|link| link.get("binding").is_some()))
+    {
+        CANONICAL.get_or_init(|| json!(schemars::schema_for!(proofstorm_core::CellSpec)))
+    } else {
+        AUTHORED.get_or_init(|| json!(schemars::schema_for!(super::AuthoredCellSpec)))
+    };
+    Some((value, schema))
+}
+
 pub(super) fn describe(value: &Value, canonical: bool, original: &serde_json::Error) -> String {
     static AUTHORED: OnceLock<Value> = OnceLock::new();
     static CANONICAL: OnceLock<Value> = OnceLock::new();

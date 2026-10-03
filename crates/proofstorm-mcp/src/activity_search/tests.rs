@@ -104,6 +104,414 @@ fn read(service: &ProofstormMcp, request: Value) -> Result<CallToolResult, Error
 }
 
 #[test]
+fn pending_artifact_reads_offer_a_wait_without_polling_or_bypassing_digests() {
+    let (store, service, instance) = fixture();
+    for phase in [OperationPhase::Pending, OperationPhase::Running] {
+        let id = format!("pending-output-{phase:?}").to_ascii_lowercase();
+        let operation = record(&store, &instance, "alice", &id, phase, Value::Null);
+        let digest = crate::compact_operation_wait(operation.clone(), false).operation_digest;
+        for pointer in ["/artifact", "/artifact/content", "/artifact/content/stdout"] {
+            let error = read(
+                &service,
+                json!({"operation_id":id,"pointer":pointer,
+                "expected_digest":digest}),
+            )
+            .unwrap_err();
+            let wire = visible(crate::tool_error::result(error));
+            let data = &wire["data"];
+            assert_eq!(data["code"], "operation_read_output_pending");
+            assert_eq!(data["recorded_phase"], json!(phase));
+            assert_eq!(data["operation_digest"], digest);
+            assert_eq!(data["next_tool"], "operation_wait");
+            let wait: crate::OperationWaitRequest =
+                serde_json::from_value(data["next_arguments"].clone()).unwrap();
+            crate::validate_operation_wait_request(&wait).unwrap();
+            assert_eq!(wait.operation_ids, [id.clone()]);
+        }
+        assert_eq!(store.operation("test", "alice", &id).unwrap(), operation);
+        assert_eq!(
+            visible(read(&service, json!({"operation_id":id,"pointer":"/phase"})).unwrap())["value"],
+            json!(phase)
+        );
+        let stale = read(
+            &service,
+            json!({"operation_id":id,
+            "pointer":"/artifact/content/stdout","expected_digest":"stale"}),
+        )
+        .unwrap_err();
+        assert_eq!(stale.data.unwrap()["code"], "operation_read_changed");
+
+        let completed = store
+            .record_operation_result(
+                "test",
+                &id,
+                OperationPhase::Succeeded,
+                json!({"stdout":"ready","exit_code":0,"output_mode":"public"}),
+            )
+            .unwrap();
+        let old = read(
+            &service,
+            json!({"operation_id":id,
+            "pointer":"/artifact/content/stdout","expected_digest":digest}),
+        )
+        .unwrap_err();
+        assert_eq!(old.data.unwrap()["code"], "operation_read_changed");
+        let recovered = visible(
+            read(
+                &service,
+                json!({"operation_id":id,
+            "pointer":"/artifact/content/stdout","expected_digest":crate::compact_operation_wait(completed, false).operation_digest}),
+            )
+            .unwrap(),
+        );
+        assert_eq!(recovered["value"], "ready");
+    }
+}
+
+#[test]
+fn pending_output_guidance_preserves_missing_paths_private_data_and_authority() {
+    let (store, service, instance) = fixture();
+    record(
+        &store,
+        &instance,
+        "alice",
+        "active-output",
+        OperationPhase::Running,
+        Value::Null,
+    );
+    for pointer in ["/missing", "/request/typo", "/artifactish", "/artifac~1t"] {
+        let error = read(
+            &service,
+            json!({"operation_id":"active-output","pointer":pointer}),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.data.unwrap()["code"],
+            "operation_read_pointer_missing"
+        );
+    }
+    let invalid = read(
+        &service,
+        json!({"operation_id":"active-output","pointer":"/artifact/~2"}),
+    )
+    .unwrap_err();
+    assert_eq!(invalid.data.unwrap()["code"], "invalid_json_pointer");
+    for phase in [
+        OperationPhase::Succeeded,
+        OperationPhase::Failed,
+        OperationPhase::Cancelled,
+    ] {
+        let id = format!("terminal-empty-output-{phase:?}").to_ascii_lowercase();
+        record(&store, &instance, "alice", &id, phase, Value::Null);
+        let error = read(
+            &service,
+            json!({"operation_id":id,"pointer":"/artifact/content/stdout"}),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.data.unwrap()["code"],
+            "operation_read_pointer_missing"
+        );
+    }
+    record(
+        &store,
+        &instance,
+        "alice",
+        "private-output",
+        OperationPhase::Succeeded,
+        json!({"output_mode":"private","stdout":null}),
+    );
+    assert!(
+        visible(
+            read(
+                &service,
+                json!({"operation_id":"private-output","pointer":"/artifact/content/stdout"})
+            )
+            .unwrap()
+        )["value"]
+            .is_null()
+    );
+    let absent = read(
+        &service,
+        json!({"operation_id":"private-output","pointer":"/artifact/content/stderr"}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        absent.data.unwrap()["code"],
+        "operation_read_pointer_missing"
+    );
+    proofstorm_app::developer::configure(&store, "foreign", "alice").unwrap();
+    let foreign = ProofstormMcp::new(store.clone(), "foreign", "alice")
+        .unwrap()
+        .offline();
+    store
+        .revoke("test", "alice", Capability::ArtifactRead)
+        .unwrap();
+    for reader in [&service, &foreign] {
+        let denied = read(
+            reader,
+            json!({"operation_id":"active-output","pointer":"/artifact/content/stdout"}),
+        )
+        .unwrap_err();
+        let wire = visible(crate::tool_error::result(denied)).to_string();
+        assert!(!wire.contains("operation_read_output_pending"));
+        assert!(!wire.contains("recorded_phase") && !wire.contains("next_arguments"));
+    }
+}
+
+#[test]
+fn oversized_wait_batches_offer_smaller_batches_and_a_single_receipt_fallback() {
+    let (store, _, instance) = fixture();
+    let operations: Vec<_> = (0..40).map(|index| record(&store, &instance, "alice",
+        &format!("batch-{index}"), OperationPhase::Succeeded,
+        json!({"stdout":"x".repeat(8000),"exit_code":7,"cleanup_verified":true,"output_mode":"public"}))).collect();
+    let error =
+        crate::compact_operation_wait_many(operations.clone(), vec![], false, 30).unwrap_err();
+    let wire = visible(crate::tool_error::result(error));
+    let data = &wire["data"];
+    assert_eq!(data["code"], "operation_wait_response_too_large");
+    assert_eq!(data["operation_count"], 40);
+    assert_eq!(data["maximum_response_bytes"], MAX_AGENT_RESPONSE_BYTES);
+    assert_eq!(data["next_tool"], "operation_wait");
+    let size = usize::try_from(data["suggested_batch_size"].as_u64().unwrap()).unwrap();
+    assert!(size > 0 && size < operations.len());
+    let mut recovered = Vec::new();
+    for chunk in operations.chunks(size) {
+        let result = crate::compact_operation_wait_many(chunk.to_vec(), vec![], false, 30).unwrap();
+        assert!(result.all_terminal);
+        assert!(crate::read_query::wire_size(&result).unwrap() <= MAX_AGENT_RESPONSE_BYTES);
+        for operation in result.operations {
+            assert_eq!(operation.native_result.as_ref().unwrap()["exit_code"], 7);
+            assert_eq!(
+                operation.native_result.as_ref().unwrap()["cleanup_verified"],
+                true
+            );
+            recovered.push(operation.operation_id);
+        }
+    }
+    assert_eq!(
+        recovered,
+        operations
+            .iter()
+            .map(|op| op.id.clone())
+            .collect::<Vec<_>>()
+    );
+    for count in [1, 2] {
+        let errors = (0..count)
+            .map(|index| crate::OperationWaitError {
+                operation_id: format!("bad-{index}"),
+                error: json!({"message":"canary".repeat(5000)}),
+            })
+            .collect();
+        let error = crate::compact_operation_wait_many(vec![], errors, false, 30).unwrap_err();
+        let wire = visible(crate::tool_error::result(error));
+        assert_eq!(wire["data"]["operation_count"], count);
+        assert_eq!(wire["data"]["suggested_batch_size"], 1);
+        assert_eq!(
+            wire["data"]["next_tool"],
+            if count == 1 {
+                "operation_read"
+            } else {
+                "operation_wait"
+            }
+        );
+        assert!(!wire.to_string().contains("canary"));
+    }
+}
+
+#[test]
+fn invalid_field_pointer_identifies_the_search_array_item() {
+    let mut request = query(json!({"name":"payments", "fields":["/id", "/broken~"]}));
+    let error = pattern(&request).unwrap_err();
+    let data = error.data.unwrap();
+    assert_eq!(data["code"], "invalid_json_pointer");
+    assert_eq!(data["issues"][0]["path"], "/fields/1");
+    request.fields[1] = data["issues"][0]["example"].as_str().unwrap().into();
+    assert!(pattern(&request).is_ok());
+}
+
+#[test]
+fn input_issues_identify_each_limit_and_pointer_recovery_preserves_authority() {
+    let (store, service, instance) = fixture();
+    let error = service
+        .proofstorm_activity_search(Parameters(query(json!({
+            "name":"payments", "query":"x".repeat(4097),
+            "fields":vec!["/id";17], "limit":51
+        }))))
+        .unwrap_err();
+    let details = error.data.unwrap();
+    assert_eq!(details["code"], "activity_search_limits");
+    let issues = details["issues"].as_array().unwrap();
+    assert_eq!(
+        issues
+            .iter()
+            .map(|issue| issue["path"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["/query", "/fields", "/limit"]
+    );
+    assert_eq!(issues[2]["expected"], json!({"minimum":1,"maximum":50}));
+
+    let op = record(
+        &store,
+        &instance,
+        "alice",
+        "pointer-feedback",
+        OperationPhase::Succeeded,
+        json!({"a/b~c":{"leaf":null},"stdout":"public-canary","private_output":{"stdout":{"retained_bytes":479}}}),
+    );
+    let error = read(&service, json!({"operation_id":op.id,"limit":4001})).unwrap_err();
+    assert_eq!(
+        error.data.unwrap()["issues"][0]["expected"],
+        json!({"minimum":1,"maximum":4000})
+    );
+    let error = read(
+        &service,
+        json!({"operation_id":op.id,"pointer":"/artifact/content/missing/child"}),
+    )
+    .unwrap_err();
+    let details = error.data.unwrap();
+    let issue = &details["issues"][0];
+    assert_eq!(issue["expected"]["existing_parent"], "/artifact/content");
+    assert!(
+        issue["expected"]["available_pointers"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("/artifact/content/a~1b~0c"))
+    );
+    assert!(!details.to_string().contains("public-canary"));
+    let recovered = visible(read(&service, json!({"operation_id":op.id,"pointer":issue["example"],"expected_digest":details["operation_digest"]})).unwrap());
+    assert_eq!(recovered["value"], json!({"leaf":null}));
+    let nested = read(
+        &service,
+        json!({"operation_id":op.id,"pointer":"/artifact/content/a~1b~0c/absent"}),
+    )
+    .unwrap_err()
+    .data
+    .unwrap();
+    assert_eq!(
+        nested["issues"][0]["example"],
+        "/artifact/content/a~1b~0c/leaf"
+    );
+    // A missing path must not disclose even field names after permission revocation.
+    store
+        .revoke("test", "alice", Capability::ArtifactRead)
+        .unwrap();
+    let denied = read(&service, json!({"operation_id":op.id,"pointer":"/missing"})).unwrap_err();
+    assert_ne!(
+        denied.data.as_ref().unwrap()["code"],
+        "operation_read_pointer_missing"
+    );
+    assert!(!json!(denied).to_string().contains("available_pointers"));
+}
+
+#[test]
+fn output_recovery_reads_work_without_revealing_private_streams() {
+    let (store, service, instance) = fixture();
+    let pending = record(
+        &store,
+        &instance,
+        "alice",
+        "pending-wait",
+        OperationPhase::Pending,
+        Value::Null,
+    );
+    let batch = crate::compact_operation_wait_many(vec![pending], vec![], true, 2).unwrap();
+    assert!(!batch.all_terminal);
+    assert!(batch.timed_out && batch.operations[0].timed_out);
+    assert_eq!(batch.requested_timeout_seconds, 2);
+    assert_eq!(batch.effective_timeout_seconds, 2);
+    assert_eq!(batch.next_tool.as_deref(), Some("operation_wait"));
+    for (id, phase, content) in [
+        (
+            "private-timeout",
+            OperationPhase::Succeeded,
+            json!({"exit_code":null,"timed_out":true,"output_mode":"private","stdout":"","stderr":"","private_output":{"stdout":{"bytes_observed":479,"retained_bytes":479,"sha256":"private-canary"}}}),
+        ),
+        (
+            "public-cancel",
+            OperationPhase::Cancelled,
+            json!({"exit_code":null,"cancelled":true,"output_mode":"public","stdout":"invoice already created","stderr":"","private_output":{"stdout":{"retained_bytes":23}}}),
+        ),
+        (
+            "projection",
+            OperationPhase::Succeeded,
+            json!({"exit_code":0,"output_mode":"json_fields","stdout":"","selected_output":{"status":"PAID"}}),
+        ),
+    ] {
+        let operation = record(&store, &instance, "alice", id, phase, content);
+        let result = crate::compact_operation_wait(operation, false);
+        assert!(result.terminal);
+        assert!(!result.timed_out); // Wait timeout is distinct from the native command timeout.
+        let output = &result.native_result.as_ref().unwrap()["output"];
+        assert_eq!(output["private_streams_readable"], false);
+        assert!(!output.to_string().contains("private-canary"));
+        let reads = output["reads"].as_array().unwrap();
+        if id == "private-timeout" {
+            assert!(reads.is_empty());
+            assert_eq!(output["streams"]["stdout"]["retained_bytes"], 479);
+            assert_eq!(result.native_result.as_ref().unwrap()["timed_out"], true);
+        } else {
+            assert_eq!(reads.len(), 1);
+            let recovered = visible(read(&service, reads[0]["arguments"].clone()).unwrap());
+            assert_eq!(recovered["operation_digest"], result.operation_digest);
+            assert!(!recovered["value"].is_null());
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_unresponsive_backend_returns_wait_limits_and_retry_tools() {
+    let (store, _, instance) = fixture();
+    record(
+        &store,
+        &instance,
+        "alice",
+        "waiting",
+        OperationPhase::Pending,
+        Value::Null,
+    );
+    let client = kube::Client::new(
+        tower::service_fn(|_: http::Request<kube::client::Body>| {
+            std::future::pending::<Result<http::Response<kube::client::Body>, std::io::Error>>()
+        }),
+        "system",
+    );
+    let service = ProofstormMcp::new(store, "test", "alice")
+        .unwrap()
+        .with_kubernetes(client, "system");
+    let (operation, cell) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(
+            service.proofstorm_operation_wait(Parameters(crate::OperationWaitRequest {
+                operation_ids: vec!["waiting".into()],
+                timeout_seconds: 1
+            })),
+            service.proofstorm_cell_wait(Parameters(crate::CellWaitRequest {
+                instance_id: "payments".into(),
+                expected_instance_key: None,
+                expected_generation: None,
+                target_phase: crate::InstancePhase::Ready,
+                timeout_seconds: 1
+            }))
+        )
+    })
+    .await
+    .expect("server waits must bound an unresponsive backend");
+    for (error, tool) in [
+        (
+            operation.map(|result| result.0).unwrap_err(),
+            "operation_wait",
+        ),
+        (cell.map(|result| result.0).unwrap_err(), "cell_wait"),
+    ] {
+        let data = error.data.unwrap();
+        assert_eq!(data["code"], format!("{tool}_deadline_exceeded"));
+        assert_eq!(data["requested_timeout_seconds"], 1);
+        assert_eq!(data["effective_timeout_seconds"], 1);
+        assert_eq!(data["next_tool"], tool);
+    }
+}
+
+#[test]
 fn finds_other_actors_with_filters_paths_and_selected_receipt_fields_without_mutations() {
     let (store, service, instance) = fixture();
     record(

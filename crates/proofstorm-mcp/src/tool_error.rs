@@ -139,6 +139,7 @@ mod tests {
     async fn wire_errors_preserve_details_authority_and_protocol_distinction() {
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             let store = crate::tests::seeded_store();
+            store.grant("alpha", "designer", proofstorm_core::Capability::ArtifactRead).unwrap();
             let mcp = crate::ProofstormMcp::new(store.clone(), "alpha", "designer").unwrap();
             let (client, server) = tokio::io::duplex(128 * 1024);
             let serving = tokio::spawn(async move {
@@ -171,6 +172,11 @@ mod tests {
 
             let malformed = exchange(&mut read, &mut write, 3, "tools/call", json!({"name":"catalog_list","arguments":{"limit":"wrong-type"}})).await;
             assert_eq!(malformed["result"]["isError"], true, "{malformed}");
+            let invalid_limit = exchange(&mut read, &mut write, 8, "tools/call", json!({"name":"operation_read","arguments":{"operation_id":"missing","limit":4001}})).await;
+            let result: CallToolResult = serde_json::from_value(invalid_limit["result"].clone()).unwrap();
+            let details = payload(&result);
+            assert_eq!(details["data"]["issues"][0]["path"], "/limit");
+            assert_eq!(details["data"]["issues"][0]["expected"], json!({"minimum":1,"maximum":4000}));
             let unknown = exchange(&mut read, &mut write, 4, "tools/call", json!({"name":"unknown_tool","arguments":{}})).await;
             assert!(unknown.get("error").is_some(), "{unknown}");
             let invalid_envelope = exchange(&mut read, &mut write, 5, "tools/call", json!({"arguments":{}})).await;
@@ -185,5 +191,74 @@ mod tests {
             drop(write);
             serving.await.unwrap();
         }).await.expect("wire test timed out");
+    }
+
+    #[tokio::test]
+    async fn parser_diagnostics_cross_the_real_router_without_accepting_invalid_actions() {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let store = crate::tests::seeded_store();
+            for capability in [proofstorm_core::Capability::ArtifactRead, proofstorm_core::Capability::ComponentExecLive] {
+                store.grant("alpha", "designer", capability).unwrap();
+            }
+            let mcp = crate::ProofstormMcp::new(store.clone(), "alpha", "designer").unwrap();
+            let (client, server) = tokio::io::duplex(128 * 1024);
+            let serving = tokio::spawn(async move { mcp.serve(server).await.unwrap().waiting().await.unwrap(); });
+            let (read, mut write) = tokio::io::split(client);
+            let mut read = BufReader::new(read);
+            exchange(&mut read, &mut write, 1, "initialize", json!({
+                "protocolVersion":"2025-11-25", "capabilities":{},
+                "clientInfo":{"name":"input-diagnostics-regression","version":"1"}
+            })).await;
+            write.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n").await.unwrap();
+            for (tool, arguments, path, correction) in [
+                ("catalog_list", json!({"limti":2}), "/limti", Some("limit")),
+                ("cell_read", json!({"name":"missing","document":"confguration"}), "/document", Some("configuration")),
+                ("cell_plan", json!({"name":"invalid","request_id":"invalid","patch":[{"op":"remove_componnet","id":"chain"}]}), "/patch/0/op", Some("remove_component")),
+                ("workspace_task", json!({"name":"missing","component":"workspace","request_id":"invalid","task":{"action":"strat"}}), "/task/action", Some("start")),
+                ("cell_exec", json!({"name":"missing","component":"chain","request_id":"invalid","argv":["do-not-execute"],"output":{"mode":"secret-canary"}}), "/output/mode", None),
+                ("operation_wait", json!({}), "/operation_ids", None),
+            ] {
+                let reply = exchange(&mut read, &mut write, 2, "tools/call", json!({"name":tool,"arguments":arguments})).await;
+                assert!(reply.get("error").is_none(), "{reply}");
+                let value = payload(&serde_json::from_value(reply["result"].clone()).unwrap());
+                assert_eq!(value["code"], -32602);
+                assert_eq!(value["data"]["code"], "tool_input_invalid");
+                assert_eq!(value["data"]["executed"], false);
+                let issue = value["data"]["issues"].as_array().unwrap().iter().find(|issue| issue["path"] == path).unwrap_or_else(|| panic!("{value}"));
+                assert_eq!(issue["did_you_mean"].as_str(), correction);
+                assert!(!value.to_string().contains("secret-canary"));
+            }
+            assert!(store.resolve_cell("alpha", "designer", "invalid").is_err());
+            assert!(store.operation("alpha", "designer", "invalid").is_err());
+
+            let canonical: serde_json::Value = serde_json::from_str(include_str!("../../../examples/developer-cell.json")).unwrap();
+            for cell in [canonical.clone(), json!(canonical.to_string())] {
+                let reply = exchange(&mut read, &mut write, 3, "tools/call", json!({"name":"cell_plan","arguments":{
+                    "name":"valid","request_id":"valid","cell":cell,"delete_data":"wrong-type"
+                }})).await;
+                let value = payload(&serde_json::from_value(reply["result"].clone()).unwrap());
+                assert_eq!(value["data"]["issues"].as_array().unwrap().len(), 1, "{value}");
+                assert_eq!(value["data"]["issues"][0]["path"], "/delete_data");
+                let accepted = exchange(&mut read, &mut write, 4, "tools/call", json!({"name":"cell_plan","arguments":{
+                    "name":"valid","request_id":"valid","cell":cell
+                }})).await;
+                assert_ne!(accepted["result"]["isError"], true, "{accepted}");
+            }
+
+            let large = exchange(&mut read, &mut write, 5, "tools/call", json!({"name":"catalog_list","arguments":{
+                "query":"secret-canary".repeat(12_000),"limti":2
+            }})).await;
+            let value = payload(&serde_json::from_value(large["result"].clone()).unwrap());
+            assert_eq!(value["data"]["details_may_be_omitted"], true);
+            assert!(!value.to_string().contains("secret-canary"));
+
+            store.replace_grants("alpha", "designer", []).unwrap();
+            let denied = exchange(&mut read, &mut write, 6, "tools/call", json!({"name":"cell_exec","arguments":{"output":{"mode":"wrong"}}})).await;
+            assert_eq!(denied["result"]["structuredContent"]["data"]["code"], "access_denied");
+            assert!(denied["result"]["structuredContent"]["data"].get("issues").is_none());
+            drop(read);
+            drop(write);
+            serving.await.unwrap();
+        }).await.expect("wire diagnostics test timed out");
     }
 }
