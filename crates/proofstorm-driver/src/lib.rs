@@ -3,6 +3,10 @@
 pub mod authentication;
 pub mod authentication_profile;
 #[cfg(all(unix, feature = "runtime"))]
+pub mod bark;
+#[cfg(all(unix, feature = "runtime"))]
+pub mod bark_stack;
+#[cfg(all(unix, feature = "runtime"))]
 pub mod cln;
 #[cfg(feature = "runtime")]
 pub mod coco;

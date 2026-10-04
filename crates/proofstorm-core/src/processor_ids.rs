@@ -1,3 +1,5 @@
 //! Canonical catalog identities, including the reserved experimental Bark profile.
 pub const LDK_PROCESSOR: &str = "cdk-ldk-server-processor";
 pub const BARK_PROCESSOR: &str = "cdk-bark-processor";
+pub const BARK_SERVER: &str = "bark-server";
+pub const CLN_HOLD: &str = "cln-hold";

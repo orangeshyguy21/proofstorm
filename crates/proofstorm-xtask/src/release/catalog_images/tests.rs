@@ -61,6 +61,24 @@ fn added_version_recipes_match_their_provenance_and_native_versions() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for (name, version, provenance, output) in [
         (
+            "cdk-bark-processor",
+            "0.1.0-fe468ca",
+            "docker/payment/cdk-bark-provenance.json",
+            "fe468cad486157683eddbc0df4ff87ba71b6c0a3\nabc3f967d754cdf5e484bf434ef52fa216dfb37cdcbb8fd896477e5c7b40321c\n",
+        ),
+        (
+            "bark-server",
+            "0.7.0-6188e2d",
+            "docker/payment/bark-server-provenance.json",
+            "captaind 0.7.0-dev+6188e2d809f193716b2e571274179f069d9c19ca\n6188e2d809f193716b2e571274179f069d9c19ca\n",
+        ),
+        (
+            "cln-hold",
+            "26.06.7-hold.0.3.3",
+            "docker/payment/cln-hold-provenance.json",
+            "v26.06.7\naf0055b132f3b9f24d0b1d478a15005fcf8f014f\n",
+        ),
+        (
             "ldk-server",
             "0.1.0-50fe752",
             "docker/payment/ldk-server-provenance.json",
@@ -143,6 +161,50 @@ fn current_catalog_has_one_cdk_mint_recipe_and_old_receipts_remain_readable() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn bark_build_inputs_and_probes_bind_every_source_identity() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for name in ["cdk-bark-processor", "bark-server", "cln-hold"] {
+        let recipe_path = recipe(name).unwrap();
+        let hash = format!(
+            "{:x}",
+            Sha256::digest(fs::read(root.join(recipe_path)).unwrap())
+        );
+        verify_bark_inputs(&root, name, &hash).unwrap();
+        assert!(verify_bark_inputs(&root, name, &"0".repeat(64)).is_err());
+        assert!(selector(&format!("{name}@latest")).is_err());
+        assert!(!valid_probe(name, "wrong revision"));
+    }
+    assert!(!valid_probe(
+        "cdk-bark-processor",
+        "fe468cad486157683eddbc0df4ff87ba71b6c0a3"
+    ));
+    assert!(!valid_probe("cln-hold", "v26.06.7\nwrong hold revision"));
+    assert!(!valid_probe(
+        "bark-server",
+        "captaind 0.7.0-dev+wrong\n6188e2d809f193716b2e571274179f069d9c19ca"
+    ));
+    let work = tempfile::tempdir().unwrap();
+    fs::create_dir_all(work.path().join("docker/payment/patches")).unwrap();
+    for path in [
+        "docker/payment/Dockerfile.cdk-bark",
+        "docker/payment/cdk-bark-provenance.json",
+    ] {
+        fs::copy(root.join(path), work.path().join(path)).unwrap();
+    }
+    fs::write(
+        work.path()
+            .join("docker/payment/patches/bark-regtest-rpc.patch"),
+        "drifted patch",
+    )
+    .unwrap();
+    let hash = format!(
+        "{:x}",
+        Sha256::digest(fs::read(root.join(recipe("cdk-bark-processor").unwrap())).unwrap())
+    );
+    assert!(verify_bark_inputs(work.path(), "cdk-bark-processor", &hash).is_err());
 }
 
 #[test]

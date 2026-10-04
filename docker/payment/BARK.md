@@ -42,14 +42,15 @@ The patch removes implicit public server and Esplora endpoints. It requires an
 explicit Bark server and exactly one chain source. The RPC path requires:
 
 - `BARK_NETWORK=regtest`
-- `BARK_SERVER_ADDRESS` derived from the future owned server link
+- `BARK_SERVER_ADDRESS` derived from the owned server link
 - `BARK_BITCOIND_ADDRESS` derived from the owned Bitcoin link
 - `BARK_BITCOIND_COOKIEFILE`, an absolute private file containing `user:password`
 - No `BARK_ESPLORA_ADDRESS`
 
 RPC credentials are referenced by path, never embedded in the patch or command
-arguments. File ownership and projection remain obligations of the future
-renderer. The wallet requires Bitcoin `txindex=1`. Existing explicit Esplora
+arguments. The processor renderer projects the existing fixed regtest credentials
+through its own read-only configuration volume. The wallet requires Bitcoin
+`txindex=1`. Existing explicit Esplora
 configurations remain usable when RPC and its credentials are absent.
 
 The runtime must explicitly select `BARK_PAYMENT_METHODS=bolt11`; upstream's
@@ -73,8 +74,177 @@ no BOLT12, no on-chain settings, and an empty custom-method map. This checks the
 actual protobuf fields, including methods CDK would otherwise register silently.
 The catalog profile argument is required; it is not auto-detected from the
 response. Both profiles reject extra rails. Timeout and reply-size bounds
-are unchanged. This profile selector does not enable Bark in the catalog, topology
-validator or renderer.
+are unchanged.
+
+Core topology validation, mint rendering and the driver share one explicit
+processor contract:
+
+| Processor | Authored mint bindings | Native GetSettings unit |
+| --- | --- | --- |
+| `cdk-ldk-server-processor` | BOLT11/sat and BOLT12/sat | msat |
+| `cdk-bark-processor` | BOLT11/sat only | sat |
+
+Each mint must bind every method in its selected profile exactly once to one
+processor component. Missing or duplicate bindings, mixed endpoints/profiles,
+unknown processors, other units and extra methods are rejected. Rendering checks
+the compiled descriptors again, selects that processor's authenticated readiness
+profile, and projects only its CA and client certificate/key into the mint.
+The existing LDK processor-to-node contract still requires both methods.
+
+This prepares the mint-side boundary; Bark remains absent from the catalog.
+Managed backend rendering, persistent identity/storage and architecture
+qualification are still required. Rendering tests use synthetic
+mint plans, not invented Bark image pins or an installable Bark cell.
+
+## Managed dependency topology
+
+The reserved graph uses an `ark_server` component kind and an `ark_backend`
+link. The Ark protocol dependency is distinct from both a Bitcoin chain binding
+and a Lightning payment binding:
+
+| Source | Link kind | Target | Required binding |
+| --- | --- | --- | --- |
+| `cdk-bark-processor` | `ark_backend` | `bark-server` | `type: ark`, `network: regtest` |
+| `cdk-bark-processor` | `chain_backend` | `bitcoin-core` | `type: chain`, `network: regtest` |
+| `bark-server` | `chain_backend` | `bitcoin-core` | `type: chain`, `network: regtest` |
+| `bark-server` | `database_backend` | `postgresql` | `type: database`, `role: primary` |
+| `bark-server` | `payment_backend` | `cln-hold` | `type: payment`, `method: bolt11`, `unit: sat` |
+| `cln-hold` | `chain_backend` | `bitcoin-core` | `type: chain`, `network: regtest` |
+
+Each dependency is required exactly once. The processor, server and CLN/hold
+node must reference the same Bitcoin component with `txindex=true` (the Bitcoin
+backend default). Separate regtest nodes do not satisfy this identity check.
+Missing or duplicate links, wrong target kinds/implementations, extra backend
+dependencies and mismatched bindings fail validation. Peer and network-path
+links retain their existing rules. MCP accepts the Ark network as a flat field
+and preserves its typed binding when importing canonical cell documents.
+
+The graph fixture in `crates/proofstorm-core/tests/fixtures/bark-topology.json`
+tests these requirements; it is not a catalog-resolvable deployment example.
+
+## Managed processor backend
+
+The CDK Bark processor now has a typed backend and Kubernetes renderer, while
+remaining absent from the catalog. Its only authored setting is
+`event_poll_interval_ms` (default 5000, supported range 1–60000). Network, payment
+methods, endpoints, storage paths and credentials are managed settings.
+
+The processor runs as one StatefulSet with the complete `/data` directory on its
+owned PVC. Both `db.sqlite` and `onchain_state.redb` remain together. The renderer
+derives server and Bitcoin endpoints from the typed links, waits for both
+dependencies, explicitly selects regtest/BOLT11, and requires authenticated
+`GetSettings` with the Bark profile before readiness. It neither mounts another
+component's data volume nor exposes a public chain-service fallback.
+
+The controller creates a private mnemonic once and preserves it on reconciliation
+and create races. An absent identity while the owned PVC exists, or an invalid or
+incomplete identity Secret, fails provisioning without rotation. The Rust startup
+driver loads that private file into the native process environment; the seed is
+never placed in the authored plan, pod environment specification or command line.
+The driver binds an identity hash to fresh storage before the native executable
+opens it. Subsequent starts require the same seed and both nonempty database
+files. Missing markers, changed seeds, partial databases and interrupted first
+initialization are refused instead of automatically creating another wallet.
+Restoring the retained identity/state or explicitly resetting an unused component
+is required after such a refusal; no automatic repair is attempted.
+
+Processor gRPC uses the existing controller-generated mutual TLS contract.
+Certificate projections contain the required role's material only; the mint gets
+CA/client credentials, never the processor seed or server key. Bitcoin RPC uses
+the application's existing fixed regtest credentials in a component-scoped,
+read-only `rpc.cookie` ConfigMap. These constants are not newly generated secrets.
+
+This is renderer, provisioning and filesystem-contract coverage. Full-stack
+restart/payment qualification and native architecture receipts are still pending.
+No Bark catalog image was introduced.
+
+## Managed server and CLN/hold backends
+
+The reserved `bark-server` and `cln-hold` backends now render separate StatefulSets
+with complete owned `/data` volumes. This preview fixes native tuning to the
+pinned upstream defaults and managed regtest settings; it accepts no arbitrary
+native configuration. Endpoints come from validated typed dependencies. Both
+components wait for Bitcoin RPC readiness before initializing fresh state.
+
+Bark uses the image's pinned configuration template with explicit environment
+overrides. Its public service exposes only port 3535; admin and integration RPC
+remain on loopback. PostgreSQL's preserved owner password comes from the linked
+database Secret. The initializer runs native `captaind create` only on fresh
+storage, then binds the native mnemonic and database/chain identity to a retained
+fingerprint. A separate PostgreSQL check seals and verifies that fingerprint in
+`proofstorm.identity`. Restarts require that seal and the existing native tables;
+they never create a replacement database. Partial first initialization requires
+explicit recovery. This does not provide per-consumer PostgreSQL roles or detect
+arbitrary modifications to individual payment rows.
+
+Use `component_exec_live` inside the Bark workload for privileged
+`captaind rpc` commands; an isolated forensics job cannot reach its loopback API.
+
+CLN and hold have separate controller-generated TLS identities. Their CA signing
+keys remain inside their own workload, where the native certificate loader needs
+them; Bark receives only the CA certificate and client certificate/key for each
+API. Missing TLS Secrets with retained storage and incomplete existing Secrets
+are refused. Native TLS files, the CLN HSM identity, Lightning SQLite database and
+hold SQLite database persist together. Readiness checks both native APIs and
+listeners before sealing first initialization. Restarts refuse missing stores,
+changed keys and interrupted initialization rather than generating a new wallet.
+
+Bitcoin credentials retain the existing fixed regtest contract. Bark receives a
+scoped read-only cookie; CLN receives a scoped read-only native configuration
+file. No Bitcoin or CLN data volume is projected into another component.
+
+These contracts have offline rendering, credential and filesystem tests plus a
+local PostgreSQL guard test. Managed settlement, pending-payment recovery,
+transport refusal, teardown and native ARM64/AMD64 image qualification remain
+release gates; neither backend is yet enabled in the catalog.
+
+## Managed qualification and publication
+
+The maintainer image workflow recognizes `cdk-bark-processor@0.1.0-fe468ca`,
+`bark-server@0.7.0-6188e2d` and `cln-hold@26.06.7-hold.0.3.3`. The adjacent
+`*-provenance.json` records bind the source archives, lockfiles, build/runtime
+bases and recipe hashes. The processor also binds the regtest patch hash.
+`platform` declares recipe targets; it is not evidence of a successful build
+or payment qualification on either architecture.
+
+From a reviewed, clean committed checkout, build each selected platform with
+`just catalog-image build RECIPE@VERSION PLATFORM NEW_EXTERNAL_WORK`. This
+retains the frozen source and offline probe receipts without publishing. The
+normal explicit publication workflow remains separate. Existing prototype
+images are useful for offline diagnostics but are not publication receipts.
+
+The Rust acceptance gate `bark-processor` uses the ordinary planner, managed
+controller, generated Secrets and native component execution. It requires all
+three immutable image entries with provenance in the selected catalog; it does
+not substitute local tags or synthesize lock entries. Once those entries and the
+matching controller are staged for qualification, run it in the usual isolated
+acceptance installation:
+
+```sh
+just e2e bark-processor --work-dir /tmp/bark-managed-arm64-01 --timeout 3600
+```
+
+The gate funds the server and a bidirectional Lightning channel. It verifies:
+
+- BOLT11/sat processor settings and real gRPC refusal of plaintext, missing
+  client certificates and another service's client identity on all three TLS
+  endpoints. Successful authenticated calls bracket the refusal checks.
+- An unpaid mint quote and its native hold invoice across CLN/hold, PostgreSQL,
+  Bark server, processor and mint restarts. Pod replacement, identity/Secret
+  fingerprints, state seals and mint keysets are checked independently.
+- A 100,000 sat incoming payment interrupted with the processor stopped. The
+  gate must observe an accepted HTLC before resuming the processor, then settle
+  and claim the original quote without submitting a second payment.
+- A 30,000 sat melt, completed-state recovery across stack restarts and a second
+  10,000 sat melt. Recipient invoice identity/amount, mint quote, native receipt,
+  fee bounds and passive wallet conservation must agree.
+- Cell removal even after an exercise failure, a verified teardown receipt,
+  and independent namespace/action and owned volume absence inside the test cluster.
+
+This gate is implemented but has not yet passed managed ARM64 or AMD64
+qualification. Keep the exploratory `bark_stack` example frozen until matching
+managed receipts exist; remove it in the same change that enables qualified
+catalog support. Raw acceptance evidence remains private in the run directory.
 
 ## Server and CLN/hold dependency images
 

@@ -1,7 +1,9 @@
 //! Read-only CDK payment-processor handshake (protocol 4.0.0).
 use anyhow::{Context, Result};
+use proofstorm_core::PaymentMethod;
+pub use proofstorm_core::ProcessorProfile as Profile;
 use serde::Serialize;
-use std::{collections::BTreeMap, path::Path, str::FromStr, time::Duration};
+use std::{collections::BTreeMap, path::Path, time::Duration};
 use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -51,42 +53,23 @@ pub struct Settings {
     pub onchain: Option<OnchainSettings>,
 }
 
-/// Exact capability profiles, independent of mint-side sat conversion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Profile {
-    LdkServer,
-    Bark,
-}
-
-impl FromStr for Profile {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self> {
-        match value {
-            proofstorm_core::processor_ids::LDK_PROCESSOR => Ok(Self::LdkServer),
-            proofstorm_core::processor_ids::BARK_PROCESSOR => Ok(Self::Bark),
-            _ => anyhow::bail!("unknown payment processor profile"),
-        }
-    }
-}
-
-impl Profile {
+impl Settings {
     /// Check the complete advertised rail set before CDK registers it.
     /// # Errors
     /// Rejects missing, extra, or incompatible payment methods and units.
-    pub fn validate(self, settings: &Settings) -> Result<()> {
-        let (unit, bolt12) = match self {
-            Self::LdkServer => ("msat", true),
-            Self::Bark => ("sat", false),
-        };
+    pub fn validate(&self, profile: Profile) -> Result<()> {
+        let unit = profile.settings_unit();
+        let bolt11 = profile.methods().contains(&PaymentMethod::Bolt11);
+        let bolt12 = profile.methods().contains(&PaymentMethod::Bolt12);
+        let onchain = profile.methods().contains(&PaymentMethod::Onchain);
         anyhow::ensure!(
-            settings.unit == unit
-                && settings.bolt11.is_some()
-                && settings.bolt12.is_some() == bolt12
-                && settings.custom.is_empty()
-                && settings.onchain.is_none(),
-            "payment processor settings do not match {self:?}: expected {unit}, BOLT11{} and no other rails",
-            if bolt12 { ", BOLT12" } else { "" }
+            self.unit == unit
+                && self.bolt11.is_some() == bolt11
+                && self.bolt12.is_some() == bolt12
+                && self.onchain.is_some() == onchain
+                && self.custom.is_empty(),
+            "payment processor settings do not match {profile:?}: expected {unit}, {:?} and no other rails",
+            profile.methods()
         );
         Ok(())
     }
@@ -129,7 +112,7 @@ pub async fn settings_for(address: &str, tls: &Path, profile: Profile) -> Result
             )
             .await?;
         let settings: Settings = response.into_inner();
-        profile.validate(&settings)?;
+        settings.validate(profile)?;
         Ok(settings)
     })
     .await

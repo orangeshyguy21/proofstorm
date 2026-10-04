@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/BoltzExchange/hold",
+  "commit_sha": "af0055b132f3b9f24d0b1d478a15005fcf8f014f",
+  "artifact_url": "https://codeload.github.com/BoltzExchange/hold/tar.gz/af0055b132f3b9f24d0b1d478a15005fcf8f014f",
+  "artifact_sha256": "0f225fe33c5640339ba0163751056df78e2ba0af9649febf1f0a6616cd9237c4",
+  "platform": "linux/amd64,linux/arm64",
+  "runtime_image": "docker.io/elementsproject/lightningd@sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4",
+  "recipe_digest": "sha256:9c505554c5c12a595d4928262109514976e21c722885f474fb073075c20d173d",
+  "package_path": ".",
+  "dependency_lock_digest": "sha256:4fde8fb58711f547f470d4ddc94b8ff9a0527f4384dab7e2b3139158292dd930",
+  "build_image": "docker.io/library/rust@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e",
+  "transformations": [
+    "Build hold 0.3.3 from the pinned source with its unchanged Cargo.lock, one Cargo job, release LTO disabled and optimization level 1; no application source patches.",
+    "Install the hold binary, license and revision marker into the pinned CLN 26.06.7 base with libpq5 and libsqlite3-0; run both native programs as UID 1000."
+  ]
+}

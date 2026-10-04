@@ -1,8 +1,7 @@
-//! Topology constraints of the installed LDK Server processor profile.
-use super::{
-    BTreeSet, CellSpec, ComponentKind, DependencyBinding, LinkKind, PaymentMethod, ValidationIssue,
-    issue,
-};
+//! Authored payment bindings must match the selected gRPC processor's full rail
+//! set. Backend dependency topology is validated separately from mint bindings.
+use super::{CellSpec, ComponentKind, LinkKind, ValidationIssue, issue};
+use crate::{ProcessorProfile, processor_ids::LDK_PROCESSOR};
 
 pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssue>) {
     for (index, component) in cell.components.iter().enumerate() {
@@ -11,49 +10,66 @@ pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssu
             .iter()
             .filter(|link| link.from == component.id && link.kind == LinkKind::PaymentBackend)
             .collect::<Vec<_>>();
-        let processor = component.implementation == "cdk-ldk-server-processor";
-        let grpc_mint = component.implementation == "cdk"
-            && links.iter().any(|link| {
-                cell.components.iter().any(|target| {
-                    target.id == link.to && target.kind == ComponentKind::PaymentProcessor
+        let (profile, target_implementation, target_kind) = if component.implementation
+            == LDK_PROCESSOR
+        {
+            (
+                ProcessorProfile::LdkServer,
+                "ldk-server",
+                ComponentKind::Lightning,
+            )
+        } else if component.implementation == "cdk" {
+            let Some(target) = links.iter().find_map(|link| {
+                cell.components.iter().find(|target| {
+                    target.id == link.to
+                        && (target.kind == ComponentKind::PaymentProcessor
+                            || ProcessorProfile::for_implementation(&target.implementation)
+                                .is_some())
                 })
-            });
-        if !processor && !grpc_mint {
-            continue;
-        }
-        let targets = links
-            .iter()
-            .map(|link| link.to.as_str())
-            .collect::<BTreeSet<_>>();
-        let methods = links
-            .iter()
-            .filter_map(|link| match &link.binding {
-                Some(DependencyBinding::Payment { method, unit }) if unit == "sat" => Some(*method),
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
-        // This profile advertises both methods. Keep the authored topology and
-        // CDK's GetSettings-based registration identical, with one endpoint.
-        let target_implementation = if processor {
-            "ldk-server"
+            }) else {
+                continue;
+            };
+            let Some(profile) = ProcessorProfile::for_implementation(&target.implementation) else {
+                issue(
+                    issues,
+                    "unsupported_processor_profile",
+                    format!("/components/{index}"),
+                    format!(
+                        "unsupported payment processor implementation {:?}",
+                        target.implementation
+                    ),
+                );
+                continue;
+            };
+            (
+                profile,
+                profile.implementation(),
+                ComponentKind::PaymentProcessor,
+            )
         } else {
-            "cdk-ldk-server-processor"
+            continue;
         };
-        if links.len() != 2
-            || targets.len() != 1
-            || methods != BTreeSet::from([PaymentMethod::Bolt11, PaymentMethod::Bolt12])
-            || !targets.iter().all(|id| {
+        let target_id = links.first().map(|link| &link.to);
+        if !profile.accepts_bindings(links.iter().map(|link| link.binding.as_ref()))
+            || !links.iter().all(|link| {
                 cell.components.iter().any(|target| {
-                    target.id == *id && target.implementation == target_implementation
+                    Some(&link.to) == target_id
+                        && target.id == link.to
+                        && target.kind == target_kind
+                        && target.implementation == target_implementation
                 })
             })
         {
             issue(
                 issues,
-                "ldk_processor_payment_bindings",
+                match profile {
+                    ProcessorProfile::LdkServer => "ldk_processor_payment_bindings",
+                    ProcessorProfile::Bark => "bark_processor_payment_bindings",
+                },
                 format!("/components/{index}"),
                 format!(
-                    "this profile requires bolt11/sat and bolt12/sat payment bindings to one {target_implementation} component"
+                    "this profile requires {} payment bindings to one {target_implementation} component",
+                    profile.binding_description()
                 ),
             );
         }
@@ -63,7 +79,7 @@ pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::validate_cell;
+    use crate::{DependencyBinding, PaymentMethod, validate_cell};
 
     fn example() -> CellSpec {
         serde_json::from_str(include_str!("../../../examples/ldk-server-cell.json")).unwrap()
@@ -115,12 +131,184 @@ mod tests {
             }
             let report = validate_cell(&invalid);
             assert!(
-                report
-                    .issues
-                    .iter()
-                    .any(|issue| issue.code == "ldk_processor_payment_bindings"),
+                report.issues.iter().any(|issue| issue.code
+                    == if mutation == "wrong-service" {
+                        "unsupported_processor_profile"
+                    } else {
+                        "ldk_processor_payment_bindings"
+                    }),
                 "{mutation}: {report:?}"
             );
+        }
+    }
+
+    // Mint-side topology fixtures do not install Bark: catalog resolution still
+    // requires the separately qualified backend, images and dependency graph.
+    fn mint_cell(profile: ProcessorProfile) -> CellSpec {
+        match profile {
+            ProcessorProfile::LdkServer => example(),
+            ProcessorProfile::Bark => {
+                serde_json::from_str(include_str!("../tests/fixtures/bark-topology.json")).unwrap()
+            }
+        }
+    }
+
+    fn corrupt_mint(invalid: &mut CellSpec, profile: ProcessorProfile, mutation: &str) {
+        let link_index = invalid
+            .links
+            .iter()
+            .position(|l| l.id == "mint-bolt11")
+            .unwrap();
+        let processor_index = invalid
+            .components
+            .iter()
+            .position(|c| c.id == "processor")
+            .unwrap();
+        match mutation {
+            "missing-binding" => invalid.links[link_index].binding = None,
+            "non-payment-binding" => {
+                invalid.links[link_index].binding = Some(DependencyBinding::Chain {
+                    network: crate::BitcoinNetwork::Regtest,
+                });
+            }
+            "duplicate-binding" => {
+                let mut duplicate = invalid.links[link_index].clone();
+                duplicate.id = "duplicate".into();
+                invalid.links.push(duplicate);
+            }
+            "wrong-unit" => {
+                invalid.links[link_index].binding = Some(DependencyBinding::Payment {
+                    method: PaymentMethod::Bolt11,
+                    unit: "msat".into(),
+                });
+            }
+            "onchain" => {
+                invalid.links[link_index].binding = Some(DependencyBinding::Payment {
+                    method: PaymentMethod::Onchain,
+                    unit: "sat".into(),
+                });
+            }
+            "wrong-kind" => invalid.components[processor_index].kind = ComponentKind::Lightning,
+            "unknown-profile" => {
+                invalid.components[processor_index].implementation = "unknown-processor".into();
+            }
+            "mixed-endpoints" | "mixed-profiles" => {
+                let mut second = invalid.components[processor_index].clone();
+                second.id = "other-processor".into();
+                if mutation == "mixed-profiles" {
+                    second.implementation = match profile {
+                        ProcessorProfile::LdkServer => ProcessorProfile::Bark,
+                        ProcessorProfile::Bark => ProcessorProfile::LdkServer,
+                    }
+                    .implementation()
+                    .into();
+                }
+                invalid.components.push(second);
+                if profile == ProcessorProfile::LdkServer {
+                    invalid
+                        .links
+                        .iter_mut()
+                        .find(|l| l.id == "mint-bolt12")
+                        .unwrap()
+                        .to = "other-processor".into();
+                } else {
+                    let mut extra = invalid.links[link_index].clone();
+                    extra.id = "other-payment".into();
+                    extra.to = "other-processor".into();
+                    extra.binding = Some(DependencyBinding::Payment {
+                        method: PaymentMethod::Bolt12,
+                        unit: "sat".into(),
+                    });
+                    invalid.links.push(extra);
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn mint_bindings_require_the_selected_profile_not_the_ldk_default() {
+        for profile in [ProcessorProfile::LdkServer, ProcessorProfile::Bark] {
+            let cell = mint_cell(profile);
+            assert!(validate_cell(&cell).valid, "{profile:?}");
+            for mutation in [
+                "missing-binding",
+                "non-payment-binding",
+                "duplicate-binding",
+                "wrong-unit",
+                "onchain",
+                "wrong-kind",
+                "unknown-profile",
+                "mixed-endpoints",
+                "mixed-profiles",
+            ] {
+                let mut invalid = cell.clone();
+                corrupt_mint(&mut invalid, profile, mutation);
+                let report = validate_cell(&invalid);
+                let mint_path = format!(
+                    "/components/{}",
+                    invalid
+                        .components
+                        .iter()
+                        .position(|c| c.id == "mint")
+                        .unwrap()
+                );
+                assert!(
+                    report
+                        .issues
+                        .iter()
+                        .any(|issue| issue.path == mint_path && issue.code.contains("processor")),
+                    "{profile:?}, {mutation}: {report:?}"
+                );
+                // Selection/refusal must not depend on authored link order.
+                invalid.links.reverse();
+                let reversed = validate_cell(&invalid);
+                assert!(
+                    reversed
+                        .issues
+                        .iter()
+                        .any(|issue| issue.path == mint_path && issue.code.contains("processor")),
+                    "{profile:?}, {mutation}, reversed: {reversed:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bark_refuses_bolt12_and_ldk_still_requires_it() {
+        let mut bark = mint_cell(ProcessorProfile::Bark);
+        let extra = example()
+            .links
+            .into_iter()
+            .find(|l| l.id == "mint-bolt12")
+            .unwrap();
+        bark.links.push(extra);
+        assert!(
+            validate_cell(&bark)
+                .issues
+                .iter()
+                .any(|i| i.code == "bark_processor_payment_bindings")
+        );
+        let mut ldk = mint_cell(ProcessorProfile::LdkServer);
+        ldk.links.retain(|l| l.id != "mint-bolt12");
+        assert!(
+            validate_cell(&ldk)
+                .issues
+                .iter()
+                .any(|i| i.code == "ldk_processor_payment_bindings")
+        );
+    }
+
+    #[test]
+    fn a_reserved_bark_profile_does_not_enable_unqualified_catalog_support() {
+        let bark = mint_cell(ProcessorProfile::Bark);
+        assert!(validate_cell(&bark).valid);
+        for platform in [
+            crate::CatalogPlatform::LinuxArm64,
+            crate::CatalogPlatform::LinuxAmd64,
+        ] {
+            let catalog = crate::catalog_for_platform(platform);
+            assert!(crate::resolve_lock(&bark, &catalog).is_err());
         }
     }
 }

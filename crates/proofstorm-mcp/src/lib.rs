@@ -1933,6 +1933,7 @@ fn topology_summary(cell: &CellSpec) -> TopologySummary {
         matches!(
             link.kind,
             LinkKind::ChainBackend
+                | LinkKind::ArkBackend
                 | LinkKind::PaymentBackend
                 | LinkKind::DatabaseBackend
                 | LinkKind::AuthenticationBackend

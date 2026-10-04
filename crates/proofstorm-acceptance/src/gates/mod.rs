@@ -6,6 +6,7 @@ use crate::GateContext;
 
 pub mod agents;
 mod authentication;
+pub mod bark;
 mod candidate_isolation;
 mod candidate_source;
 pub mod candidates;
@@ -92,6 +93,7 @@ pub const NAMES: &[&str] = &[
     "cross-cell-scheduler",
     "cdk-ldk",
     "ldk-server-processor",
+    "bark-processor",
     "cdk-ldk-postgres",
     "cdk-bdk",
     "cdk-bdk-postgres-stress",
@@ -172,6 +174,7 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "cross-cell-scheduler" => cross_cell_scheduler::run(context),
         "cdk-ldk" => cdk_ldk::run(context, crate::postgres::enabled()),
         "ldk-server-processor" => ldk_server::run(context),
+        "bark-processor" => bark::run(context),
         "cdk-ldk-postgres" => cdk_ldk::run(context, true),
         "cdk-bdk" => cdk_bdk_stress::run(context, false, false),
         "cdk-bdk-stress" => cdk_bdk_stress::run(context, crate::postgres::enabled(), true),

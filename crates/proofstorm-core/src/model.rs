@@ -130,6 +130,7 @@ pub enum Capability {
 pub enum ComponentKind {
     Bitcoin,
     Lightning,
+    ArkServer,
     PaymentProcessor,
     Mint,
     Database,
@@ -172,6 +173,7 @@ pub enum LinkKind {
     BitcoinPeer,
     LightningPeer,
     ChainBackend,
+    ArkBackend,
     PaymentBackend,
     DatabaseBackend,
     AuthenticationBackend,
@@ -215,9 +217,12 @@ pub enum BitcoinNetwork {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DependencyBinding {
     Chain {
+        network: BitcoinNetwork,
+    },
+    Ark {
         network: BitcoinNetwork,
     },
     Payment {
@@ -252,12 +257,12 @@ impl JsonSchema for DependencyBinding {
     fn json_schema(generator: &mut SchemaGenerator) -> Schema {
         json_schema!({
             "type": "object",
-            "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
+            "description": "Typed dependency qualifier. Chain and Ark bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
             "required": ["type"],
             "properties": {
                 "type": {
                     "type": "string",
-                    "enum": ["chain", "payment", "database", "authentication"]
+                    "enum": ["chain", "ark", "payment", "database", "authentication"]
                 },
                 "protocol": AuthenticationProtocol::json_schema(generator),
                 "network": BitcoinNetwork::json_schema(generator),
@@ -279,8 +284,8 @@ impl JsonSchema for DependencyBinding {
             "additionalProperties": false,
             "x-kubernetes-validations": [
                 {
-                    "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))",
-                    "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol"
+                    "rule": "self.type in ['chain', 'ark'] ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))",
+                    "message": "chain and Ark bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol"
                 }
             ]
         })
@@ -291,8 +296,11 @@ impl JsonSchema for DependencyBinding {
 #[serde(deny_unknown_fields)]
 #[schemars(extend(
     "x-kubernetes-validations" = [{
-        "rule": "(self.kind == 'chain_backend' || self.kind == 'payment_backend' || self.kind == 'database_backend' || self.kind == 'authentication_backend') ? has(self.binding) : !has(self.binding)",
+        "rule": "self.kind in ['chain_backend', 'ark_backend', 'payment_backend', 'database_backend', 'authentication_backend'] ? has(self.binding) : !has(self.binding)",
         "message": "backend links require a binding; peer and network-path links forbid one"
+    }, {
+        "rule": "!has(self.binding) || (self.kind == 'chain_backend' && self.binding.type == 'chain') || (self.kind == 'ark_backend' && self.binding.type == 'ark') || (self.kind == 'payment_backend' && self.binding.type == 'payment') || (self.kind == 'database_backend' && self.binding.type == 'database') || (self.kind == 'authentication_backend' && self.binding.type == 'authentication')",
+        "message": "backend link kind must match its binding type"
     }]
 ))]
 pub struct LinkSpec {

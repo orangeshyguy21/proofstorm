@@ -1,13 +1,13 @@
-//! LDK Server and the CDK gRPC payment boundary are independent workloads.
+//! Explicit CDK gRPC payment profiles and the independent LDK workloads.
 use super::{
-    AdapterError, BTreeMap, BTreeSet, CdkMintConfig, ComponentKind, ComponentPlanContract,
-    DependencyBinding, EffectiveComponentConfig, LinkKind, RPC_PASSWORD, RPC_USER,
-    RenderedComponent, TargetDescriptorContract, Value, container_security,
-    install_component_driver, instance_affinity, instance_namespace, json, labels, metadata,
-    plan_execution_credential, plan_linked_target, plan_pod_metadata, plan_workload_metadata,
-    pod_security, require_plan_backend, resource, service_from_plan, stateful_set, target_port,
+    AdapterError, BTreeMap, CdkMintConfig, ComponentKind, ComponentPlanContract,
+    EffectiveComponentConfig, LinkKind, RPC_PASSWORD, RPC_USER, RenderedComponent,
+    TargetDescriptorContract, Value, container_security, install_component_driver,
+    instance_affinity, instance_namespace, json, labels, metadata, plan_execution_credential,
+    plan_linked_target, plan_pod_metadata, plan_workload_metadata, pod_security,
+    require_plan_backend, resource, service_from_plan, stateful_set, target_port,
 };
-use proofstorm_core::PaymentMethod;
+use proofstorm_core::ProcessorProfile;
 
 pub(super) fn grpc_target(
     plan: &ComponentPlanContract,
@@ -15,50 +15,61 @@ pub(super) fn grpc_target(
     if plan.backend_id != "cdk" {
         return Ok(None);
     }
-    if !plan.relevant_links.iter().any(|link| {
-        link.kind == LinkKind::PaymentBackend
-            && plan
-                .linked_targets
-                .get(&link.id)
-                .is_some_and(|target| target.kind == ComponentKind::PaymentProcessor)
-    }) {
+    let Some(target) = plan.relevant_links.iter().find_map(|link| {
+        (link.kind == LinkKind::PaymentBackend)
+            .then(|| plan.linked_targets.get(&link.id))
+            .flatten()
+            .filter(|target| {
+                target.kind == ComponentKind::PaymentProcessor
+                    || ProcessorProfile::for_implementation(&target.backend_id).is_some()
+            })
+    }) else {
         return Ok(None);
-    }
-    payment_target(plan, "cdk-ldk-server-processor").map(Some)
+    };
+    let profile = ProcessorProfile::for_implementation(&target.backend_id).ok_or_else(|| {
+        AdapterError::InvalidPlan(format!(
+            "unsupported payment processor implementation {:?}",
+            target.backend_id
+        ))
+    })?;
+    payment_target(
+        plan,
+        profile,
+        profile.implementation(),
+        ComponentKind::PaymentProcessor,
+    )
+    .map(Some)
 }
 
 fn payment_target<'a>(
     plan: &'a ComponentPlanContract,
+    profile: ProcessorProfile,
     implementation: &str,
+    kind: ComponentKind,
 ) -> Result<&'a TargetDescriptorContract, AdapterError> {
     let links = plan
         .relevant_links
         .iter()
         .filter(|link| link.kind == LinkKind::PaymentBackend)
         .collect::<Vec<_>>();
-    let methods = links
-        .iter()
-        .filter_map(|link| match &link.binding {
-            Some(DependencyBinding::Payment { method, unit }) if unit == "sat" => Some(*method),
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>();
     let target = links
         .first()
         .and_then(|link| plan.linked_targets.get(&link.id));
-    if links.len() != 2
-        || methods != BTreeSet::from([PaymentMethod::Bolt11, PaymentMethod::Bolt12])
+    if !profile.accepts_bindings(links.iter().map(|link| link.binding.as_ref()))
         || !target.is_some_and(|target| {
             target.backend_id == implementation
+                && target.kind == kind
                 && links.iter().all(|link| {
-                    link.to == target.component_id
+                    link.from == plan.component_id
+                        && link.to == target.component_id
                         && plan.linked_targets.get(&link.id) == Some(target)
                 })
         })
     {
         return Err(AdapterError::InvalidPlan(format!(
-            "component {:?} requires bolt11/sat and bolt12/sat bindings to one {implementation}",
-            plan.component_id
+            "component {:?} requires {} bindings to one {implementation}",
+            plan.component_id,
+            profile.binding_description()
         )));
     }
     Ok(target.expect("validated payment target"))
@@ -127,7 +138,12 @@ pub fn render_processor(plan: &ComponentPlanContract) -> Result<RenderedComponen
             "LDK processor configuration missing".into(),
         ));
     };
-    let node = payment_target(plan, "ldk-server")?;
+    let node = payment_target(
+        plan,
+        ProcessorProfile::LdkServer,
+        "ldk-server",
+        ComponentKind::Lightning,
+    )?;
     let credentials = plan_execution_credential(plan, "ldk-server")?;
     if credentials.source_component_id != node.component_id {
         return Err(AdapterError::InvalidPlan(

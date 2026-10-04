@@ -52,6 +52,7 @@ spec:
                           enum:
                           - bitcoin
                           - lightning
+                          - ark_server
                           - payment_processor
                           - mint
                           - database
@@ -78,7 +79,7 @@ spec:
                     items:
                       properties:
                         binding:
-                          description: Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.
+                          description: Typed dependency qualifier. Chain and Ark bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.
                           nullable: true
                           properties:
                             database:
@@ -109,6 +110,7 @@ spec:
                             type:
                               enum:
                               - chain
+                              - ark
                               - payment
                               - database
                               - authentication
@@ -122,8 +124,8 @@ spec:
                           - type
                           type: object
                           x-kubernetes-validations:
-                          - message: chain bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol
-                            rule: 'self.type == ''chain'' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == ''payment'' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == ''database'' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))'
+                          - message: chain and Ark bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol
+                            rule: 'self.type in [''chain'', ''ark''] ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == ''payment'' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == ''database'' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))'
                         from:
                           type: string
                         id:
@@ -134,6 +136,7 @@ spec:
                           - bitcoin_peer
                           - lightning_peer
                           - chain_backend
+                          - ark_backend
                           - payment_backend
                           - database_backend
                           - authentication_backend
@@ -149,7 +152,9 @@ spec:
                       type: object
                       x-kubernetes-validations:
                       - message: backend links require a binding; peer and network-path links forbid one
-                        rule: '(self.kind == ''chain_backend'' || self.kind == ''payment_backend'' || self.kind == ''database_backend'' || self.kind == ''authentication_backend'') ? has(self.binding) : !has(self.binding)'
+                        rule: 'self.kind in [''chain_backend'', ''ark_backend'', ''payment_backend'', ''database_backend'', ''authentication_backend''] ? has(self.binding) : !has(self.binding)'
+                      - message: backend link kind must match its binding type
+                        rule: '!has(self.binding) || (self.kind == ''chain_backend'' && self.binding.type == ''chain'') || (self.kind == ''ark_backend'' && self.binding.type == ''ark'') || (self.kind == ''payment_backend'' && self.binding.type == ''payment'') || (self.kind == ''database_backend'' && self.binding.type == ''database'') || (self.kind == ''authentication_backend'' && self.binding.type == ''authentication'')'
                     type: array
                   name:
                     type: string
@@ -313,6 +318,7 @@ spec:
                                 - bitcoin_peer
                                 - lightning_peer
                                 - chain_backend
+                                - ark_backend
                                 - payment_backend
                                 - database_backend
                                 - authentication_backend
@@ -622,6 +628,7 @@ spec:
                       enum:
                       - bitcoin
                       - lightning
+                      - ark_server
                       - payment_processor
                       - mint
                       - database

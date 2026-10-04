@@ -11,6 +11,8 @@ use std::{
 
 #[derive(Default)]
 struct Cluster {
+    claim_exists: bool,
+    claim_race_secret: Option<Secret>,
     secret: Option<Secret>,
     creates: Vec<Secret>,
     reads: usize,
@@ -27,6 +29,34 @@ fn api(cluster: &Arc<Mutex<Cluster>>) -> Api<Secret> {
             let cluster = cluster.clone();
             async move {
                 let method = request.method().clone();
+                if request.uri().path()
+                    == "/api/v1/namespaces/test/persistentvolumeclaims/data-backend-0"
+                {
+                    assert_eq!(method, http::Method::GET);
+                    let mut state = cluster.lock().unwrap();
+                    if let Some(winner) = state.claim_race_secret.take() {
+                        state.secret = Some(winner);
+                    }
+                    let exists = state.claim_exists;
+                    let (status, value) = if exists {
+                        (
+                            200,
+                            json!({"apiVersion":"v1","kind":"PersistentVolumeClaim","metadata":{"name":"data-backend-0"}}),
+                        )
+                    } else {
+                        (
+                            404,
+                            json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","message":"absent","code":404}),
+                        )
+                    };
+                    return Ok::<_, Infallible>(
+                        Response::builder()
+                            .status(status)
+                            .header("content-type", "application/json")
+                            .body(Body::from(serde_json::to_vec(&value).unwrap()))
+                            .unwrap(),
+                    );
+                }
                 assert_eq!(
                     request.uri().path(),
                     if method == http::Method::POST {
@@ -385,4 +415,185 @@ async fn a_lost_create_race_keeps_the_winning_credentials() {
     }));
     let error = ensure(&api(&cluster), &template).await.unwrap_err();
     assert!(matches!(error, Error::SecretContract(message) if message.contains("missing key")));
+}
+
+async fn ensure_bark_identity(
+    cluster: &Arc<Mutex<Cluster>>,
+    template: &Secret,
+) -> Result<(), Error> {
+    let secrets = api(cluster);
+    let claims = Api::namespaced(secrets.into_client(), "test");
+    ensure_bark(&api(cluster), &claims, template).await
+}
+
+fn bark_template() -> Secret {
+    serde_json::from_value(json!({"apiVersion":"v1","kind":"Secret","type":"Opaque",
+        "metadata":{"name":"credentials","labels":{"proofstorm.dev/component":"backend"}},
+        "stringData":{"PROOFSTORM_SECRET_KIND":"bark-processor"}}))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn bark_seed_is_unique_preserved_and_never_recreated_over_storage() {
+    let template = bark_template();
+    let mut seeds = BTreeSet::new();
+    for _ in 0..3 {
+        let cluster = Arc::new(Mutex::new(Cluster::default()));
+        ensure_bark_identity(&cluster, &template).await.unwrap();
+        let original = cluster.lock().unwrap().secret.clone().unwrap();
+        let seed = &original.data.as_ref().unwrap()["mnemonic"].0;
+        is_mnemonic(std::str::from_utf8(seed).unwrap());
+        assert!(seeds.insert(seed.clone()));
+        cluster.lock().unwrap().claim_exists = true;
+        ensure_bark_identity(&cluster, &template).await.unwrap();
+        assert_eq!(cluster.lock().unwrap().secret.as_ref(), Some(&original));
+        assert_eq!(cluster.lock().unwrap().creates.len(), 1);
+        cluster.lock().unwrap().secret = None;
+        let error = ensure_bark_identity(&cluster, &template).await.unwrap_err();
+        assert!(error.to_string().contains("owned storage exists"));
+        assert_eq!(cluster.lock().unwrap().creates.len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn invalid_or_racing_bark_identity_is_never_overwritten() {
+    let template = bark_template();
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    ensure_bark_identity(&cluster, &template).await.unwrap();
+    let original = cluster.lock().unwrap().secret.clone().unwrap();
+    for missing in ["mnemonic", "PROOFSTORM_SECRET_KIND"] {
+        for invalid in [
+            None,
+            Some(b"".to_vec()),
+            Some(b"private invalid words".to_vec()),
+        ] {
+            let mut stored = original.clone();
+            if let Some(bytes) = invalid {
+                stored
+                    .data
+                    .as_mut()
+                    .unwrap()
+                    .insert(missing.into(), ByteString(bytes));
+            } else {
+                stored.data.as_mut().unwrap().remove(missing);
+            }
+            for racing in [false, true] {
+                let state = if racing {
+                    Cluster {
+                        concurrent: Some(stored.clone()),
+                        ..Cluster::default()
+                    }
+                } else {
+                    Cluster {
+                        secret: Some(stored.clone()),
+                        claim_exists: true,
+                        ..Cluster::default()
+                    }
+                };
+                let cluster = Arc::new(Mutex::new(state));
+                let error = ensure_bark_identity(&cluster, &template).await.unwrap_err();
+                assert!(!format!("{error:#}").contains("private invalid words"));
+                assert_eq!(cluster.lock().unwrap().secret.as_ref(), Some(&stored));
+                assert_eq!(cluster.lock().unwrap().creates.len(), usize::from(racing));
+            }
+        }
+    }
+    let cluster = Arc::new(Mutex::new(Cluster {
+        concurrent: Some(original.clone()),
+        ..Cluster::default()
+    }));
+    ensure_bark_identity(&cluster, &template).await.unwrap();
+    assert_eq!(cluster.lock().unwrap().secret.as_ref(), Some(&original));
+}
+
+#[tokio::test]
+async fn bark_storage_guard_rechecks_concurrent_creation_and_cannot_be_bypassed() {
+    let template = bark_template();
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    assert!(
+        ensure(&api(&cluster), &template)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("provisioning guard")
+    );
+    assert!(cluster.lock().unwrap().creates.is_empty());
+    ensure_bark_identity(&cluster, &template).await.unwrap();
+    let original = cluster.lock().unwrap().secret.clone().unwrap();
+    let race = Arc::new(Mutex::new(Cluster {
+        claim_exists: true,
+        claim_race_secret: Some(original.clone()),
+        ..Cluster::default()
+    }));
+    ensure_bark_identity(&race, &template).await.unwrap();
+    let state = race.lock().unwrap();
+    assert!(state.creates.is_empty());
+    assert_eq!(state.secret.as_ref(), Some(&original));
+}
+
+async fn ensure_bark_tls(cluster: &Arc<Mutex<Cluster>>, template: &Secret) -> Result<(), Error> {
+    let claims = Api::namespaced(api(cluster).into_client(), "test");
+    crate::management_tls::ensure_bark(&api(cluster), &claims, template).await
+}
+
+#[tokio::test]
+async fn bark_tls_preserves_distinct_roles_and_refuses_lost_or_incomplete_identity() {
+    let mut authorities = BTreeSet::new();
+    for role in ["cln", "hold"] {
+        let mut template = bark_template();
+        template.string_data = Some(BTreeMap::from([
+            ("PROOFSTORM_SECRET_KIND".into(), format!("bark-{role}-tls")),
+            ("PROOFSTORM_TLS_SERVER_NAME".into(), "backend".into()),
+        ]));
+        let cluster = Arc::new(Mutex::new(Cluster::default()));
+        assert!(
+            crate::management_tls::ensure(&api(&cluster), &template)
+                .await
+                .is_err()
+        );
+        ensure_bark_tls(&cluster, &template).await.unwrap();
+        let original = cluster.lock().unwrap().secret.clone().unwrap();
+        assert!(authorities.insert(original.data.as_ref().unwrap()["ca.pem"].0.clone()));
+        cluster.lock().unwrap().claim_exists = true;
+        cluster.lock().unwrap().reads = 0;
+        ensure_bark_tls(&cluster, &template).await.unwrap();
+        // Once an identity was observed, never enter the creation path again:
+        // a deletion between reads must not permit regeneration over its PVC.
+        assert_eq!(cluster.lock().unwrap().reads, 1);
+        assert_eq!(cluster.lock().unwrap().secret.as_ref(), Some(&original));
+        for key in [
+            "ca.key",
+            "client.key",
+            "server.pem",
+            "PROOFSTORM_TLS_SERVER_NAME",
+        ] {
+            let mut damaged = original.clone();
+            damaged.data.as_mut().unwrap().remove(key);
+            cluster.lock().unwrap().secret = Some(damaged.clone());
+            assert!(ensure_bark_tls(&cluster, &template).await.is_err());
+            assert_eq!(cluster.lock().unwrap().secret.as_ref(), Some(&damaged));
+        }
+        cluster.lock().unwrap().secret = None;
+        assert!(
+            ensure_bark_tls(&cluster, &template)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("owned storage exists")
+        );
+        assert_eq!(cluster.lock().unwrap().creates.len(), 1);
+        let race = Arc::new(Mutex::new(Cluster {
+            concurrent: Some(original.clone()),
+            ..Cluster::default()
+        }));
+        ensure_bark_tls(&race, &template).await.unwrap();
+        assert_eq!(race.lock().unwrap().secret.as_ref(), Some(&original));
+        let race = Arc::new(Mutex::new(Cluster {
+            claim_exists: true,
+            claim_race_secret: Some(original.clone()),
+            ..Cluster::default()
+        }));
+        ensure_bark_tls(&race, &template).await.unwrap();
+        assert_eq!(race.lock().unwrap().secret.as_ref(), Some(&original));
+    }
 }

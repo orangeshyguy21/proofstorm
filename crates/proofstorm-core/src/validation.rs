@@ -7,6 +7,8 @@ use crate::{
     API_VERSION, CellSpec, ComponentKind, DependencyBinding, LinkKind, LinkSpec, PaymentMethod,
 };
 
+#[path = "bark_validation.rs"]
+mod bark;
 #[path = "cdk_validation.rs"]
 mod cdk;
 #[path = "processor_validation.rs"]
@@ -69,6 +71,7 @@ pub fn validate_cell(cell: &CellSpec) -> ValidationReport {
     validate_links(cell, &ids, &kinds, &mut issues);
     validate_authentication_topology(cell, &mut issues);
     processor::validate_topology(cell, &mut issues);
+    bark::validate_topology(cell, &mut issues);
     cdk::validate_topology(cell, &mut issues);
 
     ValidationReport::from_issues(issues)
@@ -211,36 +214,51 @@ fn validate_links(
                     from == ComponentKind::Lightning && to == ComponentKind::Lightning
                 }
                 LinkKind::ChainBackend => {
-                    matches!(from, ComponentKind::Lightning | ComponentKind::Mint)
-                        && to == ComponentKind::Bitcoin
+                    matches!(
+                        from,
+                        ComponentKind::Lightning
+                            | ComponentKind::Mint
+                            | ComponentKind::PaymentProcessor
+                            | ComponentKind::ArkServer
+                    ) && to == ComponentKind::Bitcoin
+                }
+                LinkKind::ArkBackend => {
+                    from == ComponentKind::PaymentProcessor && to == ComponentKind::ArkServer
                 }
                 LinkKind::PaymentBackend => {
-                    matches!(from, ComponentKind::Mint | ComponentKind::PaymentProcessor)
-                        && match &link.binding {
-                            Some(DependencyBinding::Payment {
-                                method: PaymentMethod::Onchain,
-                                ..
-                            }) => matches!(
-                                to,
-                                ComponentKind::Bitcoin | ComponentKind::PaymentProcessor
-                            ),
-                            Some(DependencyBinding::Payment { .. }) => {
-                                matches!(
-                                    to,
-                                    ComponentKind::Lightning | ComponentKind::PaymentProcessor
-                                )
-                            }
-                            _ => matches!(
-                                to,
-                                ComponentKind::Lightning
-                                    | ComponentKind::Bitcoin
-                                    | ComponentKind::PaymentProcessor
-                            ),
+                    matches!(
+                        from,
+                        ComponentKind::Mint
+                            | ComponentKind::PaymentProcessor
+                            | ComponentKind::ArkServer
+                    ) && match &link.binding {
+                        Some(DependencyBinding::Payment {
+                            method: PaymentMethod::Onchain,
+                            ..
+                        }) => {
+                            matches!(to, ComponentKind::Bitcoin | ComponentKind::PaymentProcessor)
                         }
+                        Some(DependencyBinding::Payment { .. }) => {
+                            matches!(
+                                to,
+                                ComponentKind::Lightning | ComponentKind::PaymentProcessor
+                            )
+                        }
+                        _ => matches!(
+                            to,
+                            ComponentKind::Lightning
+                                | ComponentKind::Bitcoin
+                                | ComponentKind::PaymentProcessor
+                        ),
+                    }
                 }
                 LinkKind::DatabaseBackend => {
-                    matches!(from, ComponentKind::Mint | ComponentKind::IdentityProvider)
-                        && to == ComponentKind::Database
+                    matches!(
+                        from,
+                        ComponentKind::Mint
+                            | ComponentKind::IdentityProvider
+                            | ComponentKind::ArkServer
+                    ) && to == ComponentKind::Database
                 }
                 LinkKind::AuthenticationBackend => {
                     from == ComponentKind::Mint && to == ComponentKind::IdentityProvider
@@ -325,11 +343,13 @@ fn validate_binding(index: usize, link: &LinkSpec, issues: &mut Vec<ValidationIs
     let path = format!("/links/{index}/binding");
     match (&link.kind, &link.binding) {
         (LinkKind::ChainBackend, Some(DependencyBinding::Chain { .. }))
+        | (LinkKind::ArkBackend, Some(DependencyBinding::Ark { .. }))
         | (LinkKind::PaymentBackend, Some(DependencyBinding::Payment { .. }))
         | (LinkKind::DatabaseBackend, Some(DependencyBinding::Database { .. }))
         | (LinkKind::AuthenticationBackend, Some(DependencyBinding::Authentication { .. })) => {}
         (
             LinkKind::ChainBackend
+            | LinkKind::ArkBackend
             | LinkKind::PaymentBackend
             | LinkKind::DatabaseBackend
             | LinkKind::AuthenticationBackend,
@@ -344,6 +364,7 @@ fn validate_binding(index: usize, link: &LinkSpec, issues: &mut Vec<ValidationIs
         }
         (
             LinkKind::ChainBackend
+            | LinkKind::ArkBackend
             | LinkKind::PaymentBackend
             | LinkKind::DatabaseBackend
             | LinkKind::AuthenticationBackend,

@@ -1,5 +1,19 @@
 {
   "$defs": {
+    "BarkProcessorConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "event_poll_interval_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event_poll_interval_ms"
+      ],
+      "type": "object"
+    },
     "BitcoinCoreConfig": {
       "additionalProperties": false,
       "properties": {
@@ -249,6 +263,7 @@
       "enum": [
         "bitcoin",
         "lightning",
+        "ark_server",
         "payment_processor",
         "mint",
         "database",
@@ -318,7 +333,7 @@
     },
     "DependencyBinding": {
       "additionalProperties": false,
-      "description": "Typed dependency qualifier. Chain bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
+      "description": "Typed dependency qualifier. Chain and Ark bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
       "properties": {
         "database": {
           "maxLength": 63,
@@ -357,6 +372,7 @@
         "type": {
           "enum": [
             "chain",
+            "ark",
             "payment",
             "database",
             "authentication"
@@ -376,8 +392,8 @@
       "type": "object",
       "x-kubernetes-validations": [
         {
-          "message": "chain bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol",
-          "rule": "self.type == 'chain' ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))"
+          "message": "chain and Ark bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol",
+          "rule": "self.type in ['chain', 'ark'] ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))"
         }
       ]
     },
@@ -460,6 +476,46 @@
           "required": [
             "implementation",
             "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/BarkProcessorConfig"
+            },
+            "implementation": {
+              "const": "cdk-bark-processor",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "implementation": {
+              "const": "bark-server",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "implementation": {
+              "const": "cln-hold",
+              "type": "string"
+            }
+          },
+          "required": [
+            "implementation"
           ],
           "type": "object"
         },
@@ -755,6 +811,7 @@
         "bitcoin_peer",
         "lightning_peer",
         "chain_backend",
+        "ark_backend",
         "payment_backend",
         "database_backend",
         "authentication_backend",
@@ -799,7 +856,11 @@
       "x-kubernetes-validations": [
         {
           "message": "backend links require a binding; peer and network-path links forbid one",
-          "rule": "(self.kind == 'chain_backend' || self.kind == 'payment_backend' || self.kind == 'database_backend' || self.kind == 'authentication_backend') ? has(self.binding) : !has(self.binding)"
+          "rule": "self.kind in ['chain_backend', 'ark_backend', 'payment_backend', 'database_backend', 'authentication_backend'] ? has(self.binding) : !has(self.binding)"
+        },
+        {
+          "message": "backend link kind must match its binding type",
+          "rule": "!has(self.binding) || (self.kind == 'chain_backend' && self.binding.type == 'chain') || (self.kind == 'ark_backend' && self.binding.type == 'ark') || (self.kind == 'payment_backend' && self.binding.type == 'payment') || (self.kind == 'database_backend' && self.binding.type == 'database') || (self.kind == 'authentication_backend' && self.binding.type == 'authentication')"
         }
       ]
     },

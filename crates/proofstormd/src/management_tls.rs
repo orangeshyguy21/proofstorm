@@ -1,4 +1,4 @@
-//! Per-service management and payment identities. The CA signing key is never persisted.
+//! Per-service identities. Only native CLN/hold retain their required CA signing key.
 
 use std::collections::BTreeMap;
 
@@ -49,6 +49,9 @@ fn generate_for(
         ("PROOFSTORM_SECRET_KIND".into(), kind.into()),
         ("ca.pem".into(), ca.pem()),
     ]);
+    if matches!(kind, "bark-cln-tls" | "bark-hold-tls") {
+        data.insert("ca.key".into(), ca_key.serialize_pem());
+    }
     let mut server_names = vec!["localhost".into(), "127.0.0.1".into()];
     if let Some(server_name) = server_name {
         server_names.push(server_name.into());
@@ -87,6 +90,8 @@ fn validate_for(secret: &Secret, kind: &str, server_name: Option<&str>) -> Resul
         || KEYS
             .iter()
             .any(|key| data.get(*key).is_none_or(|value| value.0.is_empty()))
+        || (matches!(kind, "bark-cln-tls" | "bark-hold-tls")
+            && data.get("ca.key").is_none_or(|value| value.0.is_empty()))
     {
         return Err(Error::SecretContract(format!(
             "management TLS Secret {:?} is incomplete; refusing to replace existing identities",
@@ -97,7 +102,20 @@ fn validate_for(secret: &Secret, kind: &str, server_name: Option<&str>) -> Resul
 }
 
 pub(super) async fn ensure(secrets: &Api<Secret>, template: &Secret) -> Result<(), Error> {
-    let name = template.name_any();
+    if template
+        .string_data
+        .as_ref()
+        .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"))
+        .is_some_and(|kind| matches!(kind.as_str(), "bark-cln-tls" | "bark-hold-tls"))
+    {
+        return Err(Error::SecretContract(
+            "Bark TLS requires the owned-storage provisioning guard".into(),
+        ));
+    }
+    ensure_identity(secrets, template).await
+}
+
+fn template_identity(template: &Secret) -> Result<(&str, Option<&str>), Error> {
     let data = template
         .string_data
         .as_ref()
@@ -106,11 +124,21 @@ pub(super) async fn ensure(secrets: &Api<Secret>, template: &Secret) -> Result<(
         .get("PROOFSTORM_SECRET_KIND")
         .map_or(KIND, String::as_str);
     let server_name = data.get("PROOFSTORM_TLS_SERVER_NAME").map(String::as_str);
-    if kind == "payment-processor-tls" && server_name.is_none() {
+    if matches!(
+        kind,
+        "payment-processor-tls" | "bark-cln-tls" | "bark-hold-tls"
+    ) && server_name.is_none()
+    {
         return Err(Error::SecretContract(
             "Payment processor TLS requires a service DNS identity".into(),
         ));
     }
+    Ok((kind, server_name))
+}
+
+async fn ensure_identity(secrets: &Api<Secret>, template: &Secret) -> Result<(), Error> {
+    let name = template.name_any();
+    let (kind, server_name) = template_identity(template)?;
     if let Some(existing) = secrets.get_opt(&name).await? {
         return validate_for(&existing, kind, server_name);
     }
@@ -128,6 +156,47 @@ pub(super) async fn ensure(secrets: &Api<Secret>, template: &Secret) -> Result<(
         }
         Err(error) => Err(error.into()),
     }
+}
+
+/// Native TLS files are bound to CLN's persistent wallet. Do not rotate them
+/// after deletion of the Secret while the component's storage is retained.
+pub(super) async fn ensure_bark(
+    secrets: &Api<Secret>,
+    claims: &Api<k8s_openapi::api::core::v1::PersistentVolumeClaim>,
+    template: &Secret,
+) -> Result<(), Error> {
+    let name = template.name_any();
+    let component = template
+        .metadata
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.get("proofstorm.dev/component"))
+        .ok_or_else(|| Error::SecretContract("Bark TLS component identity missing".into()))?;
+    let (kind, server_name) = template_identity(template)?;
+    if !matches!(kind, "bark-cln-tls" | "bark-hold-tls") {
+        return Err(Error::SecretContract(
+            "Bark TLS template kind mismatch".into(),
+        ));
+    }
+    if let Some(existing) = secrets.get_opt(&name).await? {
+        // Validate the observed identity directly. A second read through the
+        // creation path could regenerate it after concurrent Secret deletion.
+        return validate_for(&existing, kind, server_name);
+    }
+    if claims
+        .get_opt(&format!("data-{component}-0"))
+        .await?
+        .is_some()
+    {
+        if let Some(existing) = secrets.get_opt(&name).await? {
+            return validate_for(&existing, kind, server_name);
+        }
+        return Err(Error::SecretContract(
+            "Bark TLS identity is missing while owned storage exists; restore the original Secret"
+                .into(),
+        ));
+    }
+    ensure_identity(secrets, template).await
 }
 
 #[cfg(test)]

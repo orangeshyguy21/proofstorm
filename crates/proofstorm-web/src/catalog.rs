@@ -109,6 +109,7 @@ fn CatalogRow(entry: Value, expanded: RwSignal<BTreeSet<String>>) -> impl IntoVi
     let kind = match entry["kind"].as_str().unwrap_or_default() {
         "bitcoin" => "Bitcoin",
         "lightning" => "Lightning",
+        "ark_server" => "Ark server",
         "payment_processor" => "Payment processor",
         "mint" => "Mint",
         "wallet" => "Wallet",
