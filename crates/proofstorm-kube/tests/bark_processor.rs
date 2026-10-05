@@ -1,8 +1,8 @@
 //! Backend/rendering contracts only: no fabricated Bark catalog image or live qualification.
 use proofstorm_core::{
-    CellSpec, ComponentConditionType, ComponentKind, ComponentPlanContract, DependencyBinding,
-    EffectiveComponentConfig, LinkKind, WorkloadControllerKind, default_backend_registry,
-    default_catalog, processor_ids::BARK_PROCESSOR, resolve_lock,
+    CatalogPlatform, CellSpec, ComponentConditionType, ComponentKind, ComponentPlanContract,
+    DependencyBinding, EffectiveComponentConfig, LinkKind, WorkloadControllerKind,
+    catalog_for_platform, default_backend_registry, processor_ids::BARK_PROCESSOR, resolve_lock,
 };
 use proofstorm_kube::render_bark_processor_component;
 use serde_json::{Value, json};
@@ -76,13 +76,12 @@ fn contract_requires_owned_storage_and_keeps_runtime_settings_out_of_authored_co
             "{name}"
         );
     }
-    assert!(
-        default_catalog()
-            .entries
-            .iter()
-            .all(|e| e.id != BARK_PROCESSOR)
-    );
-    assert!(resolve_lock(&cell, default_catalog()).is_err());
+    let arm64 = catalog_for_platform(CatalogPlatform::LinuxArm64);
+    assert!(arm64.entries.iter().any(|e| e.id == BARK_PROCESSOR));
+    resolve_lock(&cell, &arm64).unwrap();
+    let amd64 = catalog_for_platform(CatalogPlatform::LinuxAmd64);
+    assert!(amd64.entries.iter().all(|e| e.id != BARK_PROCESSOR));
+    assert!(resolve_lock(&cell, &amd64).is_err());
 }
 
 fn assert_security(pod: &Value) {

@@ -161,10 +161,16 @@ pub(super) fn unpaid(context: &GateContext, client: &mut McpClient, namespace: &
         "peer",
         "bark-unpaid-decode",
         &format!(
-            "{PEER} decodepay {}",
+            "{PEER} decode {}",
             native::quote(expect::string(&quote, "/request")?)
         ),
     )?;
+    ensure!(
+        decoded["valid"] == true
+            && decoded["type"] == "bolt11 invoice"
+            && expect::integer(&decoded, "/amount_msat")? == 2_000_000,
+        "unpaid quote invoice is invalid or its amount differs"
+    );
     let hash = expect::string(&decoded, "/payment_hash")?;
     let before = unpaid_hold(client, hash, "before")?;
     drop(forward);

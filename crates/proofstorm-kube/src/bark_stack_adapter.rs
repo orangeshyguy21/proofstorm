@@ -297,7 +297,7 @@ fn server_env(
         "hold_invoice":{"uri":format!("https://{}:{}",cln.component_id,required_port(cln,"hold")?),
             "server_cert_path":"/hold-tls/ca.pem","client_cert_path":"/hold-tls/client.pem","client_key_path":"/hold-tls/client-key.pem"}}]);
     let mut env: Vec<Value> = [
-        ("DATA_DIR", "/data".into()),
+        ("DATA_DIR", "/data/native".into()),
         ("NETWORK", "regtest".into()),
         ("RPC__PUBLIC_ADDRESS", "0.0.0.0:3535".into()),
         ("RPC__ADMIN_ADDRESS", "127.0.0.1:3536".into()),

@@ -1,6 +1,6 @@
 //! Authenticated positive controls bracket each negative transport probe.
 //! Credential bytes stay in memory and never enter evidence or process arguments.
-use super::{Context, Duration, GateContext, Result, ensure, http, json, sleep};
+use super::{Context, Duration, GateContext, Result, Value, ensure, expect, http, json, sleep};
 use std::collections::BTreeMap;
 use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
 
@@ -63,61 +63,115 @@ fn verify_blocking(context: &GateContext, namespace: &str) -> Result<()> {
             required(&credentials, "client.pem")?,
             required(&credentials, "client.key")?,
         );
-        let forward = http::PortForward::open(
+        let before = process_state(context, namespace, service)?;
+        let mut forward = http::PortForward::open(
             &context.kubectl,
             namespace,
             &format!("service/{service}"),
             port,
         )?;
-        let plain = forward.url("");
-        let secure = plain.replacen("http://", "https://", 1);
         // Port-forward startup is asynchronous. Retry only the read-only,
         // authenticated control before submitting each negative probe once.
-        let mut established = false;
-        for _ in 0..30 {
-            if runtime
-                .block_on(probe(&secure, Some(ca.clone()), Some(valid.clone()), path))
-                .is_ok()
-            {
-                established = true;
-                break;
-            }
-            sleep(Duration::from_secs(1));
-        }
-        ensure!(established, "{role} authenticated positive control failed");
-        for (case, address, ca, identity) in [
-            ("plaintext", plain.as_str(), None, None),
-            ("missing-client", secure.as_str(), Some(ca.clone()), None),
-            (
-                "wrong-client",
-                secure.as_str(),
-                Some(ca.clone()),
-                Some(wrong.clone()),
-            ),
+        authenticated_control(&runtime, &mut forward, &ca, &valid, path)
+            .with_context(|| format!("{role} authenticated positive control failed"))?;
+        for (case, secure, identity) in [
+            ("plaintext", false, None),
+            ("missing-client", true, None),
+            ("wrong-client", true, Some(wrong.clone())),
         ] {
+            let address = if secure {
+                forward.url("").replacen("http://", "https://", 1)
+            } else {
+                forward.url("")
+            };
             ensure!(
                 runtime
-                    .block_on(probe(address, ca, identity, path))
+                    .block_on(probe(&address, secure.then(|| ca.clone()), identity, path))
                     .is_err(),
                 "{role} accepted {case}"
             );
             // An unavailable server or incorrect RPC is never sufficient to
             // pass refusal: the identical authenticated RPC must still work.
-            runtime
-                .block_on(probe(
-                    &secure,
-                    Some(Certificate::from_pem(required(&credentials, "ca.pem")?)),
-                    Some(valid.clone()),
-                    path,
-                ))
-                .with_context(|| format!("{role} positive control failed after {case}"))?;
+            // kubectl can terminate its whole forward on the remote reset
+            // caused by a rejected TLS handshake. Use a new tunnel, while
+            // independently proving that the server process did not restart.
+            forward = http::PortForward::open(
+                &context.kubectl,
+                namespace,
+                &format!("service/{service}"),
+                port,
+            )?;
+            let attempts = authenticated_control(
+                &runtime,
+                &mut forward,
+                &Certificate::from_pem(required(&credentials, "ca.pem")?),
+                &valid,
+                path,
+            )
+            .with_context(|| format!("{role} positive control failed after {case}"))?;
+            ensure!(
+                process_state(context, namespace, service)? == before,
+                "{role} restarted during transport refusal checks"
+            );
             context.record(
                 &format!("bark-tls-{role}-{case}.json"),
-                &json!({"role":role,"case":case,"refused":true,"authenticated_control_after":true}),
+                &json!({"role":role,"case":case,"refused":true,"authenticated_control_after":true,"fresh_control_forward":true,"control_attempts":attempts,"unchanged_process":before}),
             )?;
         }
     }
     Ok(())
+}
+
+fn authenticated_control(
+    runtime: &tokio::runtime::Runtime,
+    forward: &mut http::PortForward,
+    ca: &Certificate,
+    identity: &Identity,
+    path: &'static str,
+) -> Result<u32> {
+    let address = forward.url("").replacen("http://", "https://", 1);
+    let mut last = String::new();
+    for attempt in 1..=30 {
+        ensure!(forward.running(), "transport port-forward stopped");
+        match runtime.block_on(probe(
+            &address,
+            Some(ca.clone()),
+            Some(identity.clone()),
+            path,
+        )) {
+            Ok(()) => return Ok(attempt),
+            Err(error) => last = format!("{error:#}"),
+        }
+        sleep(Duration::from_secs(1));
+    }
+    anyhow::bail!("authenticated transport control did not recover: {last}")
+}
+
+fn process_state(context: &GateContext, namespace: &str, component: &str) -> Result<Value> {
+    let pods = context.kubectl.get_json(&[
+        "get",
+        "pods",
+        "-n",
+        namespace,
+        "-l",
+        &format!("{}={component}", proofstorm_kube::COMPONENT_LABEL),
+    ])?;
+    let pods = expect::array(&pods, "/items")?;
+    ensure!(
+        pods.len() == 1 && pods[0]["metadata"]["deletionTimestamp"].is_null(),
+        "transport service has no stable pod"
+    );
+    let restarts = expect::array(&pods[0], "/status/containerStatuses")?
+        .iter()
+        .map(|status| {
+            Ok((
+                expect::string(status, "/name")?,
+                expect::integer(status, "/restartCount")?,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    ensure!(!restarts.is_empty(), "transport container state is missing");
+    Ok(json!({"pod_uid":expect::string(&pods[0],"/metadata/uid")?,"restarts":restarts}))
 }
 
 #[cfg(test)]

@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reserved_bark_profile_does_not_enable_unqualified_catalog_support() {
+    fn bark_profile_resolves_only_the_native_arm64_preview() {
         let bark = mint_cell(ProcessorProfile::Bark);
         assert!(validate_cell(&bark).valid);
         for platform in [
@@ -308,7 +308,10 @@ mod tests {
             crate::CatalogPlatform::LinuxAmd64,
         ] {
             let catalog = crate::catalog_for_platform(platform);
-            assert!(crate::resolve_lock(&bark, &catalog).is_err());
+            assert_eq!(
+                crate::resolve_lock(&bark, &catalog).is_ok(),
+                platform == crate::CatalogPlatform::LinuxArm64,
+            );
         }
     }
 }

@@ -357,7 +357,7 @@
                   "env": [
                     {
                       "name": "BARK_SERVER__DATA_DIR",
-                      "value": "/data"
+                      "value": "/data/native"
                     },
                     {
                       "name": "BARK_SERVER__NETWORK",
@@ -594,7 +594,7 @@
                   "env": [
                     {
                       "name": "BARK_SERVER__DATA_DIR",
-                      "value": "/data"
+                      "value": "/data/native"
                     },
                     {
                       "name": "BARK_SERVER__NETWORK",

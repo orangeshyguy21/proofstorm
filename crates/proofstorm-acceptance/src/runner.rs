@@ -28,6 +28,7 @@ pub struct Selection {
     pub benchmark_claude_auth: String,
     pub qualification: Option<(PathBuf, String)>,
     pub qualification_image_cache: Option<String>,
+    pub bootstrap_tool_cache: Option<PathBuf>,
     pub checkout_home: Option<PathBuf>,
     pub bundle: Option<PathBuf>,
     pub allow_development: bool,
@@ -489,6 +490,7 @@ fn seed_qualification_images(
     work: &Path,
     cache: &str,
     case: Option<&proofstorm_qualification::Case>,
+    names: &[String],
     cancelled: &AtomicBool,
 ) -> Result<()> {
     proofstorm_qualification::validate_cache_endpoint(cache)?;
@@ -502,6 +504,8 @@ fn seed_qualification_images(
                 .iter()
                 .map(|component| component.image.clone()),
         );
+    } else if names == ["bark-processor"] {
+        images.extend(gates::bark::images(proofstorm_core::default_catalog())?);
     } else {
         // The native preflight runs only the default Bitcoin smoke scenario.
         images.insert(
@@ -569,14 +573,18 @@ pub fn run(
     validate_gates(names)?;
     let started = Instant::now();
     ensure!(
+        selection.bootstrap_tool_cache.is_none() || !names.iter().any(|name| name == "onboarding"),
+        "onboarding must exercise tool installation without a bootstrap cache"
+    );
+    ensure!(
         selection.qualification.is_some() == (names == ["qualification"]),
         "qualification requires one exact planned case"
     );
     if let Some(cache) = &selection.qualification_image_cache {
         proofstorm_qualification::validate_cache_endpoint(cache)?;
         ensure!(
-            selection.qualification.is_some() || names == ["smoke"],
-            "prepared image cache requires qualification or the native smoke preflight"
+            selection.qualification.is_some() || names == ["smoke"] || names == ["bark-processor"],
+            "prepared image cache requires qualification, the native smoke preflight or Bark"
         );
     }
     let qualification = if let Some((path, id)) = &selection.qualification {
@@ -686,6 +694,9 @@ pub fn run(
                 return Ok(());
             }
         }
+        if let Some(cache) = &selection.bootstrap_tool_cache {
+            crate::tool_cache::seed(cache, &work)?;
+        }
         start_runtime(
             &artifacts,
             &work,
@@ -700,6 +711,7 @@ pub fn run(
                 &work,
                 cache,
                 qualification.as_ref().map(|(_, case)| case),
+                names,
                 cancelled,
             )?;
             report["image_cache"] = json!("seeded");
@@ -760,6 +772,9 @@ pub fn run(
             let peer = work.join("peer");
             fs::DirBuilder::new().mode(0o700).create(&peer)?;
             let mut peer_report = json!({"format_version":1,"work":peer,"setup":"not_run","gates":[],"cleanup":"not_run"});
+            if let Some(cache) = &selection.bootstrap_tool_cache {
+                crate::tool_cache::seed(cache, &peer)?;
+            }
             peer_report["parent_installation_id"] = report["installation_id"].clone();
             save(&peer, &peer_report)?;
             let result = start_runtime(
@@ -964,6 +979,7 @@ mod tests {
             benchmark_claude_auth: "login".into(),
             qualification: None,
             qualification_image_cache: None,
+            bootstrap_tool_cache: None,
             checkout_home: None,
             bundle: None,
             allow_development: false,
@@ -978,6 +994,23 @@ mod tests {
                 &AtomicBool::new(false)
             )
             .is_err()
+        );
+        assert!(!work.exists());
+        let mut cached = selection;
+        cached.bootstrap_tool_cache = Some(root.path().join("cache"));
+        let error = run(
+            &cached,
+            root.path(),
+            Some(&work),
+            &["onboarding".into()],
+            1,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("onboarding must exercise tool installation")
         );
         assert!(!work.exists());
         assert!(validate_gates(&["typo".into()]).is_err());

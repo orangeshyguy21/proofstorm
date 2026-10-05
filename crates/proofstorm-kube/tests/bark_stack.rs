@@ -1,4 +1,4 @@
-//! Reserved stack plans are characterized before any catalog/image publication.
+//! Bark renderer contracts and ordinary catalog-to-cell preview rendering.
 use proofstorm_core::{
     ComponentPlanContract, DatabaseRole, DependencyBinding, EffectiveComponentConfig,
 };
@@ -6,6 +6,62 @@ use proofstorm_kube::{RenderedComponent, render_bark_server_component, render_cl
 use serde_json::{Value, json};
 #[path = "support/bark.rs"]
 mod bark;
+
+#[test]
+fn arm64_catalog_renders_the_complete_bark_stack_with_exact_images() {
+    use proofstorm_core::{CatalogPlatform, CellSpec, catalog_for_platform, resolve_lock};
+
+    let spec: CellSpec = serde_json::from_str(include_str!(
+        "../../proofstorm-core/tests/fixtures/bark-topology.json"
+    ))
+    .unwrap();
+    let catalog = catalog_for_platform(CatalogPlatform::LinuxArm64);
+    let lock = resolve_lock(&spec, &catalog).unwrap();
+    let rendered =
+        proofstorm_kube::render_cell("bark-preview", "sha256:test", &spec, &lock).unwrap();
+    for (id, backend) in [
+        ("ark", "bark-server"),
+        ("cln", "cln-hold"),
+        ("processor", "cdk-bark-processor"),
+    ] {
+        let entry = catalog
+            .entries
+            .iter()
+            .find(|entry| entry.id == backend)
+            .unwrap();
+        let workload = rendered
+            .stateful_sets
+            .iter()
+            .find(|workload| workload.metadata.name.as_deref() == Some(id))
+            .unwrap();
+        let pod = workload
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .spec
+            .as_ref()
+            .unwrap();
+        assert_eq!(pod.containers[0].image.as_ref(), Some(&entry.image));
+        assert_eq!(
+            workload
+                .spec
+                .as_ref()
+                .unwrap()
+                .volume_claim_templates
+                .as_ref()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            !rendered
+                .deployments
+                .iter()
+                .any(|workload| workload.metadata.name.as_deref() == Some(id))
+        );
+    }
+}
 
 fn pod(rendered: &RenderedComponent) -> Value {
     serde_json::to_value(&rendered.stateful_sets[0]).unwrap()["spec"]["template"]["spec"].clone()
@@ -32,6 +88,7 @@ fn bark_server_scopes_credentials_and_never_exposes_privileged_rpc() {
         json!([{"name":"rpc","port":3535,"targetPort":3535}])
     );
     let pod = pod(&rendered);
+    assert_eq!(env(&pod, "BARK_SERVER__DATA_DIR")["value"], "/data/native");
     assert_eq!(
         env(&pod, "BARK_SERVER__RPC__ADMIN_ADDRESS")["value"],
         "127.0.0.1:3536"

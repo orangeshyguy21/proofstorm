@@ -1641,9 +1641,12 @@ fn assert_backend_goldens(platform: CatalogPlatform) {
             backend_id,
             "cdk-bark-processor" | "bark-server" | "cln-hold"
         ) {
-            // Characterize the reserved renderer without inventing a qualified
-            // image or weakening the catalog-backed snapshots below.
-            assert!(catalog.entries.iter().all(|entry| entry.id != backend_id));
+            // Keep platform-independent renderer contracts stable. Real ARM64
+            // catalog admission is covered separately; AMD64 remains absent.
+            assert_eq!(
+                catalog.entries.iter().any(|entry| entry.id == backend_id),
+                platform == CatalogPlatform::LinuxArm64,
+            );
             let plan = if backend_id == "cdk-bark-processor" {
                 bark::plan()
             } else {

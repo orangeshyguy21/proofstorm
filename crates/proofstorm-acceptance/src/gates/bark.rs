@@ -1,5 +1,5 @@
-//! Managed Bark qualification. Remains unavailable until the three reviewed
-//! image receipts are admitted to the catalog; never substitutes prototype tags.
+//! Managed Bark qualification using the exact catalog images. The current
+//! ARM64 preview requires verified images seeded into the owned local registry.
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{thread::sleep, time::Duration};
@@ -27,6 +27,15 @@ fn document() -> Result<Value> {
         "../../../proofstorm-core/tests/fixtures/bark-topology.json"
     ))?;
     document["name"] = json!("bark-managed-qualification");
+    // Isolate the processor's payment fees. Native wallet receipts include
+    // Cashu input fees, which are outside the backend's melt fee reserve.
+    let mint = document["components"]
+        .as_array_mut()
+        .context("components")?
+        .iter_mut()
+        .find(|component| component["id"] == "mint")
+        .context("mint component")?;
+    mint["config"]["input_fee_ppk"] = json!(0);
     document["components"].as_array_mut().context("components")?.extend([
         json!({"id":"peer","kind":"lightning","implementation":"cln","version":"26.06.7","config_version":"cln/26.06/v1","control":"cell","config":{}}),
         json!({"id":"wallet","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.1","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}),
@@ -39,11 +48,18 @@ fn document() -> Result<Value> {
     Ok(document)
 }
 
+pub(crate) fn images(catalog: &proofstorm_core::CatalogResponse) -> Result<Vec<String>> {
+    let spec = serde_json::from_value(document()?)?;
+    let lock = proofstorm_core::resolve_lock(&spec, catalog).map_err(anyhow::Error::msg)?;
+    Ok(lock.entries.into_iter().map(|entry| entry.image).collect())
+}
+
 pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.default_session("bark-managed", "designer")?;
     let document = context.document(document()?)?;
-    // Planning is deliberately ordinary catalog resolution. Missing publication
-    // receipts must fail here, before any cell is materialized.
+    // Planning is deliberately ordinary catalog resolution. Missing image
+    // entries must fail here, before any cell is materialized. Local preview
+    // images are independently verified when seeding the owned registry.
     let preview = client.call(
         "cell_plan",
         json!({"name":INSTANCE,"cell":document,"request_id":"bark-plan"}),

@@ -55,7 +55,8 @@ pub use catalog::{
     CatalogOrigin, CatalogPaymentBindingSupport, CatalogPlatform, CatalogResponse,
     CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport, ReleaseChannel,
     StorageBackend, SupportLifecycle, catalog_for_platform, catalog_image_source, default_catalog,
-    validate_catalog_component, validate_component_config, validate_new_cell_versions,
+    distributed_catalog, distributed_catalog_for_platform, validate_catalog_component,
+    validate_component_config, validate_new_cell_versions,
 };
 pub use coverage::{
     CONFIGURATION_COVERAGE_API_VERSION, ConfigurationCoverageEntry, ConfigurationCoverageManifest,

@@ -50,6 +50,7 @@ mod preservation;
 pub mod process;
 pub mod qualification;
 pub mod runner;
+mod tool_cache;
 
 pub use client::{McpClient, PROTOCOL_VERSION};
 pub use gate::GateContext;

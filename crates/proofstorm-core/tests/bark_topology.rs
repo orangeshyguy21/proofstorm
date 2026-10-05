@@ -1,5 +1,4 @@
-//! Reserved managed Bark topology: no catalog support or live qualification is
-//! implied by these domain-model fixtures.
+//! Managed Bark topology and explicit native ARM64 preview admission.
 use proofstorm_core::{
     BitcoinNetwork, CatalogPlatform, CellSpec, ComponentKind, DatabaseRole, DependencyBinding,
     LinkKind, PaymentMethod, catalog_for_platform, resolve_lock, validate_cell,
@@ -19,12 +18,42 @@ fn refuses(cell: &CellSpec, code: &str) {
 }
 
 #[test]
-fn complete_graph_validates_without_enabling_unqualified_images() {
+fn complete_graph_resolves_only_for_the_built_preview_platform() {
     let cell = fixture();
     let report = validate_cell(&cell);
     assert!(report.valid, "{report:?}");
-    for platform in [CatalogPlatform::LinuxArm64, CatalogPlatform::LinuxAmd64] {
-        assert!(resolve_lock(&cell, &catalog_for_platform(platform)).is_err());
+    let arm = catalog_for_platform(CatalogPlatform::LinuxArm64);
+    assert!(resolve_lock(&cell, &arm).is_ok());
+    assert!(resolve_lock(&cell, &catalog_for_platform(CatalogPlatform::LinuxAmd64)).is_err());
+    for id in ["bark-server", "cln-hold", "cdk-bark-processor"] {
+        let entry = arm.entries.iter().find(|entry| entry.id == id).unwrap();
+        assert_eq!(
+            entry.support_lifecycle,
+            proofstorm_core::SupportLifecycle::Experimental
+        );
+        assert_eq!(
+            entry.build_provenance.as_ref().unwrap().platform,
+            "linux/arm64"
+        );
+        assert!(entry.image.contains("@sha256:"));
+        assert!(
+            entry
+                .support_matrix
+                .payment_methods
+                .contains(&PaymentMethod::Bolt11)
+        );
+        assert!(
+            !entry
+                .support_matrix
+                .payment_methods
+                .contains(&PaymentMethod::Bolt12)
+        );
+        assert!(
+            !entry
+                .support_matrix
+                .payment_methods
+                .contains(&PaymentMethod::Onchain)
+        );
     }
     let encoded = serde_json::to_string(&cell).unwrap();
     assert_eq!(serde_json::from_str::<CellSpec>(&encoded).unwrap(), cell);

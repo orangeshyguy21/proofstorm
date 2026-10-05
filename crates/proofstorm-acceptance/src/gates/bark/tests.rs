@@ -4,14 +4,38 @@ use proofstorm_core::{
 };
 
 #[test]
-fn managed_fixture_is_valid_but_cannot_resolve_unpublished_images() {
+fn managed_fixture_resolves_the_arm64_preview_but_refuses_unbuilt_amd64() {
     let spec: CellSpec = serde_json::from_value(document().unwrap()).unwrap();
     let validation = validate_cell(&spec);
     assert!(validation.valid, "{validation:?}");
     assert_eq!(spec.components.len(), 8);
-    for platform in [CatalogPlatform::LinuxArm64, CatalogPlatform::LinuxAmd64] {
-        assert!(resolve_lock(&spec, &catalog_for_platform(platform)).is_err());
-    }
+    assert_eq!(
+        spec.components
+            .iter()
+            .find(|component| component.id == "mint")
+            .unwrap()
+            .config["input_fee_ppk"],
+        json!(0)
+    );
+    assert!(resolve_lock(&spec, &catalog_for_platform(CatalogPlatform::LinuxArm64)).is_ok());
+    assert!(resolve_lock(&spec, &catalog_for_platform(CatalogPlatform::LinuxAmd64)).is_err());
+}
+
+#[test]
+fn prepared_images_match_the_fixture_lock_and_refuse_missing_catalog_entries() {
+    let mut catalog = catalog_for_platform(CatalogPlatform::LinuxArm64);
+    let spec: CellSpec = serde_json::from_value(document().unwrap()).unwrap();
+    let expected: Vec<_> = resolve_lock(&spec, &catalog)
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|entry| entry.image)
+        .collect();
+    assert_eq!(images(&catalog).unwrap(), expected);
+    assert_eq!(expected.len(), 8);
+    catalog.entries.retain(|entry| entry.id != "cln-hold");
+    assert!(images(&catalog).is_err());
+    assert!(images(&catalog_for_platform(CatalogPlatform::LinuxAmd64)).is_err());
 }
 
 #[test]

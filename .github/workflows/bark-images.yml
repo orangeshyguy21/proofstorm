@@ -1,0 +1,66 @@
+name: Bark native candidate images
+
+on:
+  workflow_call:
+    inputs:
+      architecture:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: Native builder architecture (no emulation)
+        type: choice
+        required: true
+        default: amd64
+        options: [amd64, arm64]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bark-images-${{ github.ref }}-${{ inputs.architecture }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.selection }} (${{ inputs.architecture }})
+    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        selection:
+          - cdk-bark-processor@0.1.0-fe468ca
+          - bark-server@0.7.0-6188e2d
+          - cln-hold@26.06.7-hold.0.3.3
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      PLATFORM: linux/${{ inputs.architecture }}
+      SELECTION: ${{ matrix.selection }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the exact recipe on its native platform
+        run: bash scripts/bark-image-build.sh "$SELECTION" "$PLATFORM" "$RUNNER_TEMP/bark-image"
+      - name: Retain image, frozen source and native build evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bark-image-${{ matrix.selection }}-${{ inputs.architecture }}-${{ github.sha }}-${{ github.run_attempt }}
+          # Exact allowlist; no Docker config, credentials, build cache or runtime state.
+          # SHA256SUMS exists only when the complete image handoff succeeded.
+          path: |
+            ${{ runner.temp }}/bark-image/artifacts/build.log
+            ${{ runner.temp }}/bark-image/artifacts/native.json
+            ${{ runner.temp }}/bark-image/artifacts/image.json
+            ${{ runner.temp }}/bark-image/artifacts/inspect.json
+            ${{ runner.temp }}/bark-image/artifacts/probe.stdout
+            ${{ runner.temp }}/bark-image/artifacts/image.tar
+            ${{ runner.temp }}/bark-image/artifacts/work.tar.gz
+            ${{ runner.temp }}/bark-image/artifacts/SHA256SUMS
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14

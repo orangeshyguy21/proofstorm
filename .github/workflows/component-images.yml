@@ -2,6 +2,19 @@ name: Candidate component packaging
 
 on:
   workflow_dispatch:
+    inputs:
+      family:
+        description: Standard compatibility builds or the Bark candidate handoff
+        type: choice
+        required: true
+        default: standard
+        options: [standard, bark]
+      architecture:
+        description: Architecture for the Bark handoff (standard keeps its full matrix)
+        type: choice
+        required: true
+        default: amd64
+        options: [amd64, arm64]
   pull_request:
     branches: [main]
     # Candidate packaging evidence is separate from shipped-image qualification.
@@ -22,8 +35,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-bark-images:
+    name: Bark candidate handoff
+    if: github.event_name == 'workflow_dispatch' && inputs.family == 'bark'
+    uses: ./.github/workflows/bark-images.yml
+    with:
+      architecture: ${{ inputs.architecture }}
+
   native-payment-components:
     name: Payment component (${{ matrix.selection }}, ${{ matrix.arch }})
+    if: github.event_name != 'workflow_dispatch' || inputs.family == 'standard'
     strategy:
       fail-fast: false
       matrix:
@@ -79,6 +100,7 @@ jobs:
 
   native-components:
     name: Candidate builds and compatibility (${{ matrix.arch }})
+    if: github.event_name != 'workflow_dispatch' || inputs.family == 'standard'
     strategy:
       fail-fast: false
       matrix:

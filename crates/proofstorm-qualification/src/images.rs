@@ -103,6 +103,53 @@ mod tests {
     }
 
     #[test]
+    fn every_mode_qualifies_distribution_without_claiming_local_bark_support() {
+        for mode in [
+            Mode::Pull,
+            Mode::Documentation,
+            Mode::Compatibility,
+            Mode::Full,
+        ] {
+            let plan = plan(
+                Identity {
+                    revision: "a".repeat(40),
+                    run_id: "1".into(),
+                    attempt: 1,
+                },
+                mode,
+            )
+            .unwrap();
+            let inputs = image_inputs(&plan).unwrap();
+            for platform in ["linux/arm64", "linux/amd64"] {
+                let claims = &plan.obligations[platform];
+                for preview in ["cdk-bark-processor", "bark-server", "cln-hold"] {
+                    assert!(claims.iter().all(|claim| !claim.contains(preview)));
+                    assert!(
+                        plan.cases
+                            .iter()
+                            .flat_map(|case| &case.components)
+                            .all(|component| component.implementation != preview)
+                    );
+                    assert!(inputs.images.keys().all(|image| !image.contains(preview)));
+                }
+                // Published experimental components retain their qualification coverage.
+                assert!(
+                    claims
+                        .iter()
+                        .any(|claim| claim.starts_with("cdk-ldk-server-processor@"))
+                );
+                if matches!(mode, Mode::Compatibility | Mode::Full) {
+                    assert!(plan.cases.iter().any(|case| case.platform == platform
+                        && case.required
+                        && case.components.iter().any(
+                            |component| component.implementation == "cdk-ldk-server-processor"
+                        )));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn cache_addresses_cannot_redirect_reads_or_writes_off_host() {
         for endpoint in [
             "127.0.0.1:0",

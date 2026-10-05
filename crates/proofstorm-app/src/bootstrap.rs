@@ -82,7 +82,11 @@ fn controller_metadata(home: &Path, image: &str) -> Result<Value> {
 }
 
 fn images() -> BTreeSet<String> {
-    let mut images: BTreeSet<_> = proofstorm_core::default_catalog()
+    catalog_images(proofstorm_core::distributed_catalog())
+}
+
+fn catalog_images(catalog: &proofstorm_core::CatalogResponse) -> BTreeSet<String> {
+    let mut images: BTreeSet<_> = catalog
         .entries
         .iter()
         .map(|entry| entry.image.clone())
@@ -97,6 +101,19 @@ fn images() -> BTreeSet<String> {
 
 fn source(image: &str) -> Result<String> {
     proofstorm_core::catalog_image_source(image).map_err(anyhow::Error::msg)
+}
+
+fn download_source(
+    image: &str,
+    runtime: &proofstorm_core::CatalogResponse,
+    distributed: &proofstorm_core::CatalogResponse,
+) -> Result<String> {
+    ensure!(
+        !runtime.entries.iter().any(|entry| entry.image == image)
+            || distributed.entries.iter().any(|entry| entry.image == image),
+        "local preview image {image} is missing from this installation's registry; seed its exact pinned manifest before creating the cell"
+    );
+    source(image)
 }
 
 fn tool(home: &Path, name: &str) -> Result<PathBuf> {
@@ -281,7 +298,7 @@ pub fn doctor(home: &Path) -> Value {
         })(),
     );
     json!({"ok":checks.iter().all(|c| c["ok"] == true),"checks":checks,
-        "mcp_server":"not checked","harness":"not checked","image_pulls":"not checked by read-only doctor; cell creation verifies selected pulls (setup --prefetch-all verifies the full catalog)"})
+        "mcp_server":"not checked","harness":"not checked","image_pulls":"not checked by read-only doctor; cell creation verifies selected pulls (setup --prefetch-all verifies the distributable catalog)"})
 }
 
 /// Setup is explicit, serialized per home, and reconciles each stage on retry.
@@ -488,7 +505,17 @@ fn selected_images(
     installation: &Installation,
     lock: &proofstorm_core::ResolvedLock,
 ) -> Result<BTreeSet<String>> {
-    let shipped = images();
+    selected_catalog_images(installation, lock, proofstorm_core::default_catalog())
+}
+
+fn selected_catalog_images(
+    installation: &Installation,
+    lock: &proofstorm_core::ResolvedLock,
+    catalog: &proofstorm_core::CatalogResponse,
+) -> Result<BTreeSet<String>> {
+    // Runtime admission also includes local previews. Their manifests must already
+    // be seeded in this installation; mirroring never invents a public source.
+    let shipped = catalog_images(catalog);
     let candidate_prefixes = [
         "proofstorm-registry.localhost:5000/candidates/".to_owned(),
         format!("{}:5000/candidates/", installation.registry_name()),
@@ -585,7 +612,11 @@ fn mirror_with_progress(
                         "--prefer-index=false",
                         "--tag",
                         &tag,
-                        &source(&image)?,
+                        &download_source(
+                            &image,
+                            proofstorm_core::default_catalog(),
+                            proofstorm_core::distributed_catalog(),
+                        )?,
                     ],
                     900,
                 )?;

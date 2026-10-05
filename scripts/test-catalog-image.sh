@@ -48,6 +48,7 @@ case "$1 $2" in
     [[ " $* " == *" --platform linux/$IMAGE_TEST_ARCH "* && " $* " == *' --load '* ]] || exit 97
     for arg in "$@"; do case "$arg" in dev.proofstorm.source-sha256=*) printf '%s' "${arg#*=}" > "$IMAGE_TEST_SOURCE" ;; esac; done ;;
   'image inspect')
+    [[ ${IMAGE_TEST_LOCAL_REF:-0} != 1 || "$3" == "$IMAGE_TEST_CONFIG" ]] || exit 97
     id=$IMAGE_TEST_CONFIG user=1000:1000
     [[ ${IMAGE_TEST_FAIL:-} != changed ]] || id=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
     [[ ${IMAGE_TEST_FAIL:-} != root ]] || user=0
@@ -109,6 +110,18 @@ for arch in amd64 arm64; do
   run build "$recipe" "linux/$arch" "$scratch/$arch"
   grep -q '"version": "0.18.0"' "$scratch/$arch/image.json"
   if grep -q 'docker push\|imagetools create' "$IMAGE_TEST_TRACE"; then exit 1; fi
+  : > "$IMAGE_TEST_TRACE"
+  export IMAGE_TEST_LOCAL_REF=1
+  run verify-local "$scratch/$arch"
+  unset IMAGE_TEST_LOCAL_REF
+  grep -q '"publication": "prepared"' "$scratch/$arch/image.json"
+  if grep -q 'docker push\|imagetools\|buildx build' "$IMAGE_TEST_TRACE"; then exit 1; fi
+  for failure in root probe changed; do
+    export IMAGE_TEST_FAIL=$failure
+    if run verify-local "$scratch/$arch"; then exit 1; fi
+    unset IMAGE_TEST_FAIL
+  done
+  run verify-local "$scratch/$arch"
   run publish "$scratch/$arch" --confirm-namespace "$namespace"
   grep -q '"publication": "verified"' "$scratch/$arch/image.json"
   grep -q '"release_ready": false' "$scratch/$arch/image.json"
@@ -145,6 +158,9 @@ for failure in root probe changed layer redirect push; do
   unset IMAGE_TEST_FAIL
 done
 run prepare-copy "127.0.0.1:54321/cdk-cli-wallet@$IMAGE_TEST_MANIFEST" linux/amd64 "$scratch/copy"
+: > "$IMAGE_TEST_TRACE"
+if run verify-local "$scratch/copy"; then exit 1; fi
+[[ ! -s "$IMAGE_TEST_TRACE" ]]
 run publish "$scratch/copy" --confirm-namespace "$namespace"
 grep -q '"publication": "verified"' "$scratch/copy/image.json"
 run verify "$namespace/cdk-cli-wallet@$IMAGE_TEST_MANIFEST" linux/amd64 "$scratch/verify.json"
@@ -159,4 +175,8 @@ for rename in cdk-ldk-mint-management:cdk-mint nutshell-mint-management:nutshell
   grep -q "\"image\": \"$namespace/$current@$IMAGE_TEST_MANIFEST\"" "$scratch/$current/image.json"
   grep -q '"publication": "verified"' "$scratch/$current/image.json"
 done
+printf 'changed\n' >> "$scratch/amd64/source/docker/wallet/Dockerfile.kube-cdk"
+: > "$IMAGE_TEST_TRACE"
+if run verify-local "$scratch/amd64"; then exit 1; fi
+[[ ! -s "$IMAGE_TEST_TRACE" ]]
 echo 'Catalog image builds, copies, publication guards and partial receipts passed'

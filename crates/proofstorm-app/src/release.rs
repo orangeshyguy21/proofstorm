@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 /// Panics only if the checked-in controller or bootstrap-tool JSON is malformed.
 pub fn describe() -> Value {
     let catalog = proofstorm_core::default_catalog();
-    let mut images: BTreeSet<&str> = catalog
+    let mut images: BTreeSet<&str> = proofstorm_core::distributed_catalog()
         .entries
         .iter()
         .map(|entry| entry.image.as_str())
@@ -120,9 +120,26 @@ mod tests {
     }
 
     #[test]
-    fn inventory_covers_catalog_and_helpers_without_mutable_tags() {
+    fn inventory_covers_distributable_catalog_and_helpers_without_mutable_tags() {
         let metadata = describe();
         let images = metadata["workload_images"].as_array().unwrap();
+        assert_eq!(
+            metadata["catalog"],
+            serde_json::to_value(proofstorm_core::default_catalog()).unwrap()
+        );
+        let mut expected: BTreeSet<_> = proofstorm_core::distributed_catalog()
+            .entries
+            .iter()
+            .map(|entry| entry.image.as_str())
+            .collect();
+        expected.extend(proofstorm_kube::images::HELPER_IMAGES);
+        assert_eq!(
+            images
+                .iter()
+                .map(|image| image.as_str().unwrap())
+                .collect::<BTreeSet<_>>(),
+            expected
+        );
         for image in images {
             let (_, digest) = image.as_str().unwrap().split_once("@sha256:").unwrap();
             assert_eq!(digest.len(), 64);

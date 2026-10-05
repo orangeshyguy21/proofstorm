@@ -1,4 +1,6 @@
-use super::{ARK, CLN, GateContext, INSTANCE, McpClient, PEER, RUN, Result, expect, native};
+use super::{
+    ARK, CLN, Context, GateContext, INSTANCE, McpClient, PEER, RUN, Result, expect, native,
+};
 
 pub(super) fn run(context: &GateContext, client: &mut McpClient) -> Result<()> {
     let mut session = native::Session::new(client, INSTANCE, RUN);
@@ -57,6 +59,31 @@ pub(super) fn run(context: &GateContext, client: &mut McpClient) -> Result<()> {
             },
         )?;
         context.record(&format!("bark-{id}-channels.json"), &channels)?;
+    }
+    // A normal channel can still lag freshly mined regtest blocks. Bark checks
+    // absolute HTLC expiries, so a payer with an old tip can invalidate even a
+    // newly created invoice. Establish agreement before requesting invoices.
+    let height = session
+        .json(
+            "chain",
+            "bark-funded-chain-tip",
+            &format!("{} getblockcount", native::BITCOIN_ROOT),
+        )?
+        .as_u64()
+        .context("Bitcoin chain height is missing")?;
+    for (id, cli) in [("cln", CLN), ("peer", PEER)] {
+        let synced = session.poll(
+            id,
+            &format!("bark-{id}-synced"),
+            &format!("{cli} getinfo"),
+            |v| {
+                Ok((v["blockheight"].as_u64() == Some(height)
+                    && v["warning_bitcoind_sync"].is_null()
+                    && v["warning_lightningd_sync"].is_null())
+                .then(|| v.clone()))
+            },
+        )?;
+        context.record(&format!("bark-{id}-synced.json"), &synced)?;
     }
     let funded = session.poll("ark", "bark-server-funded", &format!("{ARK} wallet"), |v| {
         Ok((expect::integer(v, "/rounds/trusted_balance")? > 1_000_000).then(|| v.clone()))

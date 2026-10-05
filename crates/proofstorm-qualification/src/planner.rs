@@ -3,18 +3,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result, bail, ensure};
 use proofstorm_core::{
     AuthenticationMode, CatalogEntry, CatalogPlatform, CatalogResponse, ComponentKind,
-    StorageBackend, SupportLifecycle, catalog_for_platform, catalog_image_source, digest_json,
+    StorageBackend, SupportLifecycle, catalog_image_source, digest_json,
+    distributed_catalog_for_platform,
 };
 use serde::Serialize;
 
 use crate::{Case, Component, Identity, MintRoundtrip, Mode, Plan, Scenario};
 
-/// Catalog for an explicitly native qualification target, independent of host.
+/// Distributable catalog for a native qualification target, independent of host.
+/// Local previews run their dedicated gates before joining ordinary qualification.
 ///
 /// # Errors
 /// Rejects any platform outside the two supported native Linux architectures.
 pub fn catalog(platform: &str) -> Result<CatalogResponse> {
-    Ok(catalog_for_platform(match platform {
+    Ok(distributed_catalog_for_platform(match platform {
         "linux/amd64" => CatalogPlatform::LinuxAmd64,
         "linux/arm64" => CatalogPlatform::LinuxArm64,
         _ => bail!("unsupported qualification platform {platform}"),

@@ -78,6 +78,56 @@ fn on_demand_selects_only_locked_components_and_probe() {
 }
 
 #[test]
+fn local_previews_are_selected_on_demand_but_never_downloaded_or_prefetched() {
+    use proofstorm_core::{
+        CatalogPlatform, catalog_for_platform, distributed_catalog_for_platform,
+    };
+
+    let home = tempfile::tempdir().unwrap();
+    let installation = fixture_installation(home.path());
+    let cell = serde_json::from_str(include_str!(
+        "../../../proofstorm-core/tests/fixtures/bark-topology.json"
+    ))
+    .unwrap();
+    for platform in [CatalogPlatform::LinuxArm64, CatalogPlatform::LinuxAmd64] {
+        let runtime = catalog_for_platform(platform);
+        let distributed = distributed_catalog_for_platform(platform);
+        let admitted = catalog_images(&runtime);
+        let prefetch = catalog_images(&distributed);
+        let previews: BTreeSet<_> = admitted.difference(&prefetch).cloned().collect();
+        assert_eq!(
+            previews.len(),
+            if platform == CatalogPlatform::LinuxArm64 {
+                3
+            } else {
+                0
+            }
+        );
+        for image in &prefetch {
+            assert_eq!(
+                download_source(image, &runtime, &distributed).unwrap(),
+                source(image).unwrap()
+            );
+        }
+        if platform == CatalogPlatform::LinuxArm64 {
+            let lock = proofstorm_core::resolve_lock(&cell, &runtime).unwrap();
+            let selected = selected_catalog_images(&installation, &lock, &runtime).unwrap();
+            assert!(previews.is_subset(&selected));
+            for image in &previews {
+                let error = download_source(image, &runtime, &distributed)
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    error.contains("local preview")
+                        && error.contains("seed its exact pinned manifest")
+                );
+            }
+        }
+    }
+    assert!(fs::read_dir(home.path()).unwrap().next().is_none());
+}
+
+#[test]
 fn pinned_custom_runtime_is_admitted_only_for_workspace_components() {
     let home = tempfile::tempdir().unwrap();
     let installation = fixture_installation(home.path());
