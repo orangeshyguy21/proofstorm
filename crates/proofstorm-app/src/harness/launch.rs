@@ -70,6 +70,34 @@ pub(super) fn executable(path: &Path) -> bool {
     }
 }
 
+fn codex_desktop(mut apps: Vec<PathBuf>, path_cli: Option<&Path>) -> Option<(PathBuf, PathBuf)> {
+    if let Some(path) = path_cli.and_then(|p| p.canonicalize().ok()) {
+        // The CLI now lives inside a nested CodexCLI.app. The desktop app is
+        // the outermost bundle, not that CLI helper bundle.
+        if let Some(app) = path
+            .ancestors()
+            .filter(|p| p.extension().is_some_and(|ext| ext == "app"))
+            .last()
+        {
+            apps.insert(0, app.to_path_buf());
+        }
+    }
+    apps.into_iter().find_map(|app| {
+        if !app.join("Contents/Info.plist").is_file() {
+            return None;
+        }
+        [
+            "Contents/Resources/codex",
+            "Contents/Resources/codex-cli/bin/codex",
+            "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+        ]
+        .into_iter()
+        .map(|relative| app.join(relative))
+        .find(|path| executable(path))
+        .map(|cli| (app, cli))
+    })
+}
+
 pub fn detect(project: &Path, cli: bool) -> Result<LaunchPlan> {
     ensure!(
         cli || cfg!(target_os = "macos"),
@@ -91,20 +119,9 @@ pub fn detect(project: &Path, cli: bool) -> Result<LaunchPlan> {
             .map(|p| p.join("codex"))
             .find(|p| executable(p))
     });
-    if let Some(path) = path_cli.as_ref().and_then(|p| p.canonicalize().ok()) {
-        if let Some(app) = path
-            .ancestors()
-            .find(|p| p.extension().is_some_and(|ext| ext == "app"))
-        {
-            apps.insert(0, app.to_path_buf());
-        }
-    }
-    let desktop = apps.into_iter().find(|app| {
-        app.join("Contents/Info.plist").is_file()
-            && executable(&app.join("Contents/Resources/codex"))
-    });
-    let executable = if cli { path_cli.or_else(|| desktop.as_ref().map(|app| app.join("Contents/Resources/codex"))) }
-        else { desktop.as_ref().map(|app| app.join("Contents/Resources/codex")) }
+    let bundled = codex_desktop(apps, path_cli.as_deref());
+    let executable = if cli { path_cli.or_else(|| bundled.as_ref().map(|(_, cli)| cli.clone())) }
+        else { bundled.as_ref().map(|(_, cli)| cli.clone()) }
         .context(if cli {"Codex CLI is not installed; install Codex, then retry"} else {"Codex desktop app was not found; install it yourself or omit --desktop to use the CLI. Nothing was installed or attached."})?;
     let version = capture(&executable, &["--version"])?;
     ensure!(
@@ -132,7 +149,7 @@ pub fn detect(project: &Path, cli: bool) -> Result<LaunchPlan> {
             project.to_str().context("non-UTF-8 project")?.into(),
         ],
         project: project.into(),
-        desktop,
+        desktop: bundled.map(|(app, _)| app),
     })
 }
 
@@ -253,4 +270,59 @@ pub fn terminal_command(plan: &LaunchPlan) -> String {
         command.push_str(&quote(arg));
     }
     command
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    fn fixture(root: &Path, layout: &str) -> (PathBuf, PathBuf) {
+        let app = root.join("ChatGPT.app");
+        fs::create_dir_all(app.join("Contents")).unwrap();
+        fs::write(app.join("Contents/Info.plist"), "fixture").unwrap();
+        let cli = app.join(layout);
+        fs::create_dir_all(cli.parent().unwrap()).unwrap();
+        fs::write(&cli, "fixture").unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+        (app, cli)
+    }
+
+    #[test]
+    fn codex_discovery_supports_old_and_current_bundles() {
+        for layout in [
+            "Contents/Resources/codex",
+            "Contents/Resources/codex-cli/bin/codex",
+            "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let (app, cli) = fixture(root.path(), layout);
+            assert_eq!(
+                codex_desktop(vec![app.clone()], None),
+                Some((app.clone(), cli.clone()))
+            );
+            fs::set_permissions(&cli, fs::Permissions::from_mode(0o600)).unwrap();
+            assert!(codex_desktop(vec![app.clone()], None).is_none());
+            fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+            fs::remove_file(app.join("Contents/Info.plist")).unwrap();
+            assert!(codex_desktop(vec![app], None).is_none());
+        }
+    }
+
+    #[test]
+    fn codex_path_discovery_selects_desktop_instead_of_nested_cli_app() {
+        let root = tempfile::tempdir().unwrap();
+        let (app, cli) = fixture(
+            root.path(),
+            "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+        );
+        let helper = app.join("Contents/Resources/codex-cli/CodexCLI.app");
+        fs::write(helper.join("Contents/Info.plist"), "helper").unwrap();
+        let link = root.path().join("codex");
+        std::os::unix::fs::symlink(&cli, &link).unwrap();
+        assert_eq!(
+            codex_desktop(Vec::new(), Some(&link)),
+            Some((app.canonicalize().unwrap(), cli.canonicalize().unwrap()))
+        );
+    }
 }
