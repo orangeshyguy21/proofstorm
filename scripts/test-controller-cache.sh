@@ -47,8 +47,8 @@ fn main() { println!("{}:{}", env!("CACHE_FIXTURE_REVISION"), proofstorm_kube::c
 EOF
 printf 'showcase\n' > "$scratch/contract.txt"
 build() {
-  CACHE_FIXTURE_REVISION=$1 cargo build --offline --release -vv \
-    --manifest-path "$scratch/Cargo.toml" -p proofstormd > "$scratch/build.log" 2>&1 || {
+  CACHE_FIXTURE_REVISION=$1 cargo build --offline --release -vv --message-format=json \
+    --manifest-path "$scratch/Cargo.toml" -p proofstormd > "$scratch/build.json" 2> "$scratch/build.log" || {
     cat "$scratch/build.log" >&2; return 1;
   }
 }
@@ -78,7 +78,12 @@ build main
 [[ $("$CARGO_TARGET_DIR/release/proofstormd") == main:main:dependency ]] || {
   printf 'Controller reused a stale transitive workspace contract\n' >&2; exit 1;
 }
-grep -q 'Fresh fixture-dependency' "$scratch/build.log" || {
+# CI forces colored diagnostics. Cargo's structured freshness field is stable
+# across color settings and does not depend on the human-readable "Fresh" line.
+jq -e -s '
+  [.[] | select(.reason == "compiler-artifact" and .target.name == "fixture_dependency")]
+  | length == 1 and .[0].fresh == true
+' "$scratch/build.json" >/dev/null || {
   printf 'Controller unnecessarily rebuilt its non-workspace dependency\n' >&2; exit 1;
 }
 printf 'Controller cache regression passed\n'
