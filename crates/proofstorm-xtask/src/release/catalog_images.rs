@@ -1,5 +1,6 @@
 //! Catalog image maintenance, separate from controller/release promotion and runtime setup.
 mod audit;
+mod bark;
 use super::{archive::output_path, build, bundle, registry, sha256, text};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -750,6 +751,31 @@ pub(super) fn cli(args: impl Iterator<Item = OsString>) -> Result<()> {
         .collect::<Result<_>>()?;
     let args: Vec<_> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
+        [
+            "bark-restore",
+            root,
+            platform,
+            revision,
+            attempt,
+            artifacts,
+            output,
+        ] => bark::restore(
+            Path::new(root),
+            platform,
+            revision,
+            attempt,
+            Path::new(artifacts),
+            Path::new(output),
+        ),
+        ["bark-stage", root, platform, candidates, output] => bark::stage(
+            Path::new(root),
+            platform,
+            Path::new(candidates),
+            Path::new(output),
+        ),
+        ["bark-evidence", staged, run, output] => {
+            bark::evidence(Path::new(staged), Path::new(run), Path::new(output))
+        }
         ["audit"] => audit::run(),
         ["list"] => {
             println!(

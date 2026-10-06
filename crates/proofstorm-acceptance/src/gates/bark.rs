@@ -54,6 +54,26 @@ pub(crate) fn images(catalog: &proofstorm_core::CatalogResponse) -> Result<Vec<S
     Ok(lock.entries.into_iter().map(|entry| entry.image).collect())
 }
 
+/// Exact inputs for preparing the Bark gate's owned image cache, without a runtime.
+///
+/// # Errors
+/// Fails if this platform's catalog cannot resolve the complete managed topology.
+pub fn image_cache_inputs() -> Result<Value> {
+    let mut images = images(proofstorm_core::default_catalog())?;
+    images.push(proofstorm_kube::images::PROBE_IMAGE.into());
+    images.sort();
+    images.dedup();
+    let inputs = images
+        .into_iter()
+        .map(|image| {
+            let source =
+                proofstorm_core::catalog_image_source(&image).map_err(anyhow::Error::msg)?;
+            Ok(json!({"image":image,"source":source}))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(json!(inputs))
+}
+
 pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.default_session("bark-managed", "designer")?;
     let document = context.document(document()?)?;

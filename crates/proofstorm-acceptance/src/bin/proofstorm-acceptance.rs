@@ -74,6 +74,9 @@ struct Arguments {
     timeout: u64,
     #[arg(long)]
     list: bool,
+    /// Print exact cache inputs for a supported gate without creating a runtime.
+    #[arg(long, value_parser = ["bark-processor"])]
+    image_cache_inputs: Option<String>,
     /// Parent-owned worker home; not an existing-installation test mode.
     #[arg(long, hide = true)]
     worker_home: Option<PathBuf>,
@@ -87,6 +90,10 @@ struct Arguments {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Arguments::parse();
+    if args.image_cache_inputs.is_some() {
+        println!("{}", gates::bark::image_cache_inputs()?);
+        return Ok(());
+    }
     if let Some(path) = args.benchmark_proxy {
         return proofstorm_acceptance::benchmark::proxy::serve(&path);
     }

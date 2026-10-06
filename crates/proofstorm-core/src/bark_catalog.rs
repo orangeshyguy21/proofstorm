@@ -7,6 +7,15 @@ use super::{
     runtime_endpoint, support_matrix,
 };
 use crate::processor_ids::{BARK_PROCESSOR, BARK_SERVER, CLN_HOLD};
+use std::collections::BTreeMap;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Images {
+    processor: String,
+    server: String,
+    cln: String,
+}
 
 const PROCESSOR_VERSION: &str = "0.1.0-fe468ca";
 const SERVER_VERSION: &str = "0.7.0-6188e2d";
@@ -23,12 +32,17 @@ pub(super) fn extend(
     backends: &BackendContractRegistry,
     adapter_version: &str,
 ) {
-    // Never use an ARM64 image as a placeholder for an unbuilt AMD64 artifact.
-    if amd64 {
+    // Qualification stages verified native candidates in this embedded file in
+    // its disposable checkout. There is no runtime image override. The shipped
+    // file deliberately omits platforms that are not yet available.
+    let platform = if amd64 { "linux/amd64" } else { "linux/arm64" };
+    let images: BTreeMap<String, Images> =
+        serde_json::from_str(include_str!("bark_images.json")).expect("pinned Bark images");
+    let Some(images) = images.get(platform) else {
         return;
-    }
+    };
     entries.push(catalog_entry_with_lifecycle(
-        false,
+        amd64,
         CLN_HOLD,
         backends,
         ComponentKind::Lightning,
@@ -37,7 +51,7 @@ pub(super) fn extend(
         CLN_HOLD_VERSION,
         ReleaseChannel::Prerelease,
         SupportLifecycle::Experimental,
-        "proofstorm-registry.localhost:5000/cln-hold@sha256:d89a5ced1cf893666e97cea63d837e07871ef4bd53544d98e6b614d292861498",
+        &images.cln,
         BTreeSet::from([
             CatalogFeature::NativeCli,
             CatalogFeature::NativeCliEntrypoints,
@@ -45,7 +59,11 @@ pub(super) fn extend(
             CatalogFeature::PersistentState,
             CatalogFeature::Bolt11,
         ]),
-        vec![dependency(LinkKind::ChainBackend, "bitcoin-core", &["31.1"])],
+        vec![dependency(
+            LinkKind::ChainBackend,
+            "bitcoin-core",
+            &["31.1"],
+        )],
         support_matrix(
             &[StorageBackend::PersistentVolume],
             &[PaymentMethod::Bolt11],
@@ -58,7 +76,7 @@ pub(super) fn extend(
         vec![ControlClass::Cell, ControlClass::Target],
     ));
     entries.push(catalog_entry_with_lifecycle(
-        false,
+        amd64,
         BARK_SERVER,
         backends,
         ComponentKind::ArkServer,
@@ -67,7 +85,7 @@ pub(super) fn extend(
         SERVER_VERSION,
         ReleaseChannel::Prerelease,
         SupportLifecycle::Experimental,
-        "proofstorm-registry.localhost:5000/bark-server@sha256:fe228ec2ba929411fc6517dbd95ac7c70b5c0f69d7e02157868f0a02fe2080c0",
+        &images.server,
         BTreeSet::from([
             CatalogFeature::NativeCli,
             CatalogFeature::NativeCliEntrypoints,
@@ -86,14 +104,19 @@ pub(super) fn extend(
             &[PaymentMethod::Bolt11],
             &[CLN_HOLD],
             &["sat"],
-            &[payment_binding(PaymentMethod::Bolt11, "sat", CLN_HOLD, &[CLN_HOLD_VERSION])],
+            &[payment_binding(
+                PaymentMethod::Bolt11,
+                "sat",
+                CLN_HOLD,
+                &[CLN_HOLD_VERSION],
+            )],
             &[],
             vec![],
         ),
         vec![ControlClass::Cell, ControlClass::Target],
     ));
     entries.push(catalog_entry_with_lifecycle(
-        false,
+        amd64,
         BARK_PROCESSOR,
         backends,
         ComponentKind::PaymentProcessor,
@@ -102,7 +125,7 @@ pub(super) fn extend(
         PROCESSOR_VERSION,
         ReleaseChannel::Prerelease,
         SupportLifecycle::Experimental,
-        "proofstorm-registry.localhost:5000/cdk-bark-processor@sha256:e88451c42bba9d1a719297934c05cfc7d71ae28d1b53a699f0f286a16eb55d63",
+        &images.processor,
         BTreeSet::from([
             CatalogFeature::Regtest,
             CatalogFeature::PersistentState,
@@ -132,7 +155,7 @@ pub(super) fn extend(
         };
         let mut provenance: BuildProvenance =
             serde_json::from_str(encoded).expect("pinned Bark build provenance");
-        provenance.platform = "linux/arm64".into();
+        provenance.platform = platform.into();
         entry.source_digest =
             crate::digest_json(&(&entry.source_digest, &entry.image, &provenance));
         entry.build_provenance = Some(provenance);

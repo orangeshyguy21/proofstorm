@@ -8,13 +8,17 @@ on:
         type: choice
         required: true
         default: standard
-        options: [standard, bark]
+        options: [standard, bark, bark-qualification]
       architecture:
         description: Architecture for the Bark handoff (standard keeps its full matrix)
         type: choice
         required: true
         default: amd64
         options: [amd64, arm64]
+      candidate_run:
+        description: Successful Bark image build run ID (bark-qualification only)
+        type: string
+        default: ''
   pull_request:
     branches: [main]
     # Candidate packaging evidence is separate from shipped-image qualification.
@@ -29,12 +33,21 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: component-images-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: component-images-${{ github.event.pull_request.number || github.ref }}-${{ inputs.family || 'standard' }}-${{ inputs.architecture || 'matrix' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  managed-bark-qualification:
+    name: Managed Bark qualification
+    if: github.event_name == 'workflow_dispatch' && inputs.family == 'bark-qualification'
+    uses: ./.github/workflows/bark-qualification.yml
+    with:
+      architecture: ${{ inputs.architecture }}
+      candidate_run: ${{ inputs.candidate_run }}
+
   native-bark-images:
     name: Bark candidate handoff
     if: github.event_name == 'workflow_dispatch' && inputs.family == 'bark'

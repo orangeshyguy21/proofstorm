@@ -6,6 +6,11 @@ authorizes a draft. Publishing the downloadable release remains a manual decisio
 
 ## Everyday flow
 
+Before a release that distributes Bark, complete the separate
+[Bark candidate qualification and publication handoff](BARK-RELEASING.md).
+Ordinary Checks currently exclude the local Bark preview from the distributed
+catalog; green Checks alone do not qualify or publish these three images.
+
 ```sh
 just release-prepare VERSION  # Replace VERSION with the next unused alpha version.
 # Review the version changes, run just check, and merge.

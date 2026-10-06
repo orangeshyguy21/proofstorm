@@ -1,0 +1,91 @@
+name: Managed Bark candidate qualification
+
+on:
+  workflow_call:
+    inputs:
+      architecture:
+        type: string
+        required: true
+      candidate_run:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: Native managed gate architecture
+        type: choice
+        required: true
+        default: amd64
+        options: [amd64, arm64]
+      candidate_run:
+        description: Successful Bark native image build run ID (retained artifacts required)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bark-qualification-${{ github.ref }}-${{ inputs.architecture }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 150
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      PLATFORM: linux/${{ inputs.architecture }}
+      ARCH: ${{ inputs.architecture }}
+      BUILD_RUN: ${{ inputs.candidate_run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: '1.42.4'
+      - name: Select one complete native image handoff
+        id: candidates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$ARCH" == amd64 || "$ARCH" == arm64 ]]
+          [[ "$BUILD_RUN" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN" > "$RUNNER_TEMP/candidate-run.json"
+          jq -e --arg repo "$GITHUB_REPOSITORY" '
+            .repository.full_name==$repo and .head_repository.full_name==$repo and
+            .event=="workflow_dispatch" and .status=="completed" and .conclusion=="success" and
+            (.path==".github/workflows/bark-images.yml" or .path==".github/workflows/component-images.yml") and
+            (.head_sha|test("^[a-f0-9]{40}$")) and .run_attempt>0' "$RUNNER_TEMP/candidate-run.json" >/dev/null
+          revision=$(jq -er '.head_sha' "$RUNNER_TEMP/candidate-run.json")
+          attempt=$(jq -er '.run_attempt' "$RUNNER_TEMP/candidate-run.json")
+          gh run download "$BUILD_RUN" --repo "$GITHUB_REPOSITORY" \
+            --pattern "bark-image-*-$ARCH-$revision-$attempt" --dir "$RUNNER_TEMP/bark-artifacts"
+          printf 'revision=%s\nattempt=%s\n' "$revision" "$attempt" >> "$GITHUB_OUTPUT"
+          jq -n --arg build_run "$BUILD_RUN" --arg build_revision "$revision" --arg build_attempt "$attempt" \
+            --arg qualification_run "$GITHUB_RUN_ID" --arg qualification_revision "$GITHUB_SHA" \
+            --arg qualification_attempt "$GITHUB_RUN_ATTEMPT" --arg platform "$PLATFORM" \
+            '{build:{run:$build_run,revision:$build_revision,attempt:$build_attempt},qualification:{run:$qualification_run,revision:$qualification_revision,attempt:$qualification_attempt},platform:$platform}' \
+            > "$RUNNER_TEMP/bark-run-identity.json"
+      - name: Verify candidates and exercise payments, recovery, transport and cleanup
+        env:
+          BUILD_REVISION: ${{ steps.candidates.outputs.revision }}
+          BUILD_ATTEMPT: ${{ steps.candidates.outputs.attempt }}
+        run: |
+          bash scripts/bark-qualification.sh "$PLATFORM" "$BUILD_REVISION" "$BUILD_ATTEMPT" \
+            "$RUNNER_TEMP/bark-artifacts" "$RUNNER_TEMP/bark-qualification"
+      - name: Retain only public build identities and redacted qualification receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bark-qualification-${{ inputs.architecture }}-${{ github.sha }}-${{ github.run_attempt }}
+          # No raw gate output, runtime home, Docker config, wallet proofs or TLS keys.
+          path: |
+            ${{ runner.temp }}/bark-run-identity.json
+            ${{ runner.temp }}/bark-qualification/public/
+          if-no-files-found: warn
+          retention-days: 14
