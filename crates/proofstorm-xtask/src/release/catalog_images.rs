@@ -23,6 +23,9 @@ const RECIPES: &[&str] = &[
     "cocod-wallet",
     "ldk-server",
     "cdk-ldk-server-processor",
+    "cdk-bark-processor",
+    "bark-server",
+    "cln-hold",
 ];
 
 fn recipe(name: &str) -> Result<&'static str> {
@@ -36,6 +39,9 @@ fn recipe(name: &str) -> Result<&'static str> {
         "cocod-wallet" => "docker/wallet/Dockerfile.kube-cocod",
         "ldk-server" => "docker/payment/Dockerfile.ldk-server",
         "cdk-ldk-server-processor" => "docker/payment/Dockerfile.cdk-ldk-server",
+        "cdk-bark-processor" => "docker/payment/Dockerfile.cdk-bark",
+        "bark-server" => "docker/payment/Dockerfile.bark-server",
+        "cln-hold" => "docker/payment/Dockerfile.cln-hold",
         _ => bail!("unknown catalog image; controller builds use release-controller-build"),
     })
 }
@@ -51,7 +57,9 @@ fn legacy_version(name: &str) -> Result<&'static str> {
         "nutshell-mint" | "nutshell-mint-management" => "0.20.3",
         "cocod-wallet" => "0.0.17-dev.44e5101c",
         "ldk-server" => "0.1.0-50fe752",
-        "cdk-ldk-server-processor" => "0.1.0-fe468ca",
+        "cdk-ldk-server-processor" | "cdk-bark-processor" => "0.1.0-fe468ca",
+        "bark-server" => "0.7.0-6188e2d",
+        "cln-hold" => "26.06.7-hold.0.3.3",
         _ => bail!("unknown catalog image version"),
     })
 }
@@ -81,6 +89,64 @@ fn selector(value: &str) -> Result<(&str, &str)> {
     Ok((name, version))
 }
 
+fn verify_bark_inputs(source: &Path, name: &str, recipe_sha256: &str) -> Result<()> {
+    let stem = match name {
+        "cdk-bark-processor" => "cdk-bark",
+        "bark-server" => "bark-server",
+        "cln-hold" => "cln-hold",
+        _ => return Ok(()),
+    };
+    let record: proofstorm_core::BuildProvenance = serde_json::from_slice(&fs::read(
+        source.join(format!("docker/payment/{stem}-provenance.json")),
+    )?)?;
+    let recipe = fs::read_to_string(source.join(recipe(name)?))?;
+    ensure!(
+        record.recipe_digest == format!("sha256:{recipe_sha256}")
+            && record.platform == "linux/amd64,linux/arm64"
+            && sha256(&record.artifact_sha256)
+            && recipe.contains(&record.artifact_url)
+            && recipe.contains(&record.artifact_sha256)
+            && recipe.contains(&record.commit_sha)
+            && record
+                .dependency_lock_digest
+                .as_deref()
+                .is_some_and(|digest| {
+                    digest
+                        .strip_prefix("sha256:")
+                        .is_some_and(|hash| sha256(hash) && recipe.contains(hash))
+                })
+            && record.build_image.as_deref().is_some_and(|image| {
+                image
+                    .rsplit_once('@')
+                    .is_some_and(|(_, digest)| super::pinned(image) && recipe.contains(digest))
+            })
+            && record
+                .runtime_image
+                .rsplit_once('@')
+                .is_some_and(
+                    |(_, digest)| super::pinned(&record.runtime_image) && recipe.contains(digest)
+                ),
+        "Bark provenance does not match the frozen recipe"
+    );
+    if name == "cdk-bark-processor" {
+        let digest = format!(
+            "{:x}",
+            Sha256::digest(fs::read(
+                source.join("docker/payment/patches/bark-regtest-rpc.patch")
+            )?)
+        );
+        ensure!(
+            recipe.contains(&digest)
+                && record
+                    .transformations
+                    .iter()
+                    .any(|entry| entry.contains(&format!("sha256:{digest}"))),
+            "Bark processor patch identity differs from its provenance"
+        );
+    }
+    Ok(())
+}
+
 fn probe(name: &str) -> Result<&'static str> {
     Ok(match name {
         // Version-only probes run with a read-only root filesystem. Recent
@@ -99,6 +165,15 @@ fn probe(name: &str) -> Result<&'static str> {
         // build identity offline; the live gate separately exercises GetSettings.
         "cdk-ldk-server-processor" => {
             "test -x /usr/local/bin/cdk-payment-processor-ldk-server && cat /usr/local/share/processor-revision"
+        }
+        "cdk-bark-processor" => {
+            "test -x /usr/local/bin/cdk-payment-processor-bark && cat /usr/local/share/processor-revision /usr/local/share/processor-patch-sha256"
+        }
+        "bark-server" => {
+            "captaind --version && test -s /usr/local/share/bark/captaind.default.toml && cat /usr/local/share/bark/server-revision"
+        }
+        "cln-hold" => {
+            "lightningd --version && test -x /usr/local/bin/hold && cat /usr/local/share/hold-revision"
         }
         _ => bail!("unknown catalog probe"),
     })
@@ -382,6 +457,7 @@ fn prepare(root: &Path, work: &Path, name: &str, platform: &str, copy: Option<&s
             "{:x}",
             Sha256::digest(fs::read(staging.path().join("source").join(recipe))?)
         );
+        verify_bark_inputs(&staging.path().join("source"), name, &recipe_sha256)?;
         if name == "cocod-wallet" {
             prepare_cocod(staging.path(), &recipe_sha256)?;
         }
@@ -451,6 +527,9 @@ fn inspect(work: &Path) -> Result<String> {
             | "cocod-wallet"
             | "ldk-server"
             | "cdk-ldk-server-processor"
+            | "cdk-bark-processor"
+            | "bark-server"
+            | "cln-hold"
     ) {
         ensure!(
             image["Config"]["User"] == "1000:1000",
@@ -476,6 +555,15 @@ fn valid_probe_version(repository: &str, version: &str, output: &str) -> bool {
         "cocod-wallet" => output.trim() == "0.0.17",
         "ldk-server" => output.trim() == "ldk-server 0.1.0\nldk-server-cli 0.1.0",
         "cdk-ldk-server-processor" => output.trim() == "fe468cad486157683eddbc0df4ff87ba71b6c0a3",
+        "cdk-bark-processor" => {
+            output.trim()
+                == "fe468cad486157683eddbc0df4ff87ba71b6c0a3\nabc3f967d754cdf5e484bf434ef52fa216dfb37cdcbb8fd896477e5c7b40321c"
+        }
+        "bark-server" => {
+            output.trim()
+                == "captaind 0.7.0-dev+6188e2d809f193716b2e571274179f069d9c19ca\n6188e2d809f193716b2e571274179f069d9c19ca"
+        }
+        "cln-hold" => output.trim() == "v26.06.7\naf0055b132f3b9f24d0b1d478a15005fcf8f014f",
         "cdk-mint" | "cdk-mint-management" | "cdk-ldk-mint-management" => {
             let lines: Vec<_> = output.lines().filter(|line| !line.is_empty()).collect();
             lines

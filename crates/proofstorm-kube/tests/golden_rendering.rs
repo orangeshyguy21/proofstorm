@@ -19,6 +19,9 @@ use serde_json::{Value, json};
 const INSTANCE_KEY: &str = "i-golden-b2";
 const REVISION_DIGEST: &str = "sha256:b2-golden-revision";
 
+#[path = "support/bark.rs"]
+mod bark;
+
 // Shared snapshots have a fixed platform; the backend matrix below separately
 // checks all platform-specific images without depending on the test host.
 fn default_catalog() -> &'static CatalogResponse {
@@ -1609,11 +1612,14 @@ fn every_registered_backend_matches_its_golden_contract() {
 
 fn assert_backend_goldens(platform: CatalogPlatform) {
     let characterized = [
+        "bark-server",
         "bitcoin-core",
         "cdk",
+        "cdk-bark-processor",
         "cdk-cli-wallet",
         "cdk-ldk-server-processor",
         "cln",
+        "cln-hold",
         "cocod-wallet",
         "keycloak",
         "ldk-server",
@@ -1631,6 +1637,30 @@ fn assert_backend_goldens(platform: CatalogPlatform) {
     let catalog = catalog_for_platform(platform);
     // Embedded CDK backends are configuration of the one CDK backend.
     for backend_id in characterized.into_iter().chain(CDK_EMBEDDED_SCENARIOS) {
+        if matches!(
+            backend_id,
+            "cdk-bark-processor" | "bark-server" | "cln-hold"
+        ) {
+            // Keep platform-independent renderer contracts stable. Real ARM64
+            // catalog admission is covered separately; AMD64 remains absent.
+            assert_eq!(
+                catalog.entries.iter().any(|entry| entry.id == backend_id),
+                platform == CatalogPlatform::LinuxArm64,
+            );
+            let plan = if backend_id == "cdk-bark-processor" {
+                bark::plan()
+            } else {
+                bark::stack_plan(backend_id)
+            };
+            let rendered = match backend_id {
+                "bark-server" => proofstorm_kube::render_bark_server_component(&plan),
+                "cln-hold" => proofstorm_kube::render_cln_hold_component(&plan),
+                _ => proofstorm_kube::render_bark_processor_component(&plan),
+            }
+            .unwrap();
+            assert_golden(backend_id, &component_snapshot(&plan, &rendered));
+            continue;
+        }
         // These packaged components have architecture-specific images. Every other
         // backend must match the same full contract on both platforms.
         let golden_name = match (platform, backend_id) {

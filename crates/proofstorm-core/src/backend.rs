@@ -9,6 +9,9 @@ use crate::{ComponentKind, ComponentSpec, LinkSpec, LockEntry};
 #[path = "processor_backend.rs"]
 mod processor;
 pub use processor::LdkServerProcessorConfig;
+#[path = "bark_backend.rs"]
+mod bark;
+pub use bark::BarkProcessorConfig;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
@@ -553,6 +556,12 @@ pub enum EffectiveComponentConfig {
     LdkServer(LndConfig),
     #[serde(rename = "cdk-ldk-server-processor")]
     LdkServerProcessor(LdkServerProcessorConfig),
+    #[serde(rename = "cdk-bark-processor")]
+    BarkProcessor(BarkProcessorConfig),
+    #[serde(rename = "bark-server")]
+    BarkServer,
+    #[serde(rename = "cln-hold")]
+    ClnHold,
     #[serde(rename = "cdk")]
     Cdk(CdkMintConfig),
     #[serde(rename = "nutshell")]
@@ -1019,6 +1028,9 @@ impl EffectiveComponentConfig {
                 alias: string("alias")?,
             })),
             "cdk-ldk-server-processor" => processor::effective_config(component),
+            "cdk-bark-processor" => bark::effective_config(component),
+            "bark-server" => Ok(Self::BarkServer),
+            "cln-hold" => Ok(Self::ClnHold),
             "cdk" => Ok(Self::Cdk(cdk()?)),
             "nutshell" => Ok(Self::Nutshell(nutshell()?)),
             "postgresql" => Ok(Self::Postgres(PostgresConfig {
@@ -1903,6 +1915,8 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
         ),
     ];
     contracts.extend(processor::contracts());
+    contracts.push(bark::processor_contract());
+    contracts.extend(bark::stack_contracts());
     contracts
 }
 
@@ -3499,6 +3513,9 @@ mod tests {
                 "lnd" => "lnd/0.20/v1",
                 "ldk-server" => "ldk-server/0.1/v1",
                 "cdk-ldk-server-processor" => "cdk-ldk-server-processor/0.1/v1",
+                "cdk-bark-processor" => "cdk-bark-processor/0.1/v1",
+                "bark-server" => "bark-server/0.7/v1",
+                "cln-hold" => "cln-hold/26.06/v1",
                 "cln" => "cln/26.06/v1",
                 "cdk" => "cdk-mintd/0.18/v1",
                 "nutshell" => "nutshell-mint/0.20/v1",

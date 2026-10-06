@@ -1,7 +1,95 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:50ef6c40f14a324fa60ec84b35fd8e2f02156eada71df1687470c0522743483b",
+  "catalog_digest": "sha256:08462abb369e4a47ef3d3226b09141e21291cbc78519ef93ea48a1b96e927518",
   "entries": [
+    {
+      "implementation": "bark-server",
+      "kind": "ark_server",
+      "upstream_version": "0.7.0-6188e2d",
+      "release_channel": "prerelease",
+      "support_lifecycle": "experimental",
+      "config_version": "bark-server/0.7/v1",
+      "config_schema_digest": "sha256:6de9e8f2d5c65a91bec8300bc8b30b695285b9a3f651f71dde879bc34be00485",
+      "image": "proofstorm-registry.localhost:5000/bark-server@sha256:fe228ec2ba929411fc6517dbd95ac7c70b5c0f69d7e02157868f0a02fe2080c0",
+      "fields": {
+        "backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "data_dir": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "native_settings": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "rpc_credentials": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume",
+          "postgres"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [
+          "cln-hold"
+        ],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [
+          {
+            "method": "bolt11",
+            "unit": "sat",
+            "backend": {
+              "implementation": "cln-hold",
+              "versions": [
+                "26.06.7-hold.0.3.3"
+              ]
+            }
+          }
+        ],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "31.1"
+          ]
+        },
+        {
+          "link_kind": "database_backend",
+          "implementation": "postgresql",
+          "versions": [
+            "17.11"
+          ]
+        },
+        {
+          "link_kind": "payment_backend",
+          "implementation": "cln-hold",
+          "versions": [
+            "26.06.7-hold.0.3.3"
+          ]
+        }
+      ]
+    },
     {
       "implementation": "bitcoin-core",
       "kind": "bitcoin",
@@ -301,6 +389,7 @@
         ],
         "payment_backends": [
           "bdk",
+          "cdk-bark-processor",
           "cdk-ldk-server-processor",
           "cln",
           "ldk-node",
@@ -310,6 +399,16 @@
           "sat"
         ],
         "payment_bindings": [
+          {
+            "method": "bolt11",
+            "unit": "sat",
+            "backend": {
+              "implementation": "cdk-bark-processor",
+              "versions": [
+                "0.1.0-fe468ca"
+              ]
+            }
+          },
           {
             "method": "bolt11",
             "unit": "sat",
@@ -426,6 +525,88 @@
           "implementation": "cdk-ldk-server-processor",
           "versions": [
             "0.1.0-fe468ca"
+          ]
+        },
+        {
+          "link_kind": "payment_backend",
+          "implementation": "cdk-bark-processor",
+          "versions": [
+            "0.1.0-fe468ca"
+          ]
+        }
+      ]
+    },
+    {
+      "implementation": "cdk-bark-processor",
+      "kind": "payment_processor",
+      "upstream_version": "0.1.0-fe468ca",
+      "release_channel": "prerelease",
+      "support_lifecycle": "experimental",
+      "config_version": "cdk-bark-processor/0.1/v1",
+      "config_schema_digest": "sha256:5632a759987dac1e6cd3ee0fecfc383bf5bc3aec55cd2439a68bf7c565aa22fa",
+      "image": "proofstorm-registry.localhost:5000/cdk-bark-processor@sha256:e88451c42bba9d1a719297934c05cfc7d71ae28d1b53a699f0f286a16eb55d63",
+      "fields": {
+        "backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "data_dir": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "event_poll_interval_ms": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "mnemonic": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "payment_methods": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "rpc_credentials": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "31.1"
+          ]
+        },
+        {
+          "link_kind": "ark_backend",
+          "implementation": "bark-server",
+          "versions": [
+            "0.7.0-6188e2d"
           ]
         }
       ]
@@ -684,6 +865,67 @@
         ],
         "payment_backends": [],
         "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "31.1"
+          ]
+        }
+      ]
+    },
+    {
+      "implementation": "cln-hold",
+      "kind": "lightning",
+      "upstream_version": "26.06.7-hold.0.3.3",
+      "release_channel": "prerelease",
+      "support_lifecycle": "experimental",
+      "config_version": "cln-hold/26.06/v1",
+      "config_schema_digest": "sha256:abe44dc1e0cdb1a8c381fd9f3cf9edcba222bb4ccbbdfb0d62662bd7f4691bea",
+      "image": "proofstorm-registry.localhost:5000/cln-hold@sha256:d89a5ced1cf893666e97cea63d837e07871ef4bd53544d98e6b614d292861498",
+      "fields": {
+        "backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "data_dir": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "native_settings": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "rpc_credentials": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [],
+        "units": [
+          "msat",
           "sat"
         ],
         "payment_bindings": [],

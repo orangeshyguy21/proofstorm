@@ -12,6 +12,13 @@ Adversarial double-spend races and concurrent BDK stress are opt-in through the
 separate `Upstream behavioral qualification` workflow; required CI uses sequential
 BDK compatibility checks. The behavioral workflow cannot block release promotion.
 
+The manual **Bark native candidate images** workflow builds the three Bark
+dependencies on a selected native architecture and retains checksummed images
+and frozen source. It is separate from PR checks and managed acceptance; see the
+[Bark build handoff](../docker/payment/BARK.md#native-candidate-image-handoff).
+Quick checks exercise its native-platform, Docker-isolation, receipt and partial
+export refusals using fake commands, without starting Docker or building images.
+
 ## Prerequisites
 
 Rust/rustup (pinned by `rust-toolchain.toml`), a native C toolchain, Git, Bash,

@@ -35,6 +35,30 @@ async fn run() -> Result<()> {
         [command] if command == "exec-ldk-processor" => {
             return proofstorm_driver::processor::exec_ldk_processor();
         }
+        #[cfg(unix)]
+        [command] if command == "exec-bark-processor" => {
+            return proofstorm_driver::bark::exec_processor();
+        }
+        #[cfg(unix)]
+        [command] if command == "prepare-bark-server" => {
+            return proofstorm_driver::bark_stack::prepare_server();
+        }
+        #[cfg(unix)]
+        [command] if command == "exec-bark-server" => {
+            return proofstorm_driver::bark_stack::exec_server();
+        }
+        #[cfg(unix)]
+        [command] if command == "exec-cln-hold" => {
+            return proofstorm_driver::bark_stack::exec_cln_hold();
+        }
+        #[cfg(unix)]
+        [command] if command == "cln-hold-ready" => {
+            return proofstorm_driver::bark_stack::cln_hold_ready().await;
+        }
+        #[cfg(unix)]
+        [command, url, cookie] if command == "wait-bark-chain" => {
+            return proofstorm_driver::bark_stack::wait_chain(url, Path::new(cookie)).await;
+        }
         [command, address, tls, profile] if command == "processor-settings" => {
             serde_json::to_value(
                 proofstorm_driver::processor::settings_for(

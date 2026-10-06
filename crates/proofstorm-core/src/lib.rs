@@ -1,5 +1,7 @@
 //! Domain contracts shared by every Proofstorm interface.
 pub mod processor_ids;
+mod processor_profile;
+pub use processor_profile::{ProcessorProfile, UnknownProcessorProfile};
 
 mod backend;
 mod candidate;
@@ -28,18 +30,19 @@ mod wallet_builds;
 pub use update::{CellChanges, CellUpdatePlan, CellUpdateTarget};
 
 pub use backend::{
-    BackendContractRegistry, BitcoinCoreConfig, CdkEmbeddedLightning, CdkEmbeddedOnchain,
-    CdkMintConfig, ClnConfig, ComponentBackendContract, ComponentConditionReason,
-    ComponentConditionState, ComponentConditionType, ComponentPlanContract, ComponentPlanInput,
-    ConditionAggregationContract, ConfigDefault, ConfigFieldContract, ConfigRule,
-    ConfigSettingClass, ConfigValueKind, CredentialObservationContract, EffectiveComponentConfig,
-    ExecutionContextContract, ExecutionMountContract, ExecutionMountTemplateContract,
-    ExecutionStorageSource, ExecutionStorageTemplateSource, KeycloakConfig,
-    LdkServerProcessorConfig, LinkedStateObservationContract, LndConfig, NutshellMintConfig,
-    OperationAdmissionContract, OperationClass, PostgresConfig, ProtocolProbeContract,
-    ProtocolProbePlan, ReadinessPrerequisite, RedisConfig, StorageObservationContract,
-    StorageRequirementTemplate, TargetDescriptorContract, WorkloadControllerKind,
-    WorkloadObservationContract, WorkspaceConfig, default_backend_registry,
+    BackendContractRegistry, BarkProcessorConfig, BitcoinCoreConfig, CdkEmbeddedLightning,
+    CdkEmbeddedOnchain, CdkMintConfig, ClnConfig, ComponentBackendContract,
+    ComponentConditionReason, ComponentConditionState, ComponentConditionType,
+    ComponentPlanContract, ComponentPlanInput, ConditionAggregationContract, ConfigDefault,
+    ConfigFieldContract, ConfigRule, ConfigSettingClass, ConfigValueKind,
+    CredentialObservationContract, EffectiveComponentConfig, ExecutionContextContract,
+    ExecutionMountContract, ExecutionMountTemplateContract, ExecutionStorageSource,
+    ExecutionStorageTemplateSource, KeycloakConfig, LdkServerProcessorConfig,
+    LinkedStateObservationContract, LndConfig, NutshellMintConfig, OperationAdmissionContract,
+    OperationClass, PostgresConfig, ProtocolProbeContract, ProtocolProbePlan,
+    ReadinessPrerequisite, RedisConfig, StorageObservationContract, StorageRequirementTemplate,
+    TargetDescriptorContract, WorkloadControllerKind, WorkloadObservationContract, WorkspaceConfig,
+    default_backend_registry,
 };
 pub use candidate::{
     CANDIDATE_BUILD_API_VERSION, CandidateBuild, CandidateBuildPhase, CandidateDiagnostics,
@@ -52,7 +55,8 @@ pub use catalog::{
     CatalogOrigin, CatalogPaymentBindingSupport, CatalogPlatform, CatalogResponse,
     CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport, ReleaseChannel,
     StorageBackend, SupportLifecycle, catalog_for_platform, catalog_image_source, default_catalog,
-    validate_catalog_component, validate_component_config, validate_new_cell_versions,
+    distributed_catalog, distributed_catalog_for_platform, validate_catalog_component,
+    validate_component_config, validate_new_cell_versions,
 };
 pub use coverage::{
     CONFIGURATION_COVERAGE_API_VERSION, ConfigurationCoverageEntry, ConfigurationCoverageManifest,

@@ -1,0 +1,842 @@
+{
+  "plan": {
+    "applicable_conditions": [
+      "workload_ready",
+      "storage_ready",
+      "service_ready",
+      "protocol_ready",
+      "dependencies_ready",
+      "component_ready",
+      "experiment_controllable"
+    ],
+    "backend_id": "bark-server",
+    "component_id": "ark",
+    "condition_aggregation": [
+      {
+        "all_of": [
+          "workload_ready",
+          "storage_ready",
+          "service_ready",
+          "protocol_ready",
+          "dependencies_ready"
+        ],
+        "condition": "component_ready"
+      }
+    ],
+    "condition_reasons": {
+      "component_ready": [
+        "stale_revision",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped"
+      ],
+      "dependencies_ready": [
+        "not_observed",
+        "dependencies_satisfied",
+        "dependencies_unsatisfied"
+      ],
+      "experiment_controllable": [
+        "control_available",
+        "control_unavailable"
+      ],
+      "protocol_ready": [
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "intentionally_stopped"
+      ],
+      "service_ready": [
+        "not_observed",
+        "endpoints_ready",
+        "endpoints_missing"
+      ],
+      "storage_ready": [
+        "not_observed",
+        "storage_bound",
+        "storage_pending"
+      ],
+      "workload_ready": [
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "image_pull_failed",
+        "image_pull_backoff",
+        "invalid_image_name",
+        "container_config_error",
+        "container_crash_loop",
+        "container_start_error",
+        "container_exited",
+        "pod_unschedulable",
+        "intentionally_stopped"
+      ]
+    },
+    "credentials": [],
+    "effective_config": {
+      "implementation": "bark-server"
+    },
+    "execution_context": {
+      "component_id": "ark",
+      "environment": {
+        "HOME": "/data"
+      },
+      "image": "bark-server:unpublished-test-fixture",
+      "mounts": [
+        {
+          "mount_path": "/data",
+          "name": "data",
+          "read_only": false,
+          "source": {
+            "source": "stateful_data"
+          }
+        }
+      ],
+      "state_contract": "proofstorm/bark-server-state/v1"
+    },
+    "instance_key": "i-bark-render",
+    "kind": "ark_server",
+    "linked_targets": {
+      "ark-chain": {
+        "backend_id": "bitcoin-core",
+        "component_id": "chain",
+        "kind": "bitcoin",
+        "ports": {
+          "p2p": 18444,
+          "rpc": 18443,
+          "zmq_block": 28334,
+          "zmq_tx": 28335
+        },
+        "version": "31.1"
+      },
+      "ark-database": {
+        "backend_id": "postgresql",
+        "component_id": "postgres",
+        "kind": "database",
+        "ports": {
+          "postgres": 5432
+        },
+        "version": "17.11"
+      },
+      "ark-lightning": {
+        "backend_id": "cln-hold",
+        "component_id": "cln",
+        "kind": "lightning",
+        "ports": {
+          "grpc": 9988,
+          "hold": 9292,
+          "p2p": 9735
+        },
+        "version": "26.06.7-hold.0.3.3"
+      }
+    },
+    "operation_admission": [
+      {
+        "operation": "inspect",
+        "prerequisites": [
+          "accepted_identity"
+        ]
+      },
+      {
+        "operation": "start",
+        "prerequisites": [
+          "accepted_identity",
+          "storage"
+        ]
+      },
+      {
+        "operation": "stop",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "restart",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "native_exec",
+        "prerequisites": [
+          "execution_context"
+        ]
+      },
+      {
+        "operation": "network_heal",
+        "prerequisites": [
+          "fault_identity"
+        ]
+      },
+      {
+        "operation": "authentication",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      }
+    ],
+    "protocol_probe": {
+      "kind": "tcp",
+      "port": 3535
+    },
+    "relevant_links": [
+      {
+        "binding": {
+          "network": "regtest",
+          "type": "chain"
+        },
+        "from": "ark",
+        "id": "ark-chain",
+        "kind": "chain_backend",
+        "to": "chain"
+      },
+      {
+        "binding": {
+          "database": "bark",
+          "role": "primary",
+          "type": "database"
+        },
+        "from": "ark",
+        "id": "ark-database",
+        "kind": "database_backend",
+        "to": "postgres"
+      },
+      {
+        "binding": {
+          "method": "bolt11",
+          "type": "payment",
+          "unit": "sat"
+        },
+        "from": "ark",
+        "id": "ark-lightning",
+        "kind": "payment_backend",
+        "to": "cln"
+      }
+    ],
+    "revision_digest": "sha256:render-test",
+    "rollout_digest": "sha256:bark-render-test",
+    "storage": [
+      {
+        "claim_name": "data-ark-0"
+      }
+    ],
+    "target_descriptor": {
+      "backend_id": "bark-server",
+      "component_id": "ark",
+      "kind": "ark_server",
+      "ports": {
+        "rpc": 3535
+      },
+      "version": "0.1.0-fe468ca"
+    },
+    "workload": {
+      "desired_replicas": 1,
+      "kind": "stateful_set",
+      "name": "ark"
+    }
+  },
+  "resources": {
+    "configMaps": [
+      {
+        "apiVersion": "v1",
+        "data": {
+          "rpc.cookie": "proofstorm:proofstorm-regtest-only\n"
+        },
+        "kind": "ConfigMap",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "ark",
+            "proofstorm.dev/instance": "i-bark-render",
+            "proofstorm.dev/network-identity": "ark"
+          },
+          "name": "ark-config",
+          "namespace": "proofstorm-i-bark-render"
+        }
+      }
+    ],
+    "deployments": [],
+    "persistentVolumeClaims": [],
+    "secrets": [],
+    "services": [
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "ark",
+            "proofstorm.dev/instance": "i-bark-render",
+            "proofstorm.dev/network-identity": "ark"
+          },
+          "name": "ark",
+          "namespace": "proofstorm-i-bark-render"
+        },
+        "spec": {
+          "ports": [
+            {
+              "name": "rpc",
+              "port": 3535,
+              "targetPort": 3535
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "ark",
+            "proofstorm.dev/instance": "i-bark-render",
+            "proofstorm.dev/network-identity": "ark"
+          }
+        }
+      }
+    ],
+    "statefulSets": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "bark-server",
+            "proofstorm.dev/execution-state-contract": "proofstorm/bark-server-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:render-test"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "ark",
+            "proofstorm.dev/instance": "i-bark-render",
+            "proofstorm.dev/network-identity": "ark"
+          },
+          "name": "ark",
+          "namespace": "proofstorm-i-bark-render"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "ark",
+              "proofstorm.dev/instance": "i-bark-render",
+              "proofstorm.dev/network-identity": "ark"
+            }
+          },
+          "serviceName": "ark",
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:bark-render-test"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "ark",
+                "proofstorm.dev/instance": "i-bark-render",
+                "proofstorm.dev/network-identity": "ark"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-bark-render"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "args": [],
+                  "command": [
+                    "/opt/proofstorm/driver",
+                    "exec-bark-server"
+                  ],
+                  "env": [
+                    {
+                      "name": "BARK_SERVER__DATA_DIR",
+                      "value": "/data/native"
+                    },
+                    {
+                      "name": "BARK_SERVER__NETWORK",
+                      "value": "regtest"
+                    },
+                    {
+                      "name": "BARK_SERVER__RPC__PUBLIC_ADDRESS",
+                      "value": "0.0.0.0:3535"
+                    },
+                    {
+                      "name": "BARK_SERVER__RPC__ADMIN_ADDRESS",
+                      "value": "127.0.0.1:3536"
+                    },
+                    {
+                      "name": "BARK_SERVER__RPC__INTEGRATION_ADDRESS",
+                      "value": "127.0.0.1:3537"
+                    },
+                    {
+                      "name": "BARK_SERVER__BITCOIND__URL",
+                      "value": "http://chain:18443"
+                    },
+                    {
+                      "name": "BARK_SERVER__BITCOIND__COOKIE",
+                      "value": "/chain-rpc/rpc.cookie"
+                    },
+                    {
+                      "name": "BARK_SERVER__POSTGRES__HOST",
+                      "value": "postgres"
+                    },
+                    {
+                      "name": "BARK_SERVER__POSTGRES__PORT",
+                      "value": "5432"
+                    },
+                    {
+                      "name": "BARK_SERVER__POSTGRES__NAME",
+                      "value": "bark"
+                    },
+                    {
+                      "name": "BARK_SERVER__POSTGRES__USER",
+                      "value": "proofstorm"
+                    },
+                    {
+                      "name": "BARK_SERVER__CLN_ARRAY",
+                      "value": "[{\"client_cert_path\":\"/cln-tls/client.pem\",\"client_key_path\":\"/cln-tls/client-key.pem\",\"hold_invoice\":{\"client_cert_path\":\"/hold-tls/client.pem\",\"client_key_path\":\"/hold-tls/client-key.pem\",\"server_cert_path\":\"/hold-tls/ca.pem\",\"uri\":\"https://cln:9292\"},\"priority\":0,\"server_cert_path\":\"/cln-tls/ca.pem\",\"uri\":\"https://cln:9988\"}]"
+                    },
+                    {
+                      "name": "BARK_SERVER__POSTGRES__PASSWORD",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_PASSWORD",
+                          "name": "postgres-credentials"
+                        }
+                      }
+                    }
+                  ],
+                  "image": "bark-server:unpublished-test-fixture",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "ports": [
+                    {
+                      "containerPort": 3535,
+                      "name": "rpc"
+                    }
+                  ],
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "captaind",
+                        "rpc",
+                        "wallet"
+                      ]
+                    },
+                    "failureThreshold": 40,
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 5
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/data",
+                      "name": "data"
+                    },
+                    {
+                      "mountPath": "/chain-rpc",
+                      "name": "config",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/cln-tls",
+                      "name": "cln-tls",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/hold-tls",
+                      "name": "hold-tls",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/runtime",
+                      "name": "runtime"
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "initContainers": [
+                {
+                  "command": [
+                    "/usr/local/lib/proofstorm-driver",
+                    "install"
+                  ],
+                  "image": "proofstorm-controller:driver-image-required",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "proofstorm-driver",
+                  "resources": {
+                    "limits": {
+                      "cpu": "200m",
+                      "memory": "128Mi"
+                    },
+                    "requests": {
+                      "cpu": "10m",
+                      "memory": "16Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    },
+                    "readOnlyRootFilesystem": true,
+                    "runAsNonRoot": true
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver"
+                    }
+                  ]
+                },
+                {
+                  "command": [
+                    "/opt/proofstorm/driver",
+                    "wait-bark-chain",
+                    "http://chain:18443",
+                    "/chain-rpc/rpc.cookie"
+                  ],
+                  "image": "bark-server:unpublished-test-fixture",
+                  "name": "wait-for-bitcoin",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/chain-rpc",
+                      "name": "config",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
+                    }
+                  ]
+                },
+                {
+                  "command": [
+                    "sh",
+                    "-ec",
+                    "# The native create command alone creates an empty database. A separate seal\n# binds that database to the retained native identity; restarts must match it.\nmode=$1\nhost=$2\nport=$3\ndatabase=$4\nexport PGCONNECT_TIMEOUT=3\nexport PGOPTIONS='-c statement_timeout=5000'\ndata=${5:-/data}\nruntime=${6:-/runtime}\nready=$data/.proofstorm-bark-server\nstarted=$data/.proofstorm-bark-server-started\nfor _attempt in $(seq 1 120); do\n    if pg_isready -q -h \"$host\" -p \"$port\" -U proofstorm -d postgres; then break; fi\n    sleep 1\ndone\npg_isready -q -h \"$host\" -p \"$port\" -U proofstorm -d postgres || exit 1\nif [ \"$mode\" = check ] && [ ! -e \"$started\" ] && [ ! -e \"$ready\" ]; then\n    exit 0\nfi\nif [ ! -f \"$ready\" ] || [ -L \"$ready\" ]; then\n    echo 'Bark initialization is incomplete; restore or explicitly reset owned state' >&2\n    exit 1\nfi\nidentity=$(cat \"$ready\")\ncase \"$identity\" in ''|*[!0-9a-f]*) exit 1 ;; esac\n[ \"${#identity}\" = 64 ] || exit 1\nif [ \"$mode\" = seal ] && [ -f \"$runtime/bark-created\" ]; then\n    psql -X -v ON_ERROR_STOP=1 -h \"$host\" -p \"$port\" -U proofstorm -d \"$database\" -q <<SQL\nBEGIN;\nCREATE SCHEMA IF NOT EXISTS proofstorm;\nCREATE TABLE IF NOT EXISTS proofstorm.identity (id integer PRIMARY KEY CHECK (id = 1), fingerprint text NOT NULL);\nINSERT INTO proofstorm.identity VALUES (1, '$identity') ON CONFLICT (id) DO NOTHING;\nCOMMIT;\nSQL\nfi\nactual=$(psql -X -v ON_ERROR_STOP=1 -h \"$host\" -p \"$port\" -U proofstorm -d \"$database\" -tAc 'SELECT fingerprint FROM proofstorm.identity WHERE id = 1')\n[ \"$actual\" = \"$identity\" ] || { echo 'Bark database does not match retained native identity' >&2; exit 1; }\n# Never let native migrations recreate an erased public schema on restart.\npsql -X -v ON_ERROR_STOP=1 -h \"$host\" -p \"$port\" -U proofstorm -d \"$database\" -tAc 'SELECT count(*) FROM public.refinery_schema_history; SELECT count(*) FROM public.wallet_changeset' >/dev/null\n",
+                    "--",
+                    "check",
+                    "postgres",
+                    "5432",
+                    "bark"
+                  ],
+                  "env": [
+                    {
+                      "name": "PGPASSWORD",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_PASSWORD",
+                          "name": "postgres-credentials"
+                        }
+                      }
+                    }
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
+                  "name": "check-bark-database",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/data",
+                      "name": "data",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/runtime",
+                      "name": "runtime",
+                      "readOnly": true
+                    }
+                  ]
+                },
+                {
+                  "command": [
+                    "/opt/proofstorm/driver",
+                    "prepare-bark-server"
+                  ],
+                  "env": [
+                    {
+                      "name": "BARK_SERVER__DATA_DIR",
+                      "value": "/data/native"
+                    },
+                    {
+                      "name": "BARK_SERVER__NETWORK",
+                      "value": "regtest"
+                    },
+                    {
+                      "name": "BARK_SERVER__RPC__PUBLIC_ADDRESS",
+                      "value": "0.0.0.0:3535"
+                    },
+                    {
+                      "name": "BARK_SERVER__RPC__ADMIN_ADDRESS",
+                      "value": "127.0.0.1:3536"
+                    },
+                    {
+                      "name": "BARK_SERVER__RPC__INTEGRATION_ADDRESS",
+                      "value": "127.0.0.1:3537"
+                    },
+                    {
+                      "name": "BARK_SERVER__BITCOIND__URL",
+                      "value": "http://chain:18443"
+                    },
+                    {
+                      "name": "BARK_SERVER__BITCOIND__COOKIE",
+                      "value": "/chain-rpc/rpc.cookie"
+                    },
+                    {
+                      "name": "BARK_SERVER__POSTGRES__HOST",
+                      "value": "postgres"
+                    },
+                    {
+                      "name": "BARK_SERVER__POSTGRES__PORT",
+                      "value": "5432"
+                    },
+                    {
+                      "name": "BARK_SERVER__POSTGRES__NAME",
+                      "value": "bark"
+                    },
+                    {
+                      "name": "BARK_SERVER__POSTGRES__USER",
+                      "value": "proofstorm"
+                    },
+                    {
+                      "name": "BARK_SERVER__CLN_ARRAY",
+                      "value": "[{\"client_cert_path\":\"/cln-tls/client.pem\",\"client_key_path\":\"/cln-tls/client-key.pem\",\"hold_invoice\":{\"client_cert_path\":\"/hold-tls/client.pem\",\"client_key_path\":\"/hold-tls/client-key.pem\",\"server_cert_path\":\"/hold-tls/ca.pem\",\"uri\":\"https://cln:9292\"},\"priority\":0,\"server_cert_path\":\"/cln-tls/ca.pem\",\"uri\":\"https://cln:9988\"}]"
+                    },
+                    {
+                      "name": "BARK_SERVER__POSTGRES__PASSWORD",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_PASSWORD",
+                          "name": "postgres-credentials"
+                        }
+                      }
+                    }
+                  ],
+                  "image": "bark-server:unpublished-test-fixture",
+                  "name": "initialize-bark-server",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/data",
+                      "name": "data"
+                    },
+                    {
+                      "mountPath": "/chain-rpc",
+                      "name": "config",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/cln-tls",
+                      "name": "cln-tls",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/hold-tls",
+                      "name": "hold-tls",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/runtime",
+                      "name": "runtime"
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
+                    }
+                  ]
+                },
+                {
+                  "command": [
+                    "sh",
+                    "-ec",
+                    "# The native create command alone creates an empty database. A separate seal\n# binds that database to the retained native identity; restarts must match it.\nmode=$1\nhost=$2\nport=$3\ndatabase=$4\nexport PGCONNECT_TIMEOUT=3\nexport PGOPTIONS='-c statement_timeout=5000'\ndata=${5:-/data}\nruntime=${6:-/runtime}\nready=$data/.proofstorm-bark-server\nstarted=$data/.proofstorm-bark-server-started\nfor _attempt in $(seq 1 120); do\n    if pg_isready -q -h \"$host\" -p \"$port\" -U proofstorm -d postgres; then break; fi\n    sleep 1\ndone\npg_isready -q -h \"$host\" -p \"$port\" -U proofstorm -d postgres || exit 1\nif [ \"$mode\" = check ] && [ ! -e \"$started\" ] && [ ! -e \"$ready\" ]; then\n    exit 0\nfi\nif [ ! -f \"$ready\" ] || [ -L \"$ready\" ]; then\n    echo 'Bark initialization is incomplete; restore or explicitly reset owned state' >&2\n    exit 1\nfi\nidentity=$(cat \"$ready\")\ncase \"$identity\" in ''|*[!0-9a-f]*) exit 1 ;; esac\n[ \"${#identity}\" = 64 ] || exit 1\nif [ \"$mode\" = seal ] && [ -f \"$runtime/bark-created\" ]; then\n    psql -X -v ON_ERROR_STOP=1 -h \"$host\" -p \"$port\" -U proofstorm -d \"$database\" -q <<SQL\nBEGIN;\nCREATE SCHEMA IF NOT EXISTS proofstorm;\nCREATE TABLE IF NOT EXISTS proofstorm.identity (id integer PRIMARY KEY CHECK (id = 1), fingerprint text NOT NULL);\nINSERT INTO proofstorm.identity VALUES (1, '$identity') ON CONFLICT (id) DO NOTHING;\nCOMMIT;\nSQL\nfi\nactual=$(psql -X -v ON_ERROR_STOP=1 -h \"$host\" -p \"$port\" -U proofstorm -d \"$database\" -tAc 'SELECT fingerprint FROM proofstorm.identity WHERE id = 1')\n[ \"$actual\" = \"$identity\" ] || { echo 'Bark database does not match retained native identity' >&2; exit 1; }\n# Never let native migrations recreate an erased public schema on restart.\npsql -X -v ON_ERROR_STOP=1 -h \"$host\" -p \"$port\" -U proofstorm -d \"$database\" -tAc 'SELECT count(*) FROM public.refinery_schema_history; SELECT count(*) FROM public.wallet_changeset' >/dev/null\n",
+                    "--",
+                    "seal",
+                    "postgres",
+                    "5432",
+                    "bark"
+                  ],
+                  "env": [
+                    {
+                      "name": "PGPASSWORD",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_PASSWORD",
+                          "name": "postgres-credentials"
+                        }
+                      }
+                    }
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
+                  "name": "seal-bark-database",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/data",
+                      "name": "data",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/runtime",
+                      "name": "runtime",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload",
+              "volumes": [
+                {
+                  "configMap": {
+                    "defaultMode": 288,
+                    "name": "ark-config"
+                  },
+                  "name": "config"
+                },
+                {
+                  "name": "cln-tls",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "ca.pem",
+                        "path": "ca.pem"
+                      },
+                      {
+                        "key": "client.pem",
+                        "path": "client.pem"
+                      },
+                      {
+                        "key": "client.key",
+                        "path": "client-key.pem"
+                      }
+                    ],
+                    "secretName": "cln-cln-tls"
+                  }
+                },
+                {
+                  "name": "hold-tls",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "ca.pem",
+                        "path": "ca.pem"
+                      },
+                      {
+                        "key": "client.pem",
+                        "path": "client.pem"
+                      },
+                      {
+                        "key": "client.key",
+                        "path": "client-key.pem"
+                      }
+                    ],
+                    "secretName": "cln-hold-tls"
+                  }
+                },
+                {
+                  "emptyDir": {
+                    "medium": "Memory"
+                  },
+                  "name": "runtime"
+                },
+                {
+                  "emptyDir": {},
+                  "name": "proofstorm-driver"
+                }
+              ]
+            }
+          },
+          "volumeClaimTemplates": [
+            {
+              "apiVersion": "v1",
+              "kind": "PersistentVolumeClaim",
+              "metadata": {
+                "labels": {
+                  "app.kubernetes.io/managed-by": "proofstormd",
+                  "proofstorm.dev/component": "ark",
+                  "proofstorm.dev/instance": "i-bark-render",
+                  "proofstorm.dev/network-identity": "ark"
+                },
+                "name": "data"
+              },
+              "spec": {
+                "accessModes": [
+                  "ReadWriteOnce"
+                ],
+                "resources": {
+                  "requests": {
+                    "storage": "1Gi"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

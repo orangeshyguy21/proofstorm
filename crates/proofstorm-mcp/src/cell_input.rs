@@ -32,6 +32,12 @@ pub enum AddLinkInput {
         to: String,
         network: BitcoinNetwork,
     },
+    ArkBackend {
+        id: String,
+        from: String,
+        to: String,
+        network: BitcoinNetwork,
+    },
     PaymentBackend {
         id: String,
         from: String,
@@ -91,6 +97,18 @@ impl TryFrom<AddLinkInput> for LinkSpec {
                 from,
                 to,
                 binding: Some(DependencyBinding::Chain { network }),
+            },
+            AddLinkInput::ArkBackend {
+                id,
+                from,
+                to,
+                network,
+            } => Self {
+                id,
+                kind: LinkKind::ArkBackend,
+                from,
+                to,
+                binding: Some(DependencyBinding::Ark { network }),
             },
             AddLinkInput::PaymentBackend {
                 id,
@@ -158,6 +176,14 @@ impl TryFrom<LinkSpec> for AddLinkInput {
             (LinkKind::LightningPeer, None) => Ok(Self::LightningPeer { id, from, to }),
             (LinkKind::ChainBackend, Some(DependencyBinding::Chain { network })) => {
                 Ok(Self::ChainBackend {
+                    id,
+                    from,
+                    to,
+                    network,
+                })
+            }
+            (LinkKind::ArkBackend, Some(DependencyBinding::Ark { network })) => {
+                Ok(Self::ArkBackend {
                     id,
                     from,
                     to,
@@ -394,6 +420,72 @@ mod tests {
         }))
         .expect("policy may be omitted");
         assert_eq!(authored.policy, CellPolicy::default());
+    }
+
+    #[test]
+    fn ark_links_preserve_their_typed_network_across_all_cell_inputs() {
+        let canonical: CellSpec = serde_json::from_str(include_str!(
+            "../../proofstorm-core/tests/fixtures/bark-topology.json"
+        ))
+        .unwrap();
+        let authored = AuthoredCellSpec {
+            api_version: canonical.api_version.clone(),
+            name: canonical.name.clone(),
+            components: canonical.components.clone(),
+            links: canonical
+                .links
+                .clone()
+                .into_iter()
+                .map(AddLinkInput::try_from)
+                .collect::<Result<_, _>>()
+                .unwrap(),
+            policy: canonical.policy.clone(),
+        };
+        let flat = serde_json::to_value(&authored).unwrap();
+        let link = flat["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|link| link["kind"] == "ark_backend")
+            .unwrap();
+        assert_eq!(link["network"], "regtest");
+        assert!(link.get("binding").is_none());
+        let dir = tempfile::tempdir().unwrap();
+        for value in [flat, serde_json::to_value(&canonical).unwrap()] {
+            for input in [value.clone(), serde_json::Value::String(value.to_string())] {
+                let imported =
+                    CellSpec::try_from(serde_json::from_value::<CellInput>(input).unwrap())
+                        .unwrap();
+                assert_eq!(imported, canonical);
+                assert!(proofstorm_core::validate_cell(&imported).valid);
+            }
+            std::fs::write(dir.path().join("ark.json"), value.to_string()).unwrap();
+            assert_eq!(
+                CellSpec::try_from(read_cell_file(dir.path(), "ark.json").unwrap()).unwrap(),
+                canonical
+            );
+        }
+    }
+
+    #[test]
+    fn ark_links_refuse_missing_network_and_mixed_binding_fields() {
+        for value in [
+            serde_json::json!({"kind":"ark_backend","id":"ark","from":"processor","to":"server"}),
+            serde_json::json!({"kind":"ark_backend","id":"ark","from":"processor","to":"server","network":"mainnet"}),
+            serde_json::json!({"kind":"ark_backend","id":"ark","from":"processor","to":"server","network":"regtest","method":"bolt11"}),
+        ] {
+            assert!(serde_json::from_value::<AddLinkInput>(value).is_err());
+        }
+        let link = LinkSpec {
+            id: "ark".into(),
+            kind: LinkKind::ArkBackend,
+            from: "processor".into(),
+            to: "server".into(),
+            binding: Some(DependencyBinding::Chain {
+                network: BitcoinNetwork::Regtest,
+            }),
+        };
+        assert!(AddLinkInput::try_from(link).is_err());
     }
 
     #[test]

@@ -61,7 +61,10 @@ just catalog-image publish "$scratch/wallet" \
 Select `linux/amd64` or `linux/arm64` explicitly. Buildx must support that platform
 and the host must be able to execute its native probes (directly or by emulation).
 Available recipes: `bitcoin-core`, `cdk-mint`, `nutshell-mint`, `cdk-cli-wallet`,
-`cocod-wallet`, `ldk-server`, and `cdk-ldk-server-processor`. The `cdk-mint` image serves all
+`cocod-wallet`, `ldk-server`, `cdk-ldk-server-processor`, `cdk-bark-processor`,
+`bark-server`, and `cln-hold`. Bark remains a local preview; its separate
+[native candidate build workflow](payment/BARK.md#native-candidate-image-handoff)
+retains images for later managed qualification. The `cdk-mint` image serves all
 three CDK mint presets; backend and storage configuration choose what runs.
 Historical standard-image receipts remain readable. Controller builds remain in the existing
 [`release-controller-*` flow](../scripts/RELEASING.md).
@@ -72,6 +75,15 @@ also checked against its recorded hash. A probe proves executable startup, not
 cell behavior; run the affected acceptance gates before changing the catalog.
 Bitcoin/wallet probes require the recipe's non-root user; mint wrappers retain
 their upstream user. Cross-architecture emulation is not native-host acceptance.
+
+After restoring a saved build's source/receipt and loading its exact image, use
+`just catalog-image verify-local "$scratch/wallet"` to recheck the recorded image
+ID, source label, architecture and offline probe. This command requires a build
+receipt; registry-copy receipts use their existing registry verification path.
+It neither rebuilds nor publishes, and it works without the temporary upload tag.
+For a later explicitly authorized `publish`, restore that receipt's upload tag
+from its verified local image ID first. Publication still has its separate
+namespace confirmation and anonymous manifest/layer checks.
 
 To copy an existing reviewed image instead of rebuilding it:
 

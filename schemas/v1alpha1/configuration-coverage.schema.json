@@ -168,6 +168,7 @@
       "enum": [
         "bitcoin",
         "lightning",
+        "ark_server",
         "payment_processor",
         "mint",
         "database",
@@ -268,6 +269,7 @@
         "bitcoin_peer",
         "lightning_peer",
         "chain_backend",
+        "ark_backend",
         "payment_backend",
         "database_backend",
         "authentication_backend",

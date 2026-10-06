@@ -40,8 +40,16 @@ use crate::images::PROBE_IMAGE as PROBER_IMAGE;
 
 type ComponentRenderer = fn(&ComponentPlanContract) -> Result<RenderedComponent, AdapterError>;
 
+#[path = "bark_adapter.rs"]
+mod bark;
+#[path = "bark_stack_adapter.rs"]
+mod bark_stack;
+pub use bark_stack::{
+    render_cln_hold as render_cln_hold_component, render_server as render_bark_server_component,
+};
 #[path = "processor_adapter.rs"]
 mod processor;
+pub use bark::render_processor as render_bark_processor_component;
 pub use processor::{
     render_node as render_ldk_server_component,
     render_processor as render_ldk_server_processor_component,
@@ -58,6 +66,9 @@ static COMPONENT_RENDERERS: LazyLock<BTreeMap<&'static str, ComponentRenderer>> 
             ("lnd", render_lnd_component),
             ("ldk-server", processor::render_node),
             ("cdk-ldk-server-processor", processor::render_processor),
+            ("cdk-bark-processor", bark::render_processor),
+            ("bark-server", bark_stack::render_server),
+            ("cln-hold", bark_stack::render_cln_hold),
             ("nutshell", render_nutshell_mint_component),
             ("nutshell-wallet", render_wallet_component),
             ("cdk-cli-wallet", render_cdk_wallet_component),
@@ -2541,14 +2552,23 @@ pub fn render_nutshell_mint_component(
 }
 
 fn install_component_driver(rendered: &mut RenderedComponent) -> Result<(), AdapterError> {
-    for deployment in &mut rendered.deployments {
-        if let Some(pod) = deployment
-            .spec
-            .as_mut()
-            .and_then(|spec| spec.template.spec.as_mut())
-        {
-            crate::drivers::install(pod)?;
-        }
+    let pods = rendered
+        .deployments
+        .iter_mut()
+        .filter_map(|workload| {
+            workload
+                .spec
+                .as_mut()
+                .and_then(|spec| spec.template.spec.as_mut())
+        })
+        .chain(rendered.stateful_sets.iter_mut().filter_map(|workload| {
+            workload
+                .spec
+                .as_mut()
+                .and_then(|spec| spec.template.spec.as_mut())
+        }));
+    for pod in pods {
+        crate::drivers::install(pod)?;
     }
     Ok(())
 }
@@ -3629,7 +3649,11 @@ pub fn component_ports(component: &ComponentSpec) -> BTreeMap<String, u16> {
     }
     if matches!(
         component.implementation.as_str(),
-        "ldk-server" | "cdk-ldk-server-processor"
+        "ldk-server"
+            | "cdk-ldk-server-processor"
+            | "cdk-bark-processor"
+            | "bark-server"
+            | "cln-hold"
     ) {
         return default_backend_registry()
             .require(&component.implementation)

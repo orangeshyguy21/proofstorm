@@ -1617,8 +1617,18 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
             .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"))
             .map(String::as_str);
         match secret_kind {
+            Some("bark-processor") => {
+                let claims =
+                    Api::<PersistentVolumeClaim>::namespaced(client.clone(), &namespace_name);
+                generated_secrets::ensure_bark(&secrets, &claims, resource).await?;
+            }
             Some("mint-management-tls" | "payment-processor-tls") => {
                 management_tls::ensure(&secrets, resource).await?;
+            }
+            Some("bark-cln-tls" | "bark-hold-tls") => {
+                let claims: Api<PersistentVolumeClaim> =
+                    Api::namespaced(client.clone(), &namespace_name);
+                management_tls::ensure_bark(&secrets, &claims, resource).await?;
             }
             _ => generated_secrets::ensure(&secrets, resource).await?,
         }

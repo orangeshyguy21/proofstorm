@@ -1,0 +1,16 @@
+{
+  "repository": "https://gitlab.com/ark-bitcoin/bark",
+  "commit_sha": "6188e2d809f193716b2e571274179f069d9c19ca",
+  "artifact_url": "https://gitlab.com/ark-bitcoin/bark/-/archive/6188e2d809f193716b2e571274179f069d9c19ca/bark-6188e2d809f193716b2e571274179f069d9c19ca.tar.gz",
+  "artifact_sha256": "896b36b7c5e5b1b1cd927b6a3aa3121b69284d596db239704656454c4316b7c8",
+  "platform": "linux/amd64,linux/arm64",
+  "runtime_image": "docker.io/library/debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+  "recipe_digest": "sha256:24c92123e81a0404c18280b191b9b989be43c7ca3ef3c05cb573f7f5d36aa37d",
+  "package_path": "server",
+  "dependency_lock_digest": "sha256:0b604ecbabf7af73dd5265f1c90a2321900730de21b208d6496bc14616a88ff8",
+  "build_image": "docker.io/library/rust@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e",
+  "transformations": [
+    "Build the pinned captaind source with its unchanged Cargo.lock, one Cargo job, release LTO disabled and optimization level 1; no application source patches.",
+    "Set SERVER_VERSION=0.7.0-dev and GIT_HASH to the full source revision; retain the native configuration template and license."
+  ]
+}

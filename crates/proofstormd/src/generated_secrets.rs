@@ -8,6 +8,9 @@ use crate::Error;
 
 type GenerateData = fn(&Secret) -> Result<BTreeMap<String, String>, Error>;
 
+mod bark;
+pub(super) use bark::ensure as ensure_bark;
+
 pub(super) async fn ensure(secrets: &Api<Secret>, template: &Secret) -> Result<(), Error> {
     let kind = template
         .string_data
@@ -15,6 +18,11 @@ pub(super) async fn ensure(secrets: &Api<Secret>, template: &Secret) -> Result<(
         .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"))
         .map(String::as_str);
     let (required, generate): (&[&str], GenerateData) = match kind {
+        Some("bark-processor") => {
+            return Err(Error::SecretContract(
+                "Bark identity requires the owned-storage provisioning guard".into(),
+            ));
+        }
         Some("cdk-mint") => (
             &[
                 "PROOFSTORM_SECRET_KIND",

@@ -15,6 +15,8 @@ use crate::{
     PaymentMethod, default_backend_registry,
 };
 
+#[path = "bark_catalog.rs"]
+mod bark;
 #[path = "processor_catalog.rs"]
 mod processor;
 
@@ -305,9 +307,33 @@ impl CatalogResponse {
 /// Panics when a built-in entry violates a catalog invariant. This indicates a
 /// programmer error caught by the catalog contract tests.
 pub fn default_catalog() -> &'static CatalogResponse {
-    static CATALOG: std::sync::LazyLock<CatalogResponse> =
-        std::sync::LazyLock::new(|| build_default_catalog(crate::wallet_builds::LINUX_AMD64));
+    static CATALOG: std::sync::LazyLock<CatalogResponse> = std::sync::LazyLock::new(|| {
+        build_catalog(crate::wallet_builds::LINUX_AMD64, CatalogScope::Runtime)
+    });
     &CATALOG
+}
+
+/// Catalog of distributable images and their support contracts, excluding local previews.
+/// Installation prefetch and ordinary qualification use this scope. Runtime resolution
+/// continues to use [`default_catalog`] so explicitly seeded previews remain available.
+///
+/// # Panics
+/// Panics if a built-in entry violates a catalog invariant.
+#[must_use]
+pub fn distributed_catalog() -> &'static CatalogResponse {
+    static CATALOG: std::sync::LazyLock<CatalogResponse> = std::sync::LazyLock::new(|| {
+        build_catalog(
+            crate::wallet_builds::LINUX_AMD64,
+            CatalogScope::Distribution,
+        )
+    });
+    &CATALOG
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CatalogScope {
+    Runtime,
+    Distribution,
 }
 
 /// Container platform used to select published wallet images and provenance.
@@ -352,14 +378,31 @@ pub fn catalog_image_source(image: &str) -> Result<String, String> {
 /// Panics if a built-in entry violates a catalog invariant.
 #[must_use]
 pub fn catalog_for_platform(platform: CatalogPlatform) -> CatalogResponse {
-    build_default_catalog(platform == CatalogPlatform::LinuxAmd64)
+    build_catalog(
+        platform == CatalogPlatform::LinuxAmd64,
+        CatalogScope::Runtime,
+    )
+}
+
+/// Distributable catalog for an explicit platform, independent of the build host.
+/// Local preview entries and their additions to other entries' support contracts
+/// are excluded together; experimental but distributed components remain included.
+///
+/// # Panics
+/// Panics if a built-in entry violates a catalog invariant.
+#[must_use]
+pub fn distributed_catalog_for_platform(platform: CatalogPlatform) -> CatalogResponse {
+    build_catalog(
+        platform == CatalogPlatform::LinuxAmd64,
+        CatalogScope::Distribution,
+    )
 }
 
 #[allow(
     clippy::too_many_lines,
     reason = "the default catalog deliberately declares every support-contract field inline"
 )]
-fn build_default_catalog(amd64: bool) -> CatalogResponse {
+fn build_catalog(amd64: bool, scope: CatalogScope) -> CatalogResponse {
     let adapter_version = "0.1.0-alpha.1";
     let backends = default_backend_registry();
     let mut entries = vec![
@@ -747,6 +790,9 @@ fn build_default_catalog(amd64: bool) -> CatalogResponse {
     }
     promote_component_releases(&mut entries, amd64);
     processor::extend(&mut entries, amd64, backends, adapter_version);
+    if scope == CatalogScope::Runtime {
+        bark::extend(&mut entries, amd64, backends, adapter_version);
+    }
     CatalogResponse::try_new(entries).expect("default catalog support contracts are valid")
 }
 
@@ -1410,6 +1456,9 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
     if let Some(endpoints) = processor::endpoints(implementation) {
         return endpoints;
     }
+    if let Some(endpoints) = bark::endpoints(implementation) {
+        return endpoints;
+    }
     let mut endpoints = match implementation {
         "bitcoin-core" => vec![runtime_endpoint(
             "component",
@@ -2010,9 +2059,9 @@ mod tests {
         reason = "one catalog invariant test keeps all fail-closed variants together"
     )]
     fn catalog_support_summary_is_exact_and_invariants_fail_closed() {
-        let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 18);
-        assert_eq!(catalog.implementations.len(), 14);
+        let catalog = catalog_for_platform(CatalogPlatform::LinuxArm64);
+        assert_eq!(catalog.entries.len(), 21);
+        assert_eq!(catalog.implementations.len(), 17);
         let lnd = catalog
             .implementations
             .iter()
@@ -2027,7 +2076,12 @@ mod tests {
         assert!(catalog.implementations.iter().all(|support| {
             matches!(
                 support.implementation.as_str(),
-                "cocod-wallet" | "ldk-server" | "cdk-ldk-server-processor"
+                "cocod-wallet"
+                    | "ldk-server"
+                    | "cdk-ldk-server-processor"
+                    | "bark-server"
+                    | "cln-hold"
+                    | "cdk-bark-processor"
             ) || support.implementation == "lnd"
                 || matches!(
                     support.implementation.as_str(),

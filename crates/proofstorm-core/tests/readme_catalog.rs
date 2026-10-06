@@ -20,11 +20,14 @@ fn readme_lists_every_catalog_component() {
         let id = cells[2].trim_matches('`').to_owned();
         assert!(actual.insert(id), "duplicate README component row");
     }
-    let expected: BTreeSet<_> = proofstorm_core::default_catalog()
-        .entries
-        .iter()
-        .map(|entry| entry.id.clone())
-        .collect();
+    let expected: BTreeSet<_> = [
+        proofstorm_core::CatalogPlatform::LinuxArm64,
+        proofstorm_core::CatalogPlatform::LinuxAmd64,
+    ]
+    .into_iter()
+    .flat_map(|platform| proofstorm_core::catalog_for_platform(platform).entries)
+    .map(|entry| entry.id)
+    .collect();
     assert_eq!(
         actual, expected,
         "update the README component matrix alongside the catalog"

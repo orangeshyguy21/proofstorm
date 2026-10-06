@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/cashubtc/cdk-payment-processors",
+  "commit_sha": "fe468cad486157683eddbc0df4ff87ba71b6c0a3",
+  "artifact_url": "https://codeload.github.com/cashubtc/cdk-payment-processors/tar.gz/fe468cad486157683eddbc0df4ff87ba71b6c0a3",
+  "artifact_sha256": "236d4caa1c1e1643ba8b9f40c7af4c478f1afddf09be86520317a5951e4073e9",
+  "platform": "linux/amd64,linux/arm64",
+  "runtime_image": "docker.io/library/debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+  "recipe_digest": "sha256:750bdd1cfa881dbc43a915fa1468f07cdc589a1a2e8a6986f3abca7f7ad4e8e4",
+  "package_path": "crates/bark",
+  "dependency_lock_digest": "sha256:b68c8b98aaf7399f97e45062f2f291b50ae381754387b6c87a54ea6affd06691",
+  "build_image": "docker.io/library/rust@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e",
+  "transformations": [
+    "Apply docker/payment/patches/bark-regtest-rpc.patch (sha256:abc3f967d754cdf5e484bf434ef52fa216dfb37cdcbb8fd896477e5c7b40321c) with zero fuzz; retain the upstream Cargo.lock. This adds native Bitcoin RPC settings for isolated regtest.",
+    "Test and build the patched processor with locked dependencies, one Cargo job, release LTO disabled and optimization level 1. Record source and patch identities in the image."
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "api_version": "proofstorm/v1alpha1",
+  "name": "bark-topology-contract",
+  "components": [
+    {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
+    {"id":"postgres","kind":"database","implementation":"postgresql","version":"17.11","config_version":"postgresql/17/v1","control":"cell","config":{}},
+    {"id":"cln","kind":"lightning","implementation":"cln-hold","version":"26.06.7-hold.0.3.3","config_version":"cln-hold/26.06/v1","control":"cell","config":{}},
+    {"id":"ark","kind":"ark_server","implementation":"bark-server","version":"0.7.0-6188e2d","config_version":"bark-server/0.7/v1","control":"cell","config":{}},
+    {"id":"processor","kind":"payment_processor","implementation":"cdk-bark-processor","version":"0.1.0-fe468ca","config_version":"cdk-bark-processor/0.1/v1","control":"target","config":{}},
+    {"id":"mint","kind":"mint","implementation":"cdk","version":"0.18.1","config_version":"cdk-mintd/0.18/v1","control":"target","config":{}}
+  ],
+  "links": [
+    {"id":"cln-chain","kind":"chain_backend","from":"cln","to":"chain","binding":{"type":"chain","network":"regtest"}},
+    {"id":"ark-chain","kind":"chain_backend","from":"ark","to":"chain","binding":{"type":"chain","network":"regtest"}},
+    {"id":"ark-database","kind":"database_backend","from":"ark","to":"postgres","binding":{"type":"database","role":"primary","database":"bark"}},
+    {"id":"ark-lightning","kind":"payment_backend","from":"ark","to":"cln","binding":{"type":"payment","method":"bolt11","unit":"sat"}},
+    {"id":"processor-chain","kind":"chain_backend","from":"processor","to":"chain","binding":{"type":"chain","network":"regtest"}},
+    {"id":"processor-ark","kind":"ark_backend","from":"processor","to":"ark","binding":{"type":"ark","network":"regtest"}},
+    {"id":"mint-bolt11","kind":"payment_backend","from":"mint","to":"processor","binding":{"type":"payment","method":"bolt11","unit":"sat"}}
+  ]
+}

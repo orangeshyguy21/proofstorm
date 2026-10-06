@@ -117,10 +117,12 @@ mod tests {
         reason = "one coverage contract compares the complete support and ownership declarations"
     )]
     fn manifest_maps_exact_support_and_field_ownership() {
-        let manifest =
-            configuration_coverage_manifest(default_catalog(), default_backend_registry())
-                .expect("coverage manifest");
-        assert_eq!(manifest.entries.len(), 18);
+        let manifest = configuration_coverage_manifest(
+            &crate::catalog_for_platform(crate::CatalogPlatform::LinuxArm64),
+            default_backend_registry(),
+        )
+        .expect("coverage manifest");
+        assert_eq!(manifest.entries.len(), 21);
         let cdk = manifest
             .entries
             .iter()
@@ -148,7 +150,8 @@ mod tests {
                 "cln".into(),
                 "ldk-node".into(),
                 "lnd".into(),
-                "cdk-ldk-server-processor".into()
+                "cdk-ldk-server-processor".into(),
+                "cdk-bark-processor".into()
             ]
             .into()
         );
@@ -159,7 +162,16 @@ mod tests {
             .iter()
             .map(|binding| binding.backend.implementation.as_str())
             .collect::<BTreeSet<_>>();
-        assert_eq!(payments, ["cln", "lnd", "cdk-ldk-server-processor"].into());
+        assert_eq!(
+            payments,
+            [
+                "cln",
+                "lnd",
+                "cdk-ldk-server-processor",
+                "cdk-bark-processor"
+            ]
+            .into()
+        );
         assert_eq!(
             cdk.support.authentication,
             [

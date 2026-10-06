@@ -2855,6 +2855,7 @@ dependencies = [
  "proofstorm-kube",
  "proofstorm-qualification",
  "proofstorm-store",
+ "prost",
  "rcgen",
  "rusqlite",
  "semver",
@@ -2863,7 +2864,10 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "toml_edit",
+ "tonic",
+ "tonic-prost",
 ]
 
 [[package]]
@@ -2921,6 +2925,7 @@ version = "0.1.0-alpha.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "bip39",
  "cashu",
  "proofstorm-core",
  "prost",

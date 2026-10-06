@@ -11,6 +11,7 @@ usage() {
     '       just catalog-image build RECIPE@VERSION linux/amd64|linux/arm64 NEW_EXTERNAL_WORK' \
     '       just catalog-image prepare-copy PINNED_SOURCE PLATFORM NEW_EXTERNAL_WORK' \
     '       just catalog-image publish WORK --confirm-namespace ghcr.io/orangeshyguy21/proofstorm' \
+    '       just catalog-image verify-local WORK' \
     '       just catalog-image verify-work WORK' \
     '       just catalog-image verify PUBLISHED_IMAGE PLATFORM NEW_REPORT'
 }
@@ -19,7 +20,7 @@ case "$mode" in
   list|audit) [[ $# == 0 ]] || exit 2 ;;
   build|prepare-copy|verify) [[ $# == 3 ]] || { usage >&2; exit 2; } ;;
   publish) [[ $# == 3 && "$2" == --confirm-namespace && "$3" == ghcr.io/orangeshyguy21/proofstorm ]] || { usage >&2; exit 2; } ;;
-  verify-work) [[ $# == 1 ]] || exit 2 ;;
+  verify-local|verify-work) [[ $# == 1 ]] || exit 2 ;;
   *) usage >&2; exit 2 ;;
 esac
 for variable in "${!PROOFSTORM_@}" "${!K3D_@}"; do [[ -z "$variable" ]] || unset "$variable"; done
@@ -48,6 +49,9 @@ fields() {
   kind=${plan[0]} tag=${plan[1]} platform=${plan[2]} source=${plan[3]}
 }
 fields
+if [[ "$mode" == verify-local ]]; then
+  [[ "$kind" == build && "$source" == sha256:* ]] || { echo 'Local verification requires a previously verified build' >&2; exit 1; }
+fi
 if [[ "$mode" == build ]]; then
   stage='image build'
   args=(buildx build --platform "$platform" --provenance=false --load --file "${plan[4]}" --tag "$tag" --label "dev.proofstorm.source-sha256=${plan[8]}")
@@ -57,14 +61,16 @@ if [[ "$mode" == build ]]; then
 fi
 if [[ "$kind" == build && "$mode" != verify-work ]]; then
   stage='immutable image identity and offline native probes'
-  "$helper" release-run 30 docker image inspect "$tag" > "$work/inspect.json"
+  inspect_ref=$tag
+  [[ "$mode" != verify-local ]] || inspect_ref=$source
+  "$helper" release-run 30 docker image inspect "$inspect_ref" > "$work/inspect.json"
   image_id=$("$helper" catalog-image inspect "$work")
   "$helper" release-run 60 docker run --rm --platform "$platform" --network none --read-only --cap-drop ALL \
     --security-opt no-new-privileges --memory 256m --cpus 1 --pids-limit 128 --entrypoint sh "$image_id" -ec "${plan[7]}" > "$work/probe.stdout"
   "$helper" catalog-image local "$work"
   fields
 fi
-if [[ "$mode" == build ]]; then printf 'Image verified; nothing published. Receipt: %s/image.json\n' "$work"; exit 0; fi
+if [[ "$mode" == build || "$mode" == verify-local ]]; then printf 'Image verified; nothing published. Receipt: %s/image.json\n' "$work"; exit 0; fi
 if [[ "$mode" == publish ]]; then
   stage='publication authorization and preflight'
   "$helper" catalog-image authorize "$work" "$3"

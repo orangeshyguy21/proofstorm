@@ -48,6 +48,9 @@ struct Arguments {
     /// Explicit loopback registry restored from this qualification run's image bundle.
     #[arg(long)]
     qualification_image_cache: Option<String>,
+    /// Explicit cache of host tools; every executable must match the bootstrap pins.
+    #[arg(long)]
+    bootstrap_tool_cache: Option<PathBuf>,
     /// Verified checkout artifact source. Its runtime is never used or modified.
     #[arg(long, conflicts_with = "bundle")]
     checkout_home: Option<PathBuf>,
@@ -114,6 +117,7 @@ async fn main() -> Result<()> {
         benchmark_claude_auth: args.benchmark_claude_auth,
         qualification: args.qualification_plan.zip(args.qualification_case),
         qualification_image_cache: args.qualification_image_cache,
+        bootstrap_tool_cache: args.bootstrap_tool_cache,
         checkout_home: args.checkout_home,
         bundle: args.bundle,
         allow_development: args.allow_development,

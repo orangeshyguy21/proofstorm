@@ -143,8 +143,10 @@ fn checked_in_crds_match_typed_contracts() {
     for (name, generated) in cases {
         if name == "proofstorm.dev_proofstormcells.yaml" {
             assert!(generated.contains("x-kubernetes-validations:"));
-            assert!(generated.contains("chain bindings require only network"));
+            assert!(generated.contains("chain and Ark bindings require only network"));
             assert!(generated.contains("backend links require a binding"));
+            assert!(generated.contains("backend link kind must match its binding type"));
+            assert!(generated.contains("ark_backend"));
         }
         let checked_in = fs::read_to_string(root.join("charts/proofstorm/crds").join(name))
             .unwrap_or_else(|error| panic!("read checked-in {name}: {error}"));
