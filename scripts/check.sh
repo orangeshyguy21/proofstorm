@@ -41,6 +41,7 @@ check_fmt() {
   bash scripts/test-install.sh
   bash scripts/test-cdk-config.sh
   bash scripts/test-bark-image-build.sh
+  bash scripts/test-bark-qualification.sh
   bash scripts/test-controller-cache.sh
   printf '\nChecking Rust formatting\n'
   cargo fmt --all -- --check
@@ -76,6 +77,7 @@ check_shell() {
   shellcheck scripts/test-controller-cache.sh
   shellcheck scripts/catalog-image.sh scripts/test-catalog-image.sh
   shellcheck --external-sources scripts/bark-image-build.sh scripts/test-bark-image-build.sh
+  shellcheck --external-sources scripts/bark-qualification.sh scripts/test-bark-qualification.sh
   shellcheck --external-sources scripts/ci-macos-bundle.sh scripts/test-ci-macos-bundle.sh scripts/macos-install-smoke.sh scripts/macos-install-check.sh
   shellcheck --external-sources scripts/acceptance.sh
   shellcheck scripts/test-workflow-surface.sh

@@ -1,0 +1,7 @@
+{
+  "linux/arm64": {
+    "processor": "proofstorm-registry.localhost:5000/cdk-bark-processor@sha256:e88451c42bba9d1a719297934c05cfc7d71ae28d1b53a699f0f286a16eb55d63",
+    "server": "proofstorm-registry.localhost:5000/bark-server@sha256:fe228ec2ba929411fc6517dbd95ac7c70b5c0f69d7e02157868f0a02fe2080c0",
+    "cln": "proofstorm-registry.localhost:5000/cln-hold@sha256:d89a5ced1cf893666e97cea63d837e07871ef4bd53544d98e6b614d292861498"
+  }
+}
