@@ -6,6 +6,7 @@ use crate::{
 };
 use leptos::prelude::*;
 use proofstorm_view::{EnvironmentCell, SystemView};
+use std::collections::BTreeSet;
 
 #[component]
 pub fn CellPanel(
@@ -20,7 +21,7 @@ pub fn CellPanel(
     provide_context(crate::inspector::InspectorExpansion {
         selected: selected_component,
         cell,
-        open: RwSignal::new(Default::default()),
+        open: RwSignal::new(BTreeSet::new()),
     });
     view! {
         <Show when=move || cell.get().is_some()>

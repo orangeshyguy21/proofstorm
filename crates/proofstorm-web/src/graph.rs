@@ -61,7 +61,7 @@ pub fn Graph(
         let (mut left, mut top, width, height) = canvas_model::bounds(&items, &p);
         let mut right = left + width;
         let mut bottom = top + height;
-        for edge in relationships.get_untracked().iter() {
+        for edge in &relationships.get_untracked() {
             if let Some((from, to)) = items
                 .iter()
                 .find(|n| n.id == edge.from)
@@ -164,6 +164,7 @@ pub fn Graph(
     view! {
         <div class="graph" class:dragging=move ||drag.get().is_some()>
             <svg viewBox=move ||{let (x,y,w,h)=camera.get();format!("{x} {y} {w} {h}")} aria-label="Cell component topology" role="group"
+                {..crate::canvas_input::handlers(zoom, pan, camera, interacted, dragging)}
                 on:pointerdown=move |event| {
                     if event.button()!=0{return;}
                     interacted.set(true);
@@ -210,9 +211,9 @@ pub fn Graph(
                     } />
                 </g>
             </svg>
-            <div class="graph-toolbar"><button aria-label="Zoom out" on:click=move |_|{interacted.set(true);zoom.update(|z|*z=(*z/1.2).max(0.15));}>"−"</button><span>{move ||format!("{:.0}%",zoom.get()*100.0)}</span><button aria-label="Zoom in" on:click=move |_|{interacted.set(true);zoom.update(|z|*z=(*z*1.2).min(6.0));}>"+"</button><button on:click=move |_|fit()>"Fit to cell"</button><button on:click=move |_|{let mut next=Positions::new();canvas_model::ensure_positions(&nodes.get_untracked(),&mut next);positions.set(next);fit();save();}>"Reset layout"</button></div>
+            <div class="graph-toolbar"><button aria-label="Zoom out" on:click=move |_|{interacted.set(true);zoom.update(|z|*z=(*z/1.2).max(crate::canvas_navigation::MIN_ZOOM));}>"−"</button><span>{move ||format!("{:.0}%",zoom.get()*100.0)}</span><button aria-label="Zoom in" on:click=move |_|{interacted.set(true);zoom.update(|z|*z=(*z*1.2).min(crate::canvas_navigation::MAX_ZOOM));}>"+"</button><button on:click=move |_|fit()>"Fit to cell"</button><button on:click=move |_|{let mut next=Positions::new();canvas_model::ensure_positions(&nodes.get_untracked(),&mut next);positions.set(next);fit();save();}>"Reset layout"</button></div>
             <Show when=move ||save_error.get()><div class="layout-notice" role="status">"Layout could not be saved in this browser."</div></Show>
-            <div class="graph-legend"><span>"Drag to arrange · arrow keys to move selected items"</span></div>
+            <div class="graph-legend"><span>"Pinch to zoom · scroll to pan · drag or arrow keys to arrange"</span></div>
         </div>
     }
 }

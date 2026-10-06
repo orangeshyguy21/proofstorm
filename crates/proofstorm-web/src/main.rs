@@ -1,6 +1,9 @@
 #[cfg(target_arch = "wasm32")]
 mod app;
+#[cfg(target_arch = "wasm32")]
+mod canvas_input;
 mod canvas_model;
+mod canvas_navigation;
 #[cfg(target_arch = "wasm32")]
 mod catalog;
 #[cfg(target_arch = "wasm32")]

@@ -34,7 +34,7 @@ pub fn provide_connections() {
             if let Some((source, _, _)) = stream {
                 source.close();
             }
-        })
+        });
     });
     spawn_local(async move {
         let Ok(response) = Request::get("/v1/gui/context").send().await else {
