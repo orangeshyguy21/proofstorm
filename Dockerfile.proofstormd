@@ -11,6 +11,9 @@ COPY docker/bitcoin/*-provenance.json ./docker/bitcoin/
 COPY docker/payment/*-provenance.json ./docker/payment/
 RUN --mount=type=cache,id=proofstorm-native-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=proofstorm-native-target-${TARGETARCH},target=/src/target,sharing=locked \
+    # Restored snapshots can predate cached artifacts. Rebuild workspace crates;
+    # keep third-party dependencies cached without trusting source mtimes.
+    cargo clean --release -p proofstorm-core -p proofstorm-exec -p proofstorm-driver && \
     cargo build --locked --release -p proofstorm-exec -p proofstorm-driver && \
     cp target/release/proofstorm-exec /proofstorm-exec && \
     cp target/release/proofstorm-driver /proofstorm-driver
@@ -18,11 +21,13 @@ RUN --mount=type=cache,id=proofstorm-native-registry-${TARGETARCH},target=/usr/l
 FROM native AS native-contracts
 RUN --mount=type=cache,id=proofstorm-native-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=proofstorm-native-target-${TARGETARCH},target=/src/target,sharing=locked \
+    cargo clean --release -p proofstorm-core -p proofstorm-exec -p proofstorm-driver && \
     cargo test --locked --release -p proofstorm-exec --features contract-tests
 
 FROM native AS driver-contracts
 RUN --mount=type=cache,id=proofstorm-native-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=proofstorm-native-target-${TARGETARCH},target=/src/target,sharing=locked \
+    cargo clean --release -p proofstorm-core -p proofstorm-exec -p proofstorm-driver && \
     cargo test --locked --release -p proofstorm-driver
 
 FROM rust:1.88.0-bookworm AS build
@@ -38,6 +43,9 @@ COPY docker/bitcoin/*-provenance.json ./docker/bitcoin/
 COPY docker/payment/*-provenance.json ./docker/payment/
 RUN --mount=type=cache,id=proofstorm-controller-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=proofstorm-controller-target-${TARGETARCH},target=/src/target,sharing=locked \
+    # Include every runtime workspace crate, including transitive dependencies.
+    cargo clean --release -p proofstorm-core -p proofstorm-kube -p proofstorm-transfer \
+        -p proofstorm-exec -p proofstorm-driver -p proofstorm-prober -p proofstormd && \
     PROOFSTORM_CONTROLLER_SOURCE_SHA256=$PROOFSTORM_CONTROLLER_SOURCE_SHA256 cargo build --locked --release -p proofstormd -p proofstorm-prober --features proofstorm-prober/runtime && \
     cp target/release/proofstormd /proofstormd && \
     cp target/release/proofstorm-prober /proofstorm-prober
