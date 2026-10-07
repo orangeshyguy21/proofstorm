@@ -1,59 +1,70 @@
-//! Local preview contracts must not become ordinary distribution obligations.
+//! Distributed Bark pins must retain their verified native publication lineage.
 use proofstorm_core::{
-    CatalogPlatform, SupportLifecycle, catalog_for_platform, distributed_catalog_for_platform,
+    CatalogPlatform, PaymentMethod, SupportLifecycle, catalog_for_platform, catalog_image_source,
+    distributed_catalog_for_platform,
     processor_ids::{BARK_PROCESSOR, BARK_SERVER, CLN_HOLD},
 };
 
 #[test]
-fn distribution_excludes_preview_entries_and_bindings_but_keeps_shipped_experiments() {
-    let previews = [BARK_PROCESSOR, BARK_SERVER, CLN_HOLD];
-    for platform in [CatalogPlatform::LinuxArm64, CatalogPlatform::LinuxAmd64] {
+fn both_catalogs_distribute_verified_bark_images_with_experimental_contracts() {
+    let publication: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../docker/payment/bark-publication.json"
+    ))
+    .unwrap();
+    let images = publication["images"].as_array().unwrap();
+    assert_eq!(images.len(), 6);
+    for (platform, name) in [
+        (CatalogPlatform::LinuxArm64, "linux/arm64"),
+        (CatalogPlatform::LinuxAmd64, "linux/amd64"),
+    ] {
         let runtime = catalog_for_platform(platform);
         let distributed = distributed_catalog_for_platform(platform);
-        for entry in &distributed.entries {
-            assert!(!previews.contains(&entry.id.as_str()));
-            assert!(
-                entry
-                    .compatible_dependencies
-                    .iter()
-                    .all(|dependency| !previews.contains(&dependency.implementation.as_str()))
-            );
-            assert!(
-                entry
-                    .support_matrix
-                    .payment_backends
-                    .iter()
-                    .all(|backend| !previews.contains(&backend.as_str()))
-            );
-            assert!(
-                entry
-                    .support_matrix
-                    .payment_bindings
-                    .iter()
-                    .all(|binding| !previews.contains(&binding.backend.implementation.as_str()))
-            );
-            let live = runtime
+        assert_eq!(runtime, distributed);
+        for id in [BARK_PROCESSOR, BARK_SERVER, CLN_HOLD] {
+            let entry = distributed
                 .entries
                 .iter()
-                .find(|live| live.id == entry.id && live.version == entry.version)
+                .find(|entry| entry.id == id)
                 .unwrap();
-            // The preview only extends CDK's contract; it never substitutes published images.
-            assert_eq!(entry.image, live.image);
-            if platform == CatalogPlatform::LinuxAmd64 || entry.id != "cdk" {
-                assert_eq!(entry, live);
-            }
-        }
-        for id in ["ldk-server", "cdk-ldk-server-processor"] {
-            assert!(
-                distributed.entries.iter().any(|entry| entry.id == id
-                    && entry.support_lifecycle == SupportLifecycle::Experimental)
-            );
-        }
-        for id in previews {
+            let receipts: Vec<_> = images
+                .iter()
+                .filter(|image| image["repository"] == id && image["platform"] == name)
+                .collect();
+            assert_eq!(receipts.len(), 1);
+            let receipt = receipts[0];
+            assert_eq!(receipt["version"], entry.version);
             assert_eq!(
-                runtime.entries.iter().any(|entry| entry.id == id),
-                platform == CatalogPlatform::LinuxArm64
+                receipt["image"],
+                catalog_image_source(&entry.image).unwrap()
             );
+            assert_eq!(entry.build_provenance.as_ref().unwrap().platform, name);
+            for check in [
+                "config_and_rootfs_match_qualification",
+                "ghcr_manifest_readback_verified",
+                "anonymous_registry_verified",
+                "anonymous_docker_pull_verified",
+            ] {
+                assert_eq!(receipt[check], true, "{id} {name} {check}");
+            }
+            assert_eq!(entry.support_lifecycle, SupportLifecycle::Experimental);
         }
+        let mint = distributed
+            .entries
+            .iter()
+            .find(|entry| entry.id == "cdk" && entry.version == "0.18.1")
+            .unwrap();
+        let bindings: Vec<_> = mint
+            .support_matrix
+            .payment_bindings
+            .iter()
+            .filter(|binding| binding.backend.implementation == BARK_PROCESSOR)
+            .collect();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].method, PaymentMethod::Bolt11);
+        assert_eq!(bindings[0].unit, "sat");
+        assert_eq!(
+            bindings[0].backend.versions,
+            ["0.1.0-fe468ca".into()].into()
+        );
     }
 }

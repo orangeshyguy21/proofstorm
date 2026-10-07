@@ -76,12 +76,11 @@ fn contract_requires_owned_storage_and_keeps_runtime_settings_out_of_authored_co
             "{name}"
         );
     }
-    let arm64 = catalog_for_platform(CatalogPlatform::LinuxArm64);
-    assert!(arm64.entries.iter().any(|e| e.id == BARK_PROCESSOR));
-    resolve_lock(&cell, &arm64).unwrap();
-    let amd64 = catalog_for_platform(CatalogPlatform::LinuxAmd64);
-    assert!(amd64.entries.iter().all(|e| e.id != BARK_PROCESSOR));
-    assert!(resolve_lock(&cell, &amd64).is_err());
+    for platform in [CatalogPlatform::LinuxArm64, CatalogPlatform::LinuxAmd64] {
+        let catalog = catalog_for_platform(platform);
+        assert!(catalog.entries.iter().any(|e| e.id == BARK_PROCESSOR));
+        resolve_lock(&cell, &catalog).unwrap();
+    }
 }
 
 fn assert_security(pod: &Value) {

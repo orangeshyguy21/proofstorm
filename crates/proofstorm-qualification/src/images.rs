@@ -103,7 +103,7 @@ mod tests {
     }
 
     #[test]
-    fn every_mode_qualifies_distribution_without_claiming_local_bark_support() {
+    fn published_bark_images_and_managed_gate_have_exact_native_obligations() {
         for mode in [
             Mode::Pull,
             Mode::Documentation,
@@ -122,28 +122,53 @@ mod tests {
             let inputs = image_inputs(&plan).unwrap();
             for platform in ["linux/arm64", "linux/amd64"] {
                 let claims = &plan.obligations[platform];
-                for preview in ["cdk-bark-processor", "bark-server", "cln-hold"] {
-                    assert!(claims.iter().all(|claim| !claim.contains(preview)));
-                    assert!(
-                        plan.cases
-                            .iter()
-                            .flat_map(|case| &case.components)
-                            .all(|component| component.implementation != preview)
-                    );
-                    assert!(inputs.images.keys().all(|image| !image.contains(preview)));
-                }
-                // Published experimental components retain their qualification coverage.
-                assert!(
-                    claims
-                        .iter()
-                        .any(|claim| claim.starts_with("cdk-ldk-server-processor@"))
+                let gates: Vec<_> = plan.cases.iter().filter(|case| case.platform == platform
+                    && matches!(&case.scenario, crate::Scenario::Gate { name, .. } if name == "bark-processor")).collect();
+                assert_eq!(gates.len(), 1);
+                let gate = gates[0];
+                assert_eq!(
+                    gate.required,
+                    matches!(mode, Mode::Compatibility | Mode::Full)
                 );
-                if matches!(mode, Mode::Compatibility | Mode::Full) {
-                    assert!(plan.cases.iter().any(|case| case.platform == platform
-                        && case.required
-                        && case.components.iter().any(
-                            |component| component.implementation == "cdk-ldk-server-processor"
-                        )));
+                assert_eq!(gate.components.len(), 8);
+                assert!(
+                    gate.claims
+                        .iter()
+                        .any(|claim| claim.starts_with("cdk@0.18.1:payment:")
+                            && claim.contains("cdk-bark-processor"))
+                );
+                for id in ["cdk-bark-processor", "bark-server", "cln-hold"] {
+                    let component = gate
+                        .components
+                        .iter()
+                        .find(|component| component.implementation == id)
+                        .unwrap();
+                    let image_cases: Vec<_> = plan.cases.iter().filter(|case| case.platform == platform
+                        && matches!(&case.scenario, crate::Scenario::Image { component } if component.implementation == id)).collect();
+                    assert_eq!(image_cases.len(), 1);
+                    assert_eq!(image_cases[0].required, mode != Mode::Pull);
+                    if mode == Mode::Pull {
+                        assert!(!inputs.images.contains_key(&component.source));
+                    } else {
+                        assert_eq!(
+                            inputs.images[&component.source],
+                            [platform.to_owned()].into()
+                        );
+                    }
+                    let prefix = format!("{id}@");
+                    let obligations: BTreeSet<_> = claims
+                        .iter()
+                        .filter(|claim| claim.starts_with(&prefix))
+                        .cloned()
+                        .collect();
+                    assert!(!obligations.is_empty());
+                    let covered: BTreeSet<_> = gate
+                        .claims
+                        .union(&image_cases[0].claims)
+                        .filter(|claim| claim.starts_with(&prefix))
+                        .cloned()
+                        .collect();
+                    assert_eq!(obligations, covered);
                 }
             }
         }

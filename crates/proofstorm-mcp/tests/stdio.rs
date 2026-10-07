@@ -153,7 +153,7 @@ fn stdio_default_developer_discovery_respects_unconfigured_authority() {
         let structured = catalog
             .pointer("/result/structuredContent")
             .expect("structured content");
-        assert_eq!(structured["matched_count"], 17);
+        assert_eq!(structured["matched_count"], 20);
         let items = expect::array(structured, "/items").expect("catalog items");
         assert!(!items.is_empty());
         for item in items {
@@ -168,7 +168,14 @@ fn stdio_default_developer_discovery_respects_unconfigured_authority() {
             break;
         }
     }
-    assert_eq!(identities.len(), 17);
+    assert_eq!(identities.len(), 20);
+    for (id, version) in [
+        ("cdk-bark-processor", "0.1.0-fe468ca"),
+        ("bark-server", "0.7.0-6188e2d"),
+        ("cln-hold", "26.06.7-hold.0.3.3"),
+    ] {
+        assert!(identities.contains(&(json!(id).to_string(), json!(version).to_string())));
+    }
 }
 
 #[test]

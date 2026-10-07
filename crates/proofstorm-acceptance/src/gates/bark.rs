@@ -1,5 +1,4 @@
-//! Managed Bark qualification using the exact catalog images. The current
-//! ARM64 preview requires verified images seeded into the owned local registry.
+//! Managed Bark qualification using the exact published native catalog images.
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{thread::sleep, time::Duration};
@@ -78,8 +77,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.default_session("bark-managed", "designer")?;
     let document = context.document(document()?)?;
     // Planning is deliberately ordinary catalog resolution. Missing image
-    // entries must fail here, before any cell is materialized. Local preview
-    // images are independently verified when seeding the owned registry.
+    // entries must fail here, before any cell is materialized.
     let preview = client.call(
         "cell_plan",
         json!({"name":INSTANCE,"cell":document,"request_id":"bark-plan"}),

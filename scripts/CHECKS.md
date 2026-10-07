@@ -104,6 +104,7 @@ drift is a failure, not something the runner repairs.
 | `quote-composition` | Native wallet and external Lightning payments to independent quotes, exact claim state, recipient balances and selected receipt privacy |
 | `failed-melt` | Unroutable native payment leaves mint and wallet quotes unpaid, funds unspent and recipient empty; exported observations match |
 | `ldk-server-processor` | CDK gRPC mutual TLS, funded BOLT11 mint/melt, unpaid quote recovery after processor restart, persistent node identity and BOLT12 payment recognition |
+| `bark-processor` | Native AMD64/ARM64 published images, BOLT11/sat mint/melt, original-quote reconciliation across stack restarts, persistent wallet/server/CLN identities, nine mTLS refusals and independent settlement/cleanup |
 | `cross-implementation-wallet` | Native Nutshell wallet interaction with CDK and Nutshell mints, exact Nutshell fees, bounded CDK accounting without an unsupported fee claim, and Redis restart behavior |
 | `cdk-mint-identity` | Two CDK mints get distinct controller-generated mint and payment-wallet seeds and disjoint keysets; one wallet funds and swaps at both independently; controller and mint restarts preserve both identities |
 | `cashu-double-spend` | Real CDK/Nutshell spent-proof replay/race and exact zero-fee 64-sat accounting |

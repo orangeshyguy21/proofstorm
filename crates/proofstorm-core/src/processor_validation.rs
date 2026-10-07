@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn bark_profile_resolves_only_the_native_arm64_preview() {
+    fn bark_profile_resolves_on_both_native_platforms() {
         let bark = mint_cell(ProcessorProfile::Bark);
         assert!(validate_cell(&bark).valid);
         for platform in [
@@ -308,10 +308,7 @@ mod tests {
             crate::CatalogPlatform::LinuxAmd64,
         ] {
             let catalog = crate::catalog_for_platform(platform);
-            assert_eq!(
-                crate::resolve_lock(&bark, &catalog).is_ok(),
-                platform == crate::CatalogPlatform::LinuxArm64,
-            );
+            crate::resolve_lock(&bark, &catalog).unwrap();
         }
     }
 }

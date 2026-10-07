@@ -1641,12 +1641,9 @@ fn assert_backend_goldens(platform: CatalogPlatform) {
             backend_id,
             "cdk-bark-processor" | "bark-server" | "cln-hold"
         ) {
-            // Keep platform-independent renderer contracts stable. Real ARM64
-            // catalog admission is covered separately; AMD64 remains absent.
-            assert_eq!(
-                catalog.entries.iter().any(|entry| entry.id == backend_id),
-                platform == CatalogPlatform::LinuxArm64,
-            );
+            // Synthetic renderer fixtures keep structural goldens independent
+            // of native image pins; bark_stack tests both real catalog locks.
+            assert!(catalog.entries.iter().any(|entry| entry.id == backend_id));
             let plan = if backend_id == "cdk-bark-processor" {
                 bark::plan()
             } else {

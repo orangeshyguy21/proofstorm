@@ -68,12 +68,19 @@ its successful native qualification receipt before promoting catalog pins.
 
 ## Promote the catalog before preparing an alpha
 
-Review a separate change that replaces local preview pins with the verified
-public platform pins, enables Bark in the distributed catalog, and adds its
-qualification obligations. Preserve experimental lifecycle and the BOLT11/sat
-scope. Require native managed qualification and anonymous distribution evidence
-for both architectures. Do not merely enable AMD64 or remove distribution guards
-because the image builds passed.
+The current catalog uses the verified public pins recorded in
+[`bark-publication.json`](../docker/payment/bark-publication.json). That handoff
+retains both native build/qualification run links, config digests and rootfs
+identities, and anonymous manifest/pull verification. The saved OCI manifests
+contain uncompressed layers, so their published manifest digests differ from the
+compressed manifests used during native qualification; config bytes and ordered
+rootfs diff IDs match exactly.
+
+Bark is included in ordinary image preparation and native compatibility/full
+qualification, with one managed `bark-processor` case per architecture and an
+offline probe for each image. Lifecycle remains experimental and the processor
+scope remains BOLT11/sat. Future pin changes require the same native managed and
+anonymous distribution evidence before catalog promotion.
 
 Once that change is merged and green, follow [the normal release flow](RELEASING.md)
 to prepare the next alpha version. The qualification workflow introduced here

@@ -1,35 +1,34 @@
-# Bark integration preview
+# Experimental Bark integration
 
 ## Current status
 
-The three native ARM64 images have been built from committed source `a31034f`
-and passed their offline identity probes. The processor's patched upstream
-library suite passed all 37 tests. Their exact image digests are staged in the
-experimental ARM64 catalog; CDK 0.18.1 accepts the explicit BOLT11/sat processor
-binding. There is no default Bark version and no AMD64 catalog entry.
+All three images are published for native Linux AMD64 and ARM64. Their exact
+public pins and native build/qualification lineage are retained in
+[`bark-publication.json`](bark-publication.json). Both native managed gates passed
+payment/recovery, transport refusal, cell/runtime cleanup and unrelated-resource
+preservation. Anonymous manifest/config/layer reads and Docker pulls verified all
+six published images. The processor's patched upstream library suite passed all
+37 tests during image builds.
 
-These images are currently local preview artifacts. A development installation
-must seed the verified images into its owned local registry before creating a
-Bark cell. The full managed gate passed locally on native ARM64 containers on
-macOS on 2026-10-04, including payment/recovery, transport refusal, cell and runtime
-cleanup, and unrelated-resource preservation. Public GHCR distribution and native
-AMD64 qualification remain pending. Do not treat this branch as a distributable
-release or remove the exploratory probe yet.
+The distributed catalog includes these images and CDK 0.18.1's explicit
+BOLT11/sat processor binding. Bark remains experimental, with no default version.
+Normal on-demand installation and `setup --prefetch-all` obtain the public images;
+manual local seeding is unnecessary. Compatibility, full and documentation suites
+probe the three images on each native architecture. Compatibility/full suites also
+require the managed `bark-processor` gate on both architectures. The small pull
+suite remains unchanged; Bark catalog changes select compatibility automatically.
 
-Normal qualification, `setup --prefetch-all` and the release workload-image inventory
-use the distributable catalog. That catalog excludes the three local Bark images
-and CDK's preview-only Bark binding together. Published experimental components
-remain included. Runtime resolution still admits the explicit ARM64 preview;
-an unseeded preview image fails with a local-seeding diagnostic instead of trying
-an unpublished GHCR path. Bark continues to use its dedicated managed gate below.
+The published OCI manifests retain uncompressed layers from saved image archives;
+their digests differ from the compressed manifests used by the native gates.
+Config bytes and ordered rootfs diff IDs match qualification exactly. Subsequent
+ordinary qualification uses the published catalog digests directly.
 
 ## Build foundation
 
-This recipe builds the processor for the first BOLT11/sat integration. The
-experimental Rust probe assembles
-the server, PostgreSQL, CLN/hold, a Lightning peer, processor, CDK mint and CDK
-wallet. Managed ARM64 cell qualification is now complete locally; native AMD64
-qualification remains required before advertising release support.
+This recipe builds the processor for the BOLT11/sat integration. The managed
+Rust acceptance gate assembles Bitcoin, the server, PostgreSQL, CLN/hold, a
+Lightning peer, processor, CDK mint and CDK wallet. Native Linux qualification
+passed on AMD64 and ARM64; the managed gate replaces the exploratory Docker probe.
 
 ## Pinned inputs
 
@@ -82,7 +81,7 @@ The runtime must explicitly select `BARK_PAYMENT_METHODS=bolt11`; upstream's
 empty method list still means all rails. Its stable mnemonic and complete data
 directory must be preserved together, including `db.sqlite` and
 `onchain_state.redb`. This recipe does not create a second wallet initializer or
-manage volumes. The separate probe owns volumes and exercises wallet restarts;
+manage volumes. The managed gate owns volumes and exercises wallet restarts;
 the image alone does not establish persistence or settlement.
 
 ## Authenticated capability check
@@ -116,9 +115,8 @@ the compiled descriptors again, selects that processor's authenticated readiness
 profile, and projects only its CA and client certificate/key into the mint.
 The existing LDK processor-to-node contract still requires both methods.
 
-The ARM64 preview catalog now admits this mint-side boundary. Rendering and
-identity/storage contracts have automated coverage. The local ARM64 managed gate
-also passed; native AMD64 qualification remains a separate requirement.
+Both platform catalogs admit this mint-side boundary. Rendering and
+identity/storage contracts have automated coverage and native managed results.
 
 ## Managed dependency topology
 
@@ -144,7 +142,7 @@ links retain their existing rules. MCP accepts the Ark network as a flat field
 and preserves its typed binding when importing canonical cell documents.
 
 The graph fixture in `crates/proofstorm-core/tests/fixtures/bark-topology.json`
-tests these requirements and resolves against the ARM64 preview catalog.
+tests these requirements and resolves against both distributed platform catalogs.
 
 ## Managed processor backend
 
@@ -177,13 +175,13 @@ CA/client credentials, never the processor seed or server key. Bitcoin RPC uses
 the application's existing fixed regtest credentials in a component-scoped,
 read-only `rpc.cookie` ConfigMap. These constants are not newly generated secrets.
 
-Renderer, provisioning and filesystem-contract coverage is backed by the local
-ARM64 managed payment/restart result. Native AMD64 receipts are still pending.
+Renderer, provisioning and filesystem-contract coverage is backed by managed
+payment/restart results on both native Linux architectures.
 
 ## Managed server and CLN/hold backends
 
 The reserved `bark-server` and `cln-hold` backends now render separate StatefulSets
-with complete owned `/data` volumes. This preview fixes native tuning to the
+with complete owned `/data` volumes. This integration fixes native tuning to the
 pinned upstream defaults and managed regtest settings; it accepts no arbitrary
 native configuration. Endpoints come from validated typed dependencies. Both
 components wait for Bitcoin RPC readiness before initializing fresh state.
@@ -219,9 +217,7 @@ file. No Bitcoin or CLN data volume is projected into another component.
 
 These contracts have offline rendering, credential and filesystem tests plus a
 local PostgreSQL guard test. Managed settlement, pending-payment recovery,
-transport refusal and teardown passed in the local ARM64 gate. Native AMD64 image
-qualification remains a release gate. Both backends are staged
-only in the ARM64 local preview catalog.
+transport refusal and teardown passed on both native Linux architectures.
 
 ## Managed qualification and publication
 
@@ -277,7 +273,7 @@ not assert native-host acceptance or publication. The retained `local_image_id`
 is a Docker-local identity, **not sufficient evidence of a catalog manifest digest**.
 Import the exact image into the qualification installation's owned registry, verify its manifest,
 config/platform and layers, then review and stage those real catalog pins before
-running the managed gate. No AMD64 catalog entry is enabled by the build workflow.
+running the managed gate. The build workflow never promotes new catalog pins.
 
 The same build/export can be run on an existing native Linux builder:
 
@@ -316,7 +312,7 @@ acceptance installation:
 just e2e bark-processor --work-dir /tmp/bark-managed-arm64-01 --timeout 3600
 ```
 
-For the local preview, add `--qualification-image-cache 127.0.0.1:PORT`
+To consume a prepared image cache, add `--qualification-image-cache 127.0.0.1:PORT`
 pointing at an explicitly prepared loopback cache. As with other qualification
 gates, it must contain the exact locked component images plus the probe image
 under `images/DIGEST@sha256:DIGEST`. The runner resolves the Bark fixture through
@@ -371,10 +367,11 @@ The complete local ARM64 result is retained in the ignored directory
 pending or reserved value. Cell/storage/runtime cleanup and unrelated-resource
 preservation passed. Earlier failed attempts remain in adjacent directories.
 This used native Linux ARM64 containers on a macOS ARM64 host, not the native
-Linux-host CI workflow. AMD64 qualification remains pending. Keep the exploratory
-`bark_stack` example frozen until matching release receipts exist; remove it in
-the same change that enables qualified catalog support. Raw acceptance evidence
-remains private in the run directory.
+Linux-host CI workflow. Subsequent native Linux gates passed on
+[AMD64](https://github.com/orangeshyguy21/proofstorm/actions/runs/37509174734) and
+[ARM64](https://github.com/orangeshyguy21/proofstorm/actions/runs/37509209722).
+The managed gate supersedes the retired exploratory `bark_stack` example. Raw
+acceptance evidence remains private in the run directory.
 
 ## Server and CLN/hold dependency images
 
@@ -402,47 +399,7 @@ docker build --platform linux/arm64 -f docker/payment/Dockerfile.bark-server \
   -t proofstorm-bark-server:dev-0.7 .
 docker build --platform linux/arm64 -f docker/payment/Dockerfile.cln-hold \
   -t proofstorm-cln-hold:dev-0.3.3 .
-# Set this to an existing native ARM64 Proofstorm controller image built from
-# this repository. The probe extracts /usr/local/lib/proofstorm-driver from it
-# for passive wallet observations and records both image ID and binary hash.
-export PROOFSTORM_BARK_DRIVER_IMAGE='<local-controller-image>'
-CARGO_TARGET_DIR=.proofstorm-dev/target cargo run --locked \
-  -p proofstorm-acceptance --example bark_stack -- dev/bark-payments-new
 ```
 
-The Rust example requires a new evidence directory. It resolves the local image
-tags to image IDs and uses the catalog's pinned Bitcoin/PostgreSQL/CDK images. It
-creates a private directory, an internal Docker network with no host-published
-ports, fresh credentials, and labeled owned storage. It initializes Bark once,
-checks repeat-initialization refusal, exercises native CLN hold-invoice storage,
-and restarts CLN, PostgreSQL and Bark. It compares the server mnemonic hash,
-CLN node identity and pending hold invoice across restarts. SIGINT/SIGTERM request
-cleanup; individual Docker commands and readiness polling are bounded.
-
-The funded phase creates a second Lightning node and a channel with liquidity in
-both directions, funds the server, and starts a BOLT11-only/sat processor with
-mutual TLS. Only server credentials reach the processor, and only client
-credentials reach the mint. CDK configuration is explicitly initialized once;
-ordinary restarts start the existing database. The fixture uses public BIP39 test
-vectors solely for its isolated regtest processor and mint; all payment funds are
-generated on its owned regtest chain.
-
-The native CDK wallet requests 100,000 sat, the independent Lightning peer pays
-the invoice, and the probe checks issuance and the passive wallet balance. It
-then restarts the processor and mint, verifies the original issued quote, and
-melts 30,000 sat to the peer. Success requires recipient settlement, a paid mint
-quote, the native melt receipt, fee-reserve bounds, and exact wallet conservation
-without reserved or pending proofs. Mutations are submitted once; only read-only
-observations are retried. Failure still triggers evidence capture and cleanup.
-
-Results and private captures remain in that directory. Raw evidence includes
-credentials and is not a public report. Cleanup verifies absence of all resources
-with the run's label. The before/after check compares resource IDs/names; it is
-not the acceptance runner's full state-preservation check.
-
-This probe targets native ARM64 BOLT11 mint/melt and completed-payment restart
-qualification. It does not test on-chain boarding, pending-payment recovery,
-uninterrupted database recovery, catalog rendering, or native AMD64 support. The
-BOLT11 payment funds the processor's Ark wallet; no second wallet initializer is
-used. Only a successful retained run establishes the checks, not merely building
-the example. The probe does not publish images or enable catalog support.
+These commands build development images only. Use the native candidate workflow
+and managed gate above for qualification; local tags cannot replace catalog pins.
