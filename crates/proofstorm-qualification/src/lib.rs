@@ -21,12 +21,15 @@ use serde::{Deserialize, Serialize};
 /// treated as a catalog change.
 #[must_use]
 pub fn pull_request_mode(paths: &[String]) -> Mode {
-    const CATALOG: [&str; 5] = [
+    const CATALOG: [&str; 8] = [
         "docker/",
         "crates/proofstorm-core/src/catalog.rs",
         "crates/proofstorm-core/src/processor_catalog.rs",
+        "crates/proofstorm-core/src/bark_catalog.rs",
+        "crates/proofstorm-core/src/bark_images.json",
         "crates/proofstorm-kube/",
         "scripts/catalog-image.sh",
+        "scripts/qualification-images.sh",
     ];
     if paths.is_empty()
         || paths.iter().any(|path| {
@@ -60,6 +63,9 @@ mod policy_tests {
                 "crates/proofstorm-core/src/catalog.rs".into(),
             ],
             vec!["crates/proofstorm-kube/src/adapter.rs".into()],
+            vec!["crates/proofstorm-core/src/bark_catalog.rs".into()],
+            vec!["crates/proofstorm-core/src/bark_images.json".into()],
+            vec!["scripts/qualification-images.sh".into()],
             vec!["docs/../docker/x".into()],
         ] {
             assert_eq!(pull_request_mode(&paths), Mode::Compatibility);

@@ -78,7 +78,7 @@ fn on_demand_selects_only_locked_components_and_probe() {
 }
 
 #[test]
-fn local_previews_are_selected_on_demand_but_never_downloaded_or_prefetched() {
+fn published_bark_images_are_downloadable_on_demand_and_prefetched() {
     use proofstorm_core::{
         CatalogPlatform, catalog_for_platform, distributed_catalog_for_platform,
     };
@@ -94,37 +94,53 @@ fn local_previews_are_selected_on_demand_but_never_downloaded_or_prefetched() {
         let distributed = distributed_catalog_for_platform(platform);
         let admitted = catalog_images(&runtime);
         let prefetch = catalog_images(&distributed);
-        let previews: BTreeSet<_> = admitted.difference(&prefetch).cloned().collect();
-        assert_eq!(
-            previews.len(),
-            if platform == CatalogPlatform::LinuxArm64 {
-                3
-            } else {
-                0
-            }
-        );
+        assert_eq!(admitted, prefetch);
         for image in &prefetch {
             assert_eq!(
                 download_source(image, &runtime, &distributed).unwrap(),
                 source(image).unwrap()
             );
         }
-        if platform == CatalogPlatform::LinuxArm64 {
-            let lock = proofstorm_core::resolve_lock(&cell, &runtime).unwrap();
-            let selected = selected_catalog_images(&installation, &lock, &runtime).unwrap();
-            assert!(previews.is_subset(&selected));
-            for image in &previews {
-                let error = download_source(image, &runtime, &distributed)
-                    .unwrap_err()
-                    .to_string();
-                assert!(
-                    error.contains("local preview")
-                        && error.contains("seed its exact pinned manifest")
-                );
-            }
+        let lock = proofstorm_core::resolve_lock(&cell, &runtime).unwrap();
+        let selected = selected_catalog_images(&installation, &lock, &runtime).unwrap();
+        for id in ["cdk-bark-processor", "bark-server", "cln-hold"] {
+            let image = &runtime
+                .entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .unwrap()
+                .image;
+            assert!(selected.contains(image));
+            assert!(prefetch.contains(image));
+            assert!(
+                download_source(image, &runtime, &distributed)
+                    .unwrap()
+                    .starts_with(&format!("ghcr.io/orangeshyguy21/proofstorm/{id}@sha256:"))
+            );
         }
     }
     assert!(fs::read_dir(home.path()).unwrap().next().is_none());
+}
+
+#[test]
+fn undistributed_preview_pins_still_require_explicit_seeding() {
+    let distributed = proofstorm_core::distributed_catalog();
+    let mut runtime = distributed.clone();
+    let image = format!(
+        "proofstorm-registry.localhost:5000/bark-server@sha256:{}",
+        "a".repeat(64)
+    );
+    runtime
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id == "bark-server")
+        .unwrap()
+        .image
+        .clone_from(&image);
+    let error = download_source(&image, &runtime, distributed)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("local preview") && error.contains("seed its exact pinned manifest"));
 }
 
 #[test]

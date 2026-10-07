@@ -307,33 +307,20 @@ impl CatalogResponse {
 /// Panics when a built-in entry violates a catalog invariant. This indicates a
 /// programmer error caught by the catalog contract tests.
 pub fn default_catalog() -> &'static CatalogResponse {
-    static CATALOG: std::sync::LazyLock<CatalogResponse> = std::sync::LazyLock::new(|| {
-        build_catalog(crate::wallet_builds::LINUX_AMD64, CatalogScope::Runtime)
-    });
+    static CATALOG: std::sync::LazyLock<CatalogResponse> =
+        std::sync::LazyLock::new(|| build_catalog(crate::wallet_builds::LINUX_AMD64));
     &CATALOG
 }
 
-/// Catalog of distributable images and their support contracts, excluding local previews.
-/// Installation prefetch and ordinary qualification use this scope. Runtime resolution
-/// continues to use [`default_catalog`] so explicitly seeded previews remain available.
+/// Catalog of distributable images and their support contracts.
+/// Installation prefetch and ordinary qualification use this scope. Every current
+/// runtime entry is distributed, including explicitly experimental components.
 ///
 /// # Panics
 /// Panics if a built-in entry violates a catalog invariant.
 #[must_use]
 pub fn distributed_catalog() -> &'static CatalogResponse {
-    static CATALOG: std::sync::LazyLock<CatalogResponse> = std::sync::LazyLock::new(|| {
-        build_catalog(
-            crate::wallet_builds::LINUX_AMD64,
-            CatalogScope::Distribution,
-        )
-    });
-    &CATALOG
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CatalogScope {
-    Runtime,
-    Distribution,
+    default_catalog()
 }
 
 /// Container platform used to select published wallet images and provenance.
@@ -378,31 +365,24 @@ pub fn catalog_image_source(image: &str) -> Result<String, String> {
 /// Panics if a built-in entry violates a catalog invariant.
 #[must_use]
 pub fn catalog_for_platform(platform: CatalogPlatform) -> CatalogResponse {
-    build_catalog(
-        platform == CatalogPlatform::LinuxAmd64,
-        CatalogScope::Runtime,
-    )
+    build_catalog(platform == CatalogPlatform::LinuxAmd64)
 }
 
 /// Distributable catalog for an explicit platform, independent of the build host.
-/// Local preview entries and their additions to other entries' support contracts
-/// are excluded together; experimental but distributed components remain included.
+/// Every current runtime entry and its support contracts are distributed.
 ///
 /// # Panics
 /// Panics if a built-in entry violates a catalog invariant.
 #[must_use]
 pub fn distributed_catalog_for_platform(platform: CatalogPlatform) -> CatalogResponse {
-    build_catalog(
-        platform == CatalogPlatform::LinuxAmd64,
-        CatalogScope::Distribution,
-    )
+    catalog_for_platform(platform)
 }
 
 #[allow(
     clippy::too_many_lines,
     reason = "the default catalog deliberately declares every support-contract field inline"
 )]
-fn build_catalog(amd64: bool, scope: CatalogScope) -> CatalogResponse {
+fn build_catalog(amd64: bool) -> CatalogResponse {
     let adapter_version = "0.1.0-alpha.1";
     let backends = default_backend_registry();
     let mut entries = vec![
@@ -790,9 +770,7 @@ fn build_catalog(amd64: bool, scope: CatalogScope) -> CatalogResponse {
     }
     promote_component_releases(&mut entries, amd64);
     processor::extend(&mut entries, amd64, backends, adapter_version);
-    if scope == CatalogScope::Runtime {
-        bark::extend(&mut entries, amd64, backends, adapter_version);
-    }
+    bark::extend(&mut entries, amd64, backends, adapter_version);
     CatalogResponse::try_new(entries).expect("default catalog support contracts are valid")
 }
 

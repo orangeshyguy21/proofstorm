@@ -8,7 +8,7 @@ qualification therefore also prevents the existing release-promotion validator
 from accepting that `Checks` run.
 
 The planner reads both platform catalogs. It enumerates preferred and supported
-versions and the experimental LDK processor relationship exposed by CDK. Plans
+versions and the experimental LDK and Bark processor relationships exposed by CDK. Plans
 record exact image sources, component versions, storage/authentication choices,
 wallet pairings and coverage claims. The required compatibility suite exercises
 each supported pairing on native Linux AMD64 and ARM64. Main pushes, the weekly
@@ -17,11 +17,21 @@ release promotion requires a successful main run. Pull requests select the small
 `pull` suite (smoke, runtime lifecycle, native exec and one CDK/LND/SQLite round
 trip per architecture) unless they change catalog definitions, component images
 or their Kubernetes rendering (`docker/`, `proofstorm-core` catalogs,
-`proofstorm-kube`, `scripts/catalog-image.sh`); those, and a failed or empty
+`proofstorm-kube`, `scripts/catalog-image.sh`, `scripts/qualification-images.sh`);
+those, and a failed or empty
 diff, select the complete compatibility matrix. The fixed baseline includes
 native image and Lightning contracts, preferred external mint/wallet payment paths
 with SQLite and PostgreSQL, Redis, Keycloak, workspace persistence and control-plane
 lifecycle checks.
+
+The Bark compatibility case uses eight exact component versions on each native
+architecture. It covers the experimental BOLT11/sat CDK binding, server and
+CLN/hold dependencies, persistent state, original-quote reconciliation across
+restarts, nine mTLS refusals, independent settlement checks and owned cleanup.
+Each of the three published Bark images also has a native offline identity probe
+in compatibility, full and documentation suites. The small pull suite retains its
+existing scope. This does not advertise BOLT12, on-chain boarding or uninterrupted
+payment notification delivery, and it runs no model benchmark.
 
 Required CI checks Proofstorm's integration contract: image identity, startup,
 configuration, supported component pairings, ordinary payment/deposit flows,

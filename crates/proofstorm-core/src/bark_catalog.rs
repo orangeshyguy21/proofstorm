@@ -1,5 +1,4 @@
-//! Native ARM64 Bark preview. Public distribution and full release qualification
-//! remain pending; development installations must seed the verified images.
+//! Experimental Bark support with published native AMD64 and ARM64 images.
 use super::{
     BTreeSet, BackendContractRegistry, BuildProvenance, CatalogEntry, CatalogFeature,
     CatalogRuntimeEndpoint, ComponentKind, ControlClass, LinkKind, PaymentMethod, ReleaseChannel,
@@ -20,7 +19,7 @@ struct Images {
 const PROCESSOR_VERSION: &str = "0.1.0-fe468ca";
 const SERVER_VERSION: &str = "0.7.0-6188e2d";
 const CLN_HOLD_VERSION: &str = "26.06.7-hold.0.3.3";
-const PREVIEW: &str = "Experimental Linux ARM64 local preview. Local managed payment/restart qualification passed with original-quote reconciliation. Native AMD64 qualification and public image distribution are pending. Requires explicitly seeded development images.";
+const QUALIFICATION: &str = "Experimental BOLT11/sat support on Linux AMD64 and ARM64. Published native images passed managed payment/restart qualification with original-quote reconciliation. Ordinary native qualification covers the distributed pins.";
 
 #[allow(
     clippy::too_many_lines,
@@ -32,9 +31,9 @@ pub(super) fn extend(
     backends: &BackendContractRegistry,
     adapter_version: &str,
 ) {
-    // Qualification stages verified native candidates in this embedded file in
-    // its disposable checkout. There is no runtime image override. The shipped
-    // file deliberately omits platforms that are not yet available.
+    // The shipped file pins verified public images on both platforms. Candidate
+    // qualification stages alternate pins only in its disposable checkout;
+    // there is no runtime image override.
     let platform = if amd64 { "linux/amd64" } else { "linux/arm64" };
     let images: BTreeMap<String, Images> =
         serde_json::from_str(include_str!("bark_images.json")).expect("pinned Bark images");
@@ -46,7 +45,7 @@ pub(super) fn extend(
         CLN_HOLD,
         backends,
         ComponentKind::Lightning,
-        "Core Lightning with hold-invoice plugin for the local Bark preview",
+        "Core Lightning with hold-invoice plugin for managed Bark payments",
         adapter_version,
         CLN_HOLD_VERSION,
         ReleaseChannel::Prerelease,
@@ -80,7 +79,7 @@ pub(super) fn extend(
         BARK_SERVER,
         backends,
         ComponentKind::ArkServer,
-        "Bark Ark server for the local BOLT11/sat preview",
+        "Bark Ark server for experimental BOLT11/sat payments",
         adapter_version,
         SERVER_VERSION,
         ReleaseChannel::Prerelease,
@@ -210,6 +209,6 @@ pub(super) fn endpoints(implementation: &str) -> Option<Vec<CatalogRuntimeEndpoi
         "component",
         kind,
         &["component_logs", "reachability_oracle"],
-        &[PREVIEW, guidance],
+        &[QUALIFICATION, guidance],
     )])
 }

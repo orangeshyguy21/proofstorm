@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:08462abb369e4a47ef3d3226b09141e21291cbc78519ef93ea48a1b96e927518",
+  "catalog_digest": "sha256:5fa6fc890fb192a7a10f246ebe0ae53eda6736931a3e20d57053e2ca88d6197f",
   "entries": [
     {
       "implementation": "bark-server",
@@ -10,7 +10,7 @@
       "support_lifecycle": "experimental",
       "config_version": "bark-server/0.7/v1",
       "config_schema_digest": "sha256:6de9e8f2d5c65a91bec8300bc8b30b695285b9a3f651f71dde879bc34be00485",
-      "image": "proofstorm-registry.localhost:5000/bark-server@sha256:fe228ec2ba929411fc6517dbd95ac7c70b5c0f69d7e02157868f0a02fe2080c0",
+      "image": "proofstorm-registry.localhost:5000/bark-server@sha256:28f4d77cf99c94f70ca82d3f4e7660ffed7e8156010216761cb6b60123ef5205",
       "fields": {
         "backend_endpoint": {
           "classification": "topology_derived",
@@ -544,7 +544,7 @@
       "support_lifecycle": "experimental",
       "config_version": "cdk-bark-processor/0.1/v1",
       "config_schema_digest": "sha256:5632a759987dac1e6cd3ee0fecfc383bf5bc3aec55cd2439a68bf7c565aa22fa",
-      "image": "proofstorm-registry.localhost:5000/cdk-bark-processor@sha256:e88451c42bba9d1a719297934c05cfc7d71ae28d1b53a699f0f286a16eb55d63",
+      "image": "proofstorm-registry.localhost:5000/cdk-bark-processor@sha256:15b049c976cbe949a87d433d2fea0d5096f842610e5cf96a4fdc840d52179f09",
       "fields": {
         "backend_endpoint": {
           "classification": "topology_derived",
@@ -889,7 +889,7 @@
       "support_lifecycle": "experimental",
       "config_version": "cln-hold/26.06/v1",
       "config_schema_digest": "sha256:abe44dc1e0cdb1a8c381fd9f3cf9edcba222bb4ccbbdfb0d62662bd7f4691bea",
-      "image": "proofstorm-registry.localhost:5000/cln-hold@sha256:d89a5ced1cf893666e97cea63d837e07871ef4bd53544d98e6b614d292861498",
+      "image": "proofstorm-registry.localhost:5000/cln-hold@sha256:695257c9caf510a870a57be0f1d47097baf2ca69fa6e1c6849a6d09b35eb463f",
       "fields": {
         "backend_endpoint": {
           "classification": "topology_derived",

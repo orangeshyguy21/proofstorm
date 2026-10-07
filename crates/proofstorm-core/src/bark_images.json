@@ -1,7 +1,12 @@
 {
+  "linux/amd64": {
+    "processor": "proofstorm-registry.localhost:5000/cdk-bark-processor@sha256:0d42619e268a902d7fe7058ce8c575d9efb6046d18f3762773669713c578e8f3",
+    "server": "proofstorm-registry.localhost:5000/bark-server@sha256:d05afa9fc60b8c0436cc9742fac9f61fbf8a9061fdbb197e981c751d6ab63973",
+    "cln": "proofstorm-registry.localhost:5000/cln-hold@sha256:2190679589650073085fd19391f9d0da0bd0130c1b6434f8ac0b055b1f5426a7"
+  },
   "linux/arm64": {
-    "processor": "proofstorm-registry.localhost:5000/cdk-bark-processor@sha256:e88451c42bba9d1a719297934c05cfc7d71ae28d1b53a699f0f286a16eb55d63",
-    "server": "proofstorm-registry.localhost:5000/bark-server@sha256:fe228ec2ba929411fc6517dbd95ac7c70b5c0f69d7e02157868f0a02fe2080c0",
-    "cln": "proofstorm-registry.localhost:5000/cln-hold@sha256:d89a5ced1cf893666e97cea63d837e07871ef4bd53544d98e6b614d292861498"
+    "processor": "proofstorm-registry.localhost:5000/cdk-bark-processor@sha256:15b049c976cbe949a87d433d2fea0d5096f842610e5cf96a4fdc840d52179f09",
+    "server": "proofstorm-registry.localhost:5000/bark-server@sha256:28f4d77cf99c94f70ca82d3f4e7660ffed7e8156010216761cb6b60123ef5205",
+    "cln": "proofstorm-registry.localhost:5000/cln-hold@sha256:695257c9caf510a870a57be0f1d47097baf2ca69fa6e1c6849a6d09b35eb463f"
   }
 }

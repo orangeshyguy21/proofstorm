@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fs, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 use proofstorm_core::{
     CatalogPlatform, ConfigurationCoverageManifest, catalog_for_platform,
@@ -56,31 +56,18 @@ fn default_catalog_uses_the_build_hosts_platform_contract() {
 fn only_platform_specific_component_builds_differ_between_catalogs() {
     let arm = catalog_for_platform(CatalogPlatform::LinuxArm64);
     let amd = catalog_for_platform(CatalogPlatform::LinuxAmd64);
-    let bark = ["bark-server", "cdk-bark-processor", "cln-hold"];
-    assert_eq!(
-        arm.entries
-            .iter()
-            .filter(|entry| bark.contains(&entry.id.as_str()))
-            .map(|entry| entry.id.as_str())
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from(bark),
-    );
-    assert!(
-        amd.entries
-            .iter()
-            .all(|entry| !bark.contains(&entry.id.as_str()))
-    );
-    let shared = arm
-        .entries
-        .iter()
-        .filter(|entry| !bark.contains(&entry.id.as_str()))
-        .collect::<Vec<_>>();
-    assert_eq!(shared.len(), amd.entries.len());
-    for (arm_entry, amd_entry) in shared.into_iter().zip(&amd.entries) {
+    assert_eq!(arm.entries.len(), amd.entries.len());
+    for (arm_entry, amd_entry) in arm.entries.iter().zip(&amd.entries) {
         assert_eq!(arm_entry.id, amd_entry.id);
         if matches!(
             arm_entry.id.as_str(),
-            "cdk-cli-wallet" | "cocod-wallet" | "ldk-server" | "cdk-ldk-server-processor"
+            "cdk-cli-wallet"
+                | "cocod-wallet"
+                | "ldk-server"
+                | "cdk-ldk-server-processor"
+                | "bark-server"
+                | "cdk-bark-processor"
+                | "cln-hold"
         ) {
             assert_ne!(arm_entry.image, amd_entry.image);
             assert_ne!(arm_entry.source_digest, amd_entry.source_digest);
@@ -116,8 +103,6 @@ fn only_platform_specific_component_builds_differ_between_catalogs() {
                         .any(|note| note.contains("Initial image is Linux arm64 only."))
                 );
             }
-        } else if arm_entry.id == "cdk" && arm_entry.version == "0.18.1" {
-            assert_bark_mint_preview(arm_entry, amd_entry);
         } else if matches!(arm_entry.id.as_str(), "nutshell" | "nutshell-wallet") {
             assert_ne!(arm_entry.image, amd_entry.image);
             assert_eq!(arm_entry.source_digest, amd_entry.source_digest);
@@ -135,45 +120,4 @@ fn only_platform_specific_component_builds_differ_between_catalogs() {
             );
         }
     }
-}
-
-fn assert_bark_mint_preview(
-    arm_entry: &proofstorm_core::CatalogEntry,
-    amd_entry: &proofstorm_core::CatalogEntry,
-) {
-    // The sole extra mint binding is the explicit native ARM64 preview.
-    let mut normalized = arm_entry.clone();
-    let processor = "cdk-bark-processor";
-    normalized
-        .compatible_dependencies
-        .retain(|dependency| dependency.implementation != processor);
-    assert!(normalized.support_matrix.payment_backends.remove(processor));
-    let removed = normalized
-        .support_matrix
-        .payment_bindings
-        .iter()
-        .filter(|binding| binding.backend.implementation == processor)
-        .collect::<Vec<_>>();
-    assert_eq!(removed.len(), 1);
-    assert_eq!(removed[0].method, proofstorm_core::PaymentMethod::Bolt11);
-    assert_eq!(removed[0].unit, "sat");
-    normalized
-        .support_matrix
-        .payment_bindings
-        .retain(|binding| binding.backend.implementation != processor);
-    assert_eq!(
-        arm_entry.source_digest,
-        proofstorm_core::digest_json(&(
-            &amd_entry.source_digest,
-            &arm_entry.support_matrix,
-            &arm_entry.compatible_dependencies,
-        ))
-    );
-    normalized
-        .source_digest
-        .clone_from(&amd_entry.source_digest);
-    assert_eq!(
-        &normalized, amd_entry,
-        "only the explicit Bark preview binding may differ"
-    );
 }

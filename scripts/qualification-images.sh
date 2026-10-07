@@ -70,6 +70,18 @@ if [[ "$kind" == image ]]; then
     workspace) probe='test -x /bin/sh; command -v sha256sum >/dev/null; command -v sleep >/dev/null; echo workspace-commands'; expected=workspace-commands ;;
     ldk-server) probe='ldk-server --version && ldk-server-cli --version'; expected=$(printf 'ldk-server 0.1.0\nldk-server-cli 0.1.0') ;;
     cdk-ldk-server-processor) probe='test -x /usr/local/bin/cdk-payment-processor-ldk-server && cat /usr/local/share/processor-revision'; expected=fe468cad486157683eddbc0df4ff87ba71b6c0a3 ;;
+    cdk-bark-processor)
+      probe='test -x /usr/local/bin/cdk-payment-processor-bark && cat /usr/local/share/processor-revision /usr/local/share/processor-patch-sha256'
+      expected=$(printf '%s\n%s' fe468cad486157683eddbc0df4ff87ba71b6c0a3 abc3f967d754cdf5e484bf434ef52fa216dfb37cdcbb8fd896477e5c7b40321c)
+      ;;
+    bark-server)
+      probe='captaind --version && test -s /usr/local/share/bark/captaind.default.toml && cat /usr/local/share/bark/server-revision'
+      expected=$(printf '%s\n%s' 'captaind 0.7.0-dev+6188e2d809f193716b2e571274179f069d9c19ca' 6188e2d809f193716b2e571274179f069d9c19ca)
+      ;;
+    cln-hold)
+      probe='lightningd --version && test -x /usr/local/bin/hold && cat /usr/local/share/hold-revision'
+      expected=$(printf '%s\n%s' v26.06.7 af0055b132f3b9f24d0b1d478a15005fcf8f014f)
+      ;;
     *) echo 'Missing catalog probe' >&2; exit 1 ;;
   esac
   name="qualification-probe-$(openssl rand -hex 12)"

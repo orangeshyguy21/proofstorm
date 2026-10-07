@@ -33,7 +33,14 @@ fn claim(entry: &CatalogEntry, kind: &str, detail: &impl Serialize) -> String {
 
 fn selected(entry: &CatalogEntry) -> bool {
     entry.support_lifecycle.is_supported()
-        || matches!(entry.id.as_str(), "ldk-server" | "cdk-ldk-server-processor")
+        || matches!(
+            entry.id.as_str(),
+            "ldk-server"
+                | "cdk-ldk-server-processor"
+                | "cdk-bark-processor"
+                | "bark-server"
+                | "cln-hold"
+        )
 }
 
 fn component(entry: &CatalogEntry) -> Result<Component> {
@@ -237,7 +244,10 @@ impl Builder<'_> {
 
     fn mint(&mut self, mint: &CatalogEntry) -> Result<()> {
         for binding in &mint.support_matrix.payment_bindings {
-            if binding.backend.implementation == "cdk-ldk-server-processor" {
+            if matches!(
+                binding.backend.implementation.as_str(),
+                "cdk-ldk-server-processor" | "cdk-bark-processor"
+            ) {
                 continue; // Explicit experimental scenario below, never hidden by the mint lifecycle.
             }
             ensure!(
@@ -588,6 +598,31 @@ impl Builder<'_> {
             "ldk-server-processor",
             &[mint, processor, node],
             &["bitcoin-core", "cdk-cli-wallet"],
+            claims,
+            false,
+        )?;
+        let processor = entry(self.catalog, "cdk-bark-processor", "0.1.0-fe468ca")?;
+        let server = entry(self.catalog, "bark-server", "0.7.0-6188e2d")?;
+        let lightning = entry(self.catalog, "cln-hold", "26.06.7-hold.0.3.3")?;
+        let mut claims = behavioral(processor);
+        claims.extend(behavioral(server));
+        claims.extend(behavioral(lightning));
+        claims.extend(dependencies(mint, &[component(processor)?]));
+        for binding in &mint.support_matrix.payment_bindings {
+            if binding.backend.implementation == processor.id {
+                for version in &binding.backend.versions {
+                    claims.insert(claim(
+                        mint,
+                        "payment",
+                        &(binding.method, &binding.unit, &processor.id, version),
+                    ));
+                }
+            }
+        }
+        self.gate(
+            "bark-processor",
+            &[mint, processor, server, lightning],
+            &["bitcoin-core", "postgresql", "cln", "cdk-cli-wallet"],
             claims,
             false,
         )?;

@@ -1,4 +1,4 @@
-//! Bark renderer contracts and ordinary catalog-to-cell preview rendering.
+//! Bark renderer contracts and ordinary catalog-to-cell rendering.
 use proofstorm_core::{
     ComponentPlanContract, DatabaseRole, DependencyBinding, EffectiveComponentConfig,
 };
@@ -8,58 +8,60 @@ use serde_json::{Value, json};
 mod bark;
 
 #[test]
-fn arm64_catalog_renders_the_complete_bark_stack_with_exact_images() {
+fn both_catalogs_render_the_complete_bark_stack_with_exact_images() {
     use proofstorm_core::{CatalogPlatform, CellSpec, catalog_for_platform, resolve_lock};
 
     let spec: CellSpec = serde_json::from_str(include_str!(
         "../../proofstorm-core/tests/fixtures/bark-topology.json"
     ))
     .unwrap();
-    let catalog = catalog_for_platform(CatalogPlatform::LinuxArm64);
-    let lock = resolve_lock(&spec, &catalog).unwrap();
-    let rendered =
-        proofstorm_kube::render_cell("bark-preview", "sha256:test", &spec, &lock).unwrap();
-    for (id, backend) in [
-        ("ark", "bark-server"),
-        ("cln", "cln-hold"),
-        ("processor", "cdk-bark-processor"),
-    ] {
-        let entry = catalog
-            .entries
-            .iter()
-            .find(|entry| entry.id == backend)
-            .unwrap();
-        let workload = rendered
-            .stateful_sets
-            .iter()
-            .find(|workload| workload.metadata.name.as_deref() == Some(id))
-            .unwrap();
-        let pod = workload
-            .spec
-            .as_ref()
-            .unwrap()
-            .template
-            .spec
-            .as_ref()
-            .unwrap();
-        assert_eq!(pod.containers[0].image.as_ref(), Some(&entry.image));
-        assert_eq!(
-            workload
+    for platform in [CatalogPlatform::LinuxArm64, CatalogPlatform::LinuxAmd64] {
+        let catalog = catalog_for_platform(platform);
+        let lock = resolve_lock(&spec, &catalog).unwrap();
+        let rendered =
+            proofstorm_kube::render_cell("bark-qualified", "sha256:test", &spec, &lock).unwrap();
+        for (id, backend) in [
+            ("ark", "bark-server"),
+            ("cln", "cln-hold"),
+            ("processor", "cdk-bark-processor"),
+        ] {
+            let entry = catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == backend)
+                .unwrap();
+            let workload = rendered
+                .stateful_sets
+                .iter()
+                .find(|workload| workload.metadata.name.as_deref() == Some(id))
+                .unwrap();
+            let pod = workload
                 .spec
                 .as_ref()
                 .unwrap()
-                .volume_claim_templates
+                .template
+                .spec
                 .as_ref()
-                .unwrap()
-                .len(),
-            1
-        );
-        assert!(
-            !rendered
-                .deployments
-                .iter()
-                .any(|workload| workload.metadata.name.as_deref() == Some(id))
-        );
+                .unwrap();
+            assert_eq!(pod.containers[0].image.as_ref(), Some(&entry.image));
+            assert_eq!(
+                workload
+                    .spec
+                    .as_ref()
+                    .unwrap()
+                    .volume_claim_templates
+                    .as_ref()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert!(
+                !rendered
+                    .deployments
+                    .iter()
+                    .any(|workload| workload.metadata.name.as_deref() == Some(id))
+            );
+        }
     }
 }
 

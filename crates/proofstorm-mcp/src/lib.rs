@@ -3303,13 +3303,13 @@ mod tests {
         assert!(backend.supports(NetworkFaultFeature::Partition));
         assert!(!backend.supports(NetworkFaultFeature::Delay));
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 18);
+        assert_eq!(catalog.entries.len(), 21);
         assert!(catalog.entries.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
                 && entry.image.contains("@sha256:")
         }));
-        assert_eq!(catalog.implementations.len(), 14);
+        assert_eq!(catalog.implementations.len(), 17);
         assert_support_defaults(catalog);
         let cdk = catalog
             .entries
@@ -3341,12 +3341,13 @@ mod tests {
                 "cln".into(),
                 "ldk-node".into(),
                 "lnd".into(),
-                "cdk-ldk-server-processor".into()
+                "cdk-ldk-server-processor".into(),
+                "cdk-bark-processor".into()
             ]
             .into()
         );
         assert!(cdk.support_matrix.units.contains("sat"));
-        assert_eq!(cdk.support_matrix.payment_bindings.len(), 4);
+        assert_eq!(cdk.support_matrix.payment_bindings.len(), 5);
         assert!(cdk.support_matrix.payment_bindings.iter().all(|binding| {
             binding.unit == "sat"
                 && (binding.method == proofstorm_core::PaymentMethod::Bolt11
@@ -3389,7 +3390,12 @@ mod tests {
         assert!(catalog.implementations.iter().all(|support| {
             matches!(
                 support.implementation.as_str(),
-                "cocod-wallet" | "ldk-server" | "cdk-ldk-server-processor"
+                "cocod-wallet"
+                    | "ldk-server"
+                    | "cdk-ldk-server-processor"
+                    | "cdk-bark-processor"
+                    | "bark-server"
+                    | "cln-hold"
             ) || support.preferred_version.as_ref().is_some_and(|version| {
                 support.supported_versions.contains(version)
                     && (matches!(
@@ -3457,7 +3463,7 @@ mod tests {
         page.items = items;
         let page: CatalogListResponse =
             serde_json::from_value(serde_json::to_value(page).unwrap()).unwrap();
-        assert_eq!(page.items.len(), 17);
+        assert_eq!(page.items.len(), 20);
         assert!(page.next_cursor.is_none());
         assert!(read_query::wire_size(&page).unwrap() <= MAX_AGENT_RESPONSE_BYTES);
         assert!(page.items.iter().all(|entry| {
@@ -3466,7 +3472,12 @@ mod tests {
                 && (entry.support_lifecycle == SupportLifecycle::Preferred
                     || matches!(
                         entry.id.as_str(),
-                        "cocod-wallet" | "ldk-server" | "cdk-ldk-server-processor"
+                        "cocod-wallet"
+                            | "ldk-server"
+                            | "cdk-ldk-server-processor"
+                            | "cdk-bark-processor"
+                            | "bark-server"
+                            | "cln-hold"
                     ) && entry.support_lifecycle == SupportLifecycle::Experimental
                     || entry.id == "lnd"
                         && entry.version == "0.20.4-beta"
