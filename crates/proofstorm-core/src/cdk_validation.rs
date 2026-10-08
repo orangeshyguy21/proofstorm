@@ -1,16 +1,35 @@
 //! Topology constraints of the unified CDK mint: linked and embedded payment
 //! paths must be unambiguous, and embedded backends need exactly one chain.
 use super::{
-    BTreeSet, CellSpec, DependencyBinding, LinkKind, PaymentMethod, ValidationIssue, issue,
+    BTreeMap, BTreeSet, CellSpec, DependencyBinding, LinkKind, PaymentMethod, ValidationIssue,
+    is_cashu_unit, issue,
 };
 use crate::DatabaseRole;
 
-fn configured<'a>(component: &'a crate::ComponentSpec, field: &str) -> &'a str {
+fn configured<'a>(component: &'a crate::ComponentSpec, field: &str, default: &'a str) -> &'a str {
     component
         .config
         .get(field)
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("none")
+        .unwrap_or(default)
+}
+
+/// The (method, unit, backend) tuples a CDK mint serves from embedded
+/// backends. Upstream mintd always registers BDK on-chain in sat.
+pub(crate) fn embedded_payment_tuples(
+    component: &crate::ComponentSpec,
+) -> Vec<(PaymentMethod, String, &'static str)> {
+    let mut tuples = Vec::new();
+    if configured(component, "embedded_lightning", "none") == "ldk-node" {
+        let unit = configured(component, "embedded_lightning_unit", "sat");
+        for method in [PaymentMethod::Bolt11, PaymentMethod::Bolt12] {
+            tuples.push((method, unit.to_owned(), "ldk-node"));
+        }
+    }
+    if configured(component, "embedded_onchain", "none") == "bdk" {
+        tuples.push((PaymentMethod::Onchain, "sat".into(), "bdk"));
+    }
+    tuples
 }
 
 pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssue>) {
@@ -19,8 +38,16 @@ pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssu
             continue;
         }
         let path = format!("/components/{index}");
-        let ldk = configured(component, "embedded_lightning") == "ldk-node";
-        let bdk = configured(component, "embedded_onchain") == "bdk";
+        let ldk = configured(component, "embedded_lightning", "none") == "ldk-node";
+        let bdk = configured(component, "embedded_onchain", "none") == "bdk";
+        if !is_cashu_unit(configured(component, "embedded_lightning_unit", "sat")) {
+            issue(
+                issues,
+                "invalid_payment_unit",
+                format!("{path}/config/embedded_lightning_unit"),
+                "must be a lowercase Cashu unit of 1..=64 ASCII letters, digits, '-' or '_'",
+            );
+        }
         let outgoing = |kind| {
             cell.links
                 .iter()
@@ -43,20 +70,29 @@ pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssu
             );
         }
         // Upstream refuses two backends for one (unit, method) pair.
-        let mut claimed = BTreeSet::new();
-        if ldk {
-            claimed.insert((PaymentMethod::Bolt11, "sat"));
-            claimed.insert((PaymentMethod::Bolt12, "sat"));
-        }
-        if bdk {
-            claimed.insert((PaymentMethod::Onchain, "sat"));
-        }
+        let mut claimed = embedded_payment_tuples(component)
+            .into_iter()
+            .map(|(method, unit, _)| (method, unit))
+            .collect::<BTreeSet<_>>();
         let payments = outgoing(LinkKind::PaymentBackend).collect::<Vec<_>>();
+        // Each linked backend renders one payment section with one unit.
+        let mut units = BTreeMap::new();
         for link in &payments {
             let Some(DependencyBinding::Payment { method, unit }) = &link.binding else {
                 continue;
             };
-            if !claimed.insert((method.clone(), unit.as_str())) {
+            if *units.entry(link.to.as_str()).or_insert(unit) != unit {
+                issue(
+                    issues,
+                    "cdk_payment_backend_unit_mixed",
+                    format!("{path}/links/{}", link.id),
+                    format!(
+                        "every payment_backend link to {:?} must use one unit; that backend renders one payment section",
+                        link.to
+                    ),
+                );
+            }
+            if !claimed.insert((method.clone(), unit.clone())) {
                 issue(
                     issues,
                     "cdk_payment_method_conflict",
@@ -178,6 +214,58 @@ mod tests {
                 &json!([lnd(), chain()])
             )),
             ["cdk_payment_method_conflict"]
+        );
+    }
+
+    #[test]
+    fn each_payment_section_has_one_valid_unit() {
+        // A different embedded unit is a separate (unit, method) pair, not a conflict.
+        assert!(
+            codes(&cell(
+                &json!({"embedded_lightning": "ldk-node", "embedded_lightning_unit": "msat"}),
+                &json!([lnd(), chain()])
+            ))
+            .is_empty()
+        );
+        let report = validate_cell(&cell(
+            &json!({"embedded_lightning": "ldk-node", "embedded_lightning_unit": "MSAT"}),
+            &json!([chain()]),
+        ));
+        assert!(report.issues.iter().any(|issue| {
+            issue.code == "invalid_payment_unit"
+                && issue.path == "/components/2/config/embedded_lightning_unit"
+        }));
+        let mut bolt12 = lnd();
+        bolt12["id"] = json!("mint-bolt12");
+        bolt12["binding"] = json!({"type": "payment", "method": "bolt12", "unit": "msat"});
+        assert!(
+            codes(&cell(&json!({}), &json!([lnd(), bolt12])))
+                .contains(&"cdk_payment_backend_unit_mixed".to_string())
+        );
+    }
+
+    #[test]
+    fn embedded_tuples_follow_configuration() {
+        let mint = |config: Value| {
+            cell(&config, &json!([chain()]))
+                .components
+                .into_iter()
+                .find(|component| component.id == "mint")
+                .unwrap()
+        };
+        assert!(super::embedded_payment_tuples(&mint(json!({}))).is_empty());
+        let tuples = super::embedded_payment_tuples(&mint(json!({
+            "embedded_lightning": "ldk-node",
+            "embedded_lightning_unit": "msat",
+            "embedded_onchain": "bdk"
+        })));
+        assert_eq!(
+            tuples,
+            [
+                (crate::PaymentMethod::Bolt11, "msat".to_string(), "ldk-node"),
+                (crate::PaymentMethod::Bolt12, "msat".to_string(), "ldk-node"),
+                (crate::PaymentMethod::Onchain, "sat".to_string(), "bdk"),
+            ]
         );
     }
 

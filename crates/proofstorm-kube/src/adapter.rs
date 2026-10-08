@@ -2054,7 +2054,7 @@ fn cdk_runtime_resources(
         ports.push(json!({"name": "p2p", "containerPort": p2p_port}));
         Some(ldk_payment_backend_config(
             chain, chain_rpc, p2p_port, config,
-        ))
+        )?)
     } else {
         let payment_mounts = plan
             .execution_context
@@ -2089,6 +2089,7 @@ fn cdk_runtime_resources(
                     lightning,
                     &payment_mount.name,
                     &payment_mount.mount_path,
+                    linked_unit(plan, lightning)?,
                     config,
                 )?)
             }
@@ -3441,7 +3442,7 @@ fn oidc_wait_container(identity: &TargetDescriptorContract) -> Result<Value, Ada
 fn lightning_limits(config: &CdkMintConfig) -> String {
     format!(
         "min_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n",
-        config.min_mint_sat, config.max_mint_sat, config.min_melt_sat, config.max_melt_sat
+        config.min_mint, config.max_mint, config.min_melt, config.max_melt
     )
 }
 
@@ -3455,10 +3456,56 @@ fn onchain_limits(config: &CdkMintConfig) -> String {
     )
 }
 
+/// The one unit a mint's payment links bind to a linked backend.
+fn linked_unit<'a>(
+    plan: &'a ComponentPlanContract,
+    target: &TargetDescriptorContract,
+) -> Result<&'a str, AdapterError> {
+    let units = plan
+        .relevant_links
+        .iter()
+        .filter(|link| {
+            link.kind == LinkKind::PaymentBackend
+                && plan
+                    .linked_targets
+                    .get(&link.id)
+                    .map(|bound| &bound.component_id)
+                    == Some(&target.component_id)
+        })
+        .map(|link| match &link.binding {
+            Some(DependencyBinding::Payment { unit, .. }) => Some(unit.as_str()),
+            _ => None,
+        })
+        .collect::<Option<BTreeSet<_>>>();
+    match units
+        .as_ref()
+        .map(|units| units.iter().collect::<Vec<_>>())
+        .as_deref()
+    {
+        Some([unit]) => cashu_unit(unit),
+        _ => Err(AdapterError::InvalidPlan(format!(
+            "component {:?} requires one payment unit for backend {:?}",
+            plan.component_id, target.component_id
+        ))),
+    }
+}
+
+/// Recheck a unit before it is written into native TOML.
+fn cashu_unit(unit: &str) -> Result<&str, AdapterError> {
+    if proofstorm_core::is_cashu_unit(unit) {
+        Ok(unit)
+    } else {
+        Err(AdapterError::InvalidPlan(format!(
+            "payment unit {unit:?} is not a Cashu unit identifier"
+        )))
+    }
+}
+
 fn linked_payment_backend_config(
     lightning: &TargetDescriptorContract,
     mount_name: &str,
     mount_path: &str,
+    unit: &str,
     config: &CdkMintConfig,
 ) -> Result<String, AdapterError> {
     let limits = lightning_limits(config);
@@ -3466,12 +3513,12 @@ fn linked_payment_backend_config(
         "lnd" => {
             let lightning_rpc = target_port(lightning, "rpc")?;
             Ok(format!(
-                "[payment_backend]\nbackend = \"lnd\"\nunit = \"sat\"\n{limits}\n[lnd]\naddress = \"https://{}:{lightning_rpc}\"\ncert_file = \"{mount_path}/tls.cert\"\nmacaroon_file = \"{mount_path}/data/chain/bitcoin/regtest/admin.macaroon\"\n",
+                "[payment_backend]\nbackend = \"lnd\"\nunit = \"{unit}\"\n{limits}\n[lnd]\naddress = \"https://{}:{lightning_rpc}\"\ncert_file = \"{mount_path}/tls.cert\"\nmacaroon_file = \"{mount_path}/data/chain/bitcoin/regtest/admin.macaroon\"\n",
                 lightning.component_id
             ))
         }
         "cln" => Ok(format!(
-            "[payment_backend]\nbackend = \"cln\"\nunit = \"sat\"\n{limits}\n[cln]\nrpc_path = \"{mount_path}/regtest/lightning-rpc\"\nbolt12 = false\nexpose_private_channels = false\nfee_percent = 0.02\nreserve_fee_min = 2\n"
+            "[payment_backend]\nbackend = \"cln\"\nunit = \"{unit}\"\n{limits}\n[cln]\nrpc_path = \"{mount_path}/regtest/lightning-rpc\"\nbolt12 = false\nexpose_private_channels = false\nfee_percent = 0.02\nreserve_fee_min = 2\n"
         )),
         backend => Err(AdapterError::InvalidPlan(format!(
             "CDK payment backend {backend:?} has no configuration renderer"
@@ -3484,14 +3531,17 @@ fn ldk_payment_backend_config(
     chain_rpc: u16,
     p2p_port: u16,
     config: &CdkMintConfig,
-) -> String {
-    format!(
-        "[payment_backend]\nbackend = \"ldk-node\"\nunit = \"sat\"\n{}\n[ldk_node]\nfee_percent = 0.04\nreserve_fee_min = 4\nbitcoin_network = \"regtest\"\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"{}\"\nbitcoind_rpc_port = {chain_rpc}\nbitcoind_rpc_user = \"{RPC_USER}\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\nstorage_dir_path = \"/app/data/ldk-node\"\nldk_node_host = \"0.0.0.0\"\nldk_node_port = {p2p_port}\ngossip_source_type = \"p2p\"\nwebserver_host = \"127.0.0.1\"\nwebserver_port = 8091\nldk_node_mnemonic = \"file:/mint-secrets/ldk-mnemonic\"\n",
+) -> Result<String, AdapterError> {
+    let unit = cashu_unit(&config.embedded_lightning_unit)?;
+    Ok(format!(
+        "[payment_backend]\nbackend = \"ldk-node\"\nunit = \"{unit}\"\n{}\n[ldk_node]\nfee_percent = 0.04\nreserve_fee_min = 4\nbitcoin_network = \"regtest\"\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"{}\"\nbitcoind_rpc_port = {chain_rpc}\nbitcoind_rpc_user = \"{RPC_USER}\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\nstorage_dir_path = \"/app/data/ldk-node\"\nldk_node_host = \"0.0.0.0\"\nldk_node_port = {p2p_port}\ngossip_source_type = \"p2p\"\nwebserver_host = \"127.0.0.1\"\nwebserver_port = 8091\nldk_node_mnemonic = \"file:/mint-secrets/ldk-mnemonic\"\n",
         lightning_limits(config),
         chain.component_id
-    )
+    ))
 }
 
+/// An on-chain-only mint's placeholder section uses BDK's sat unit, which
+/// upstream mintd hard-codes for embedded on-chain.
 fn no_lightning_backend_config(config: &CdkMintConfig) -> String {
     format!(
         "[payment_backend]\nbackend = \"none\"\nunit = \"sat\"\n{}",
@@ -4675,6 +4725,70 @@ mod tests {
         );
     }
 
+    fn rendered_config(plan: &ComponentPlanContract) -> Result<String, AdapterError> {
+        Ok(render_cdk_component(plan)?.config_maps[0]
+            .data
+            .as_ref()
+            .and_then(|data| data.get("config.toml"))
+            .expect("mint config")
+            .clone())
+    }
+
+    #[test]
+    fn cdk_payment_sections_render_the_unit_their_plan_binds() {
+        // The catalog admits sat today; rendering follows the compiled plan.
+        let cell = cdk_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("CDK lock");
+        let plans = compile_component_plans("i0123456789012345678", "sha256:units", &cell, &lock)
+            .expect("CDK plans");
+        let mut lnd = plans
+            .into_iter()
+            .find(|plan| plan.component_id == "mint")
+            .expect("mint plan");
+        assert!(
+            rendered_config(&lnd)
+                .unwrap()
+                .contains("backend = \"lnd\"\nunit = \"sat\"")
+        );
+        let rebind = |plan: &mut ComponentPlanContract, unit: &str| {
+            for link in &mut plan.relevant_links {
+                if let Some(DependencyBinding::Payment { unit: bound, .. }) = &mut link.binding {
+                    *bound = unit.into();
+                }
+            }
+        };
+        rebind(&mut lnd, "msat");
+        assert!(
+            rendered_config(&lnd)
+                .unwrap()
+                .contains("backend = \"lnd\"\nunit = \"msat\"")
+        );
+        rebind(&mut lnd, "sat\"\nbackend = \"fake");
+        assert!(rendered_config(&lnd).is_err());
+
+        let cell = cdk_ldk_cell();
+        let lock = resolve_lock(&cell, default_catalog()).expect("CDK+LDK lock");
+        let mut ldk = compile_component_plans("i0123456789012345678", "sha256:units", &cell, &lock)
+            .expect("CDK+LDK plans")
+            .into_iter()
+            .find(|plan| plan.component_id == "mint")
+            .expect("mint plan");
+        let EffectiveComponentConfig::Cdk(config) = &mut ldk.effective_config else {
+            panic!("CDK configuration")
+        };
+        config.embedded_lightning_unit = "msat".into();
+        assert!(
+            rendered_config(&ldk)
+                .unwrap()
+                .contains("backend = \"ldk-node\"\nunit = \"msat\"")
+        );
+        let EffectiveComponentConfig::Cdk(config) = &mut ldk.effective_config else {
+            panic!("CDK configuration")
+        };
+        config.embedded_lightning_unit = "MSAT".into();
+        assert!(rendered_config(&ldk).is_err());
+    }
+
     #[test]
     fn cdk_ldk_plan_uses_embedded_state_and_direct_chain_binding() {
         let mut cell = cdk_ldk_cell();
@@ -4703,7 +4817,7 @@ mod tests {
         authored
             .config
             .insert("mint_quote_ttl_seconds".into(), json!(777));
-        authored.config.insert("max_mint_sat".into(), json!(42_000));
+        authored.config.insert("max_mint".into(), json!(42_000));
         let lock = resolve_lock(&cell, default_catalog()).expect("CDK+LDK lock");
         let plans = compile_component_plans(
             "i0123456789012345678",

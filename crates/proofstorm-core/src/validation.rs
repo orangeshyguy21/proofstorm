@@ -11,6 +11,7 @@ use crate::{
 mod bark;
 #[path = "cdk_validation.rs"]
 mod cdk;
+pub(crate) use cdk::embedded_payment_tuples;
 #[path = "processor_validation.rs"]
 mod processor;
 
@@ -388,7 +389,7 @@ fn validate_binding(index: usize, link: &LinkSpec, issues: &mut Vec<ValidationIs
         (_, None) => {}
     }
     if let Some(DependencyBinding::Payment { unit, .. }) = &link.binding {
-        if !is_unit_identifier(unit) {
+        if !is_cashu_unit(unit) {
             issue(
                 issues,
                 "invalid_payment_unit",
@@ -558,7 +559,9 @@ fn is_config_version_identifier(value: &str) -> bool {
 }
 
 /// Cashu units are open strings; CDK normalizes custom units to lowercase.
-fn is_unit_identifier(value: &str) -> bool {
+/// The character set also keeps rendered native configuration safe.
+#[must_use]
+pub fn is_cashu_unit(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && value.bytes().all(|byte| {

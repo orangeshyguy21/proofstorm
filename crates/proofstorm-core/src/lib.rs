@@ -96,7 +96,7 @@ pub use publication::{
 };
 pub use quote::{WalletQuoteDirection, WalletQuoteObservation, WalletQuoteObservationRole};
 pub use schema::schema_documents;
-pub use validation::{ValidationIssue, ValidationReport, validate_cell};
+pub use validation::{ValidationIssue, ValidationReport, is_cashu_unit, validate_cell};
 pub mod native;
 pub mod workspace;
 

@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:827cbb1daa69862bc7b6d6d0241f84058d8c9555923a3a389511ea73880c787e",
+  "catalog_digest": "sha256:a011ec95cb5f120850f1c02cf7425487be5d268b18d39ed354cd9962717d2583",
   "entries": [
     {
       "implementation": "bark-server",
@@ -165,7 +165,7 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "cdk-mintd/0.18/v1",
-      "config_schema_digest": "sha256:dff8a7c36af1a1633f9cce4ea29805de832e98c2d939ffadc5564f3518841231",
+      "config_schema_digest": "sha256:c8cba678d169ef6533509631196411258d53ce8436e365ad47c340f7dab207bf",
       "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
       "fields": {
         "auth_max_blind_tokens": {
@@ -225,6 +225,10 @@
           "required": true
         },
         "embedded_lightning": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "embedded_lightning_unit": {
           "classification": "agent_authorable",
           "required": true
         },
@@ -292,11 +296,11 @@
           "classification": "agent_authorable",
           "required": true
         },
-        "max_melt_sat": {
+        "max_melt": {
           "classification": "agent_authorable",
           "required": true
         },
-        "max_mint_sat": {
+        "max_mint": {
           "classification": "agent_authorable",
           "required": true
         },
@@ -308,11 +312,11 @@
           "classification": "agent_authorable",
           "required": true
         },
-        "min_melt_sat": {
+        "min_melt": {
           "classification": "agent_authorable",
           "required": true
         },
-        "min_mint_sat": {
+        "min_mint": {
           "classification": "agent_authorable",
           "required": true
         },
@@ -365,7 +369,7 @@
           "required": true
         },
         "unit": {
-          "classification": "runtime_policy",
+          "classification": "topology_derived",
           "required": true
         },
         "use_keyset_v2": {

@@ -79,6 +79,10 @@
         "embedded_lightning": {
           "$ref": "#/$defs/CdkEmbeddedLightning"
         },
+        "embedded_lightning_unit": {
+          "description": "Cashu unit of the embedded LDK Node payment section.",
+          "type": "string"
+        },
         "embedded_onchain": {
           "$ref": "#/$defs/CdkEmbeddedOnchain"
         },
@@ -108,12 +112,12 @@
           "minimum": 0,
           "type": "integer"
         },
-        "max_melt_sat": {
+        "max_melt": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
-        "max_mint_sat": {
+        "max_mint": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -128,12 +132,13 @@
           "minimum": 0,
           "type": "integer"
         },
-        "min_melt_sat": {
+        "min_melt": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
-        "min_mint_sat": {
+        "min_mint": {
+          "description": "Lightning quote limits, in the unit of the mint's Lightning payment section.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -194,11 +199,12 @@
         "http_cache_tti_seconds",
         "max_inputs",
         "max_outputs",
-        "min_mint_sat",
-        "max_mint_sat",
-        "min_melt_sat",
-        "max_melt_sat",
+        "min_mint",
+        "max_mint",
+        "min_melt",
+        "max_melt",
         "embedded_lightning",
+        "embedded_lightning_unit",
         "embedded_onchain",
         "onchain_min_mint_sat",
         "onchain_max_mint_sat",

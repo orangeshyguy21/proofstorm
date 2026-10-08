@@ -239,15 +239,10 @@ pub(super) fn payment_backend_config(
 ) -> Result<String, AdapterError> {
     let target = processor.descriptor;
     let grpc_port = target_port(target, "grpc")?;
-    // Validated bindings restrict the unit to a TOML-safe Cashu identifier.
-    let unit = &processor.unit;
+    let unit = super::cashu_unit(&processor.unit)?;
     Ok(format!(
         "[payment_backend]\nbackend = \"grpcprocessor\"\nunit = \"{unit}\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[grpc_processor]\nsupported_units = [\"{unit}\"]\naddress = \"{}\"\nport = {grpc_port}\ntls_dir = \"/payment-processor/tls\"\nallow_insecure = false\n",
-        config.min_mint_sat,
-        config.max_mint_sat,
-        config.min_melt_sat,
-        config.max_melt_sat,
-        target.component_id
+        config.min_mint, config.max_mint, config.min_melt, config.max_melt, target.component_id
     ))
 }
 
