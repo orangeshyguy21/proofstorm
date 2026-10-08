@@ -7,10 +7,18 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "payment_methods": {
+          "items": {
+            "$ref": "#/$defs/PaymentMethod"
+          },
+          "type": "array",
+          "uniqueItems": true
         }
       },
       "required": [
-        "event_poll_interval_ms"
+        "event_poll_interval_ms",
+        "payment_methods"
       ],
       "type": "object"
     },
@@ -342,11 +350,7 @@
           "type": "string"
         },
         "method": {
-          "enum": [
-            "bolt11",
-            "bolt12",
-            "onchain"
-          ],
+          "pattern": "^[a-z0-9_-]{1,53}$",
           "type": "string"
         },
         "network": {
@@ -380,9 +384,9 @@
           "type": "string"
         },
         "unit": {
-          "maxLength": 16,
+          "maxLength": 64,
           "minLength": 1,
-          "pattern": "^[a-z0-9-]+$",
+          "pattern": "^[a-z0-9_-]+$",
           "type": "string"
         }
       },
@@ -1109,6 +1113,10 @@
         "wallet_payment",
         "authentication"
       ],
+      "type": "string"
+    },
+    "PaymentMethod": {
+      "pattern": "^[a-z0-9_-]{1,53}$",
       "type": "string"
     },
     "PostgresConfig": {

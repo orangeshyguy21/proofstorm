@@ -1,7 +1,7 @@
 //! Authored payment bindings must match the selected gRPC processor's full rail
 //! set. Backend dependency topology is validated separately from mint bindings.
 use super::{CellSpec, ComponentKind, LinkKind, ValidationIssue, issue};
-use crate::{ProcessorProfile, processor_ids::LDK_PROCESSOR};
+use crate::{ProcessorProfile, method_list, processor_ids::LDK_PROCESSOR};
 
 pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssue>) {
     for (index, component) in cell.components.iter().enumerate() {
@@ -10,13 +10,15 @@ pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssu
             .iter()
             .filter(|link| link.from == component.id && link.kind == LinkKind::PaymentBackend)
             .collect::<Vec<_>>();
-        let (profile, target_implementation, target_kind) = if component.implementation
+        let (profile, target_implementation, target_kind, advertised) = if component.implementation
             == LDK_PROCESSOR
         {
+            let profile = ProcessorProfile::LdkServer;
             (
-                ProcessorProfile::LdkServer,
+                profile,
                 "ldk-server",
                 ComponentKind::Lightning,
+                profile.advertised_methods(&component.config),
             )
         } else if component.implementation == "cdk" {
             let Some(target) = links.iter().find_map(|link| {
@@ -45,12 +47,20 @@ pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssu
                 profile,
                 profile.implementation(),
                 ComponentKind::PaymentProcessor,
+                profile.advertised_methods(&target.config),
             )
         } else {
             continue;
         };
+        // Configuration validation reports an invalid advertised selection.
+        let Some(advertised) = advertised else {
+            continue;
+        };
         let target_id = links.first().map(|link| &link.to);
-        if !profile.accepts_bindings(links.iter().map(|link| link.binding.as_ref()))
+        // CDK registers every advertised method, so bindings must name exactly that set.
+        if profile
+            .bound_methods(links.iter().map(|link| link.binding.as_ref()))
+            .is_none_or(|(_, bound)| bound != advertised)
             || !links.iter().all(|link| {
                 cell.components.iter().any(|target| {
                     Some(&link.to) == target_id
@@ -68,8 +78,9 @@ pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssu
                 },
                 format!("/components/{index}"),
                 format!(
-                    "this profile requires {} payment bindings to one {target_implementation} component",
-                    profile.binding_description()
+                    "this profile requires {} payment bindings to one {target_implementation} component; it advertises {}",
+                    profile.binding_description(),
+                    method_list(&advertised)
                 ),
             );
         }

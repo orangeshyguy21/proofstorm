@@ -139,7 +139,8 @@ mod tests {
             [
                 PaymentMethod::Bolt11,
                 PaymentMethod::Bolt12,
-                PaymentMethod::Onchain
+                PaymentMethod::Onchain,
+                PaymentMethod::Custom("arkoor".into())
             ]
             .into()
         );

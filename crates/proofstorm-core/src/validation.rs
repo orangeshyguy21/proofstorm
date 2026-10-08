@@ -238,6 +238,10 @@ fn validate_links(
                         }) => {
                             matches!(to, ComponentKind::Bitcoin | ComponentKind::PaymentProcessor)
                         }
+                        Some(DependencyBinding::Payment {
+                            method: PaymentMethod::Custom(_),
+                            ..
+                        }) => to == ComponentKind::PaymentProcessor,
                         Some(DependencyBinding::Payment { .. }) => {
                             matches!(
                                 to,
@@ -389,7 +393,7 @@ fn validate_binding(index: usize, link: &LinkSpec, issues: &mut Vec<ValidationIs
                 issues,
                 "invalid_payment_unit",
                 format!("/links/{index}/binding/unit"),
-                "must be a lowercase unit identifier of 1..=16 ASCII letters, digits, or '-'",
+                "must be a lowercase Cashu unit of 1..=64 ASCII letters, digits, '-' or '_'",
             );
         }
     }
@@ -553,12 +557,13 @@ fn is_config_version_identifier(value: &str) -> bool {
         })
 }
 
+/// Cashu units are open strings; CDK normalizes custom units to lowercase.
 fn is_unit_identifier(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= 16
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && value.len() <= 64
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+        })
 }
 
 #[cfg(test)]
@@ -704,6 +709,58 @@ mod tests {
             report.issues.iter().any(|issue| {
                 issue.code == "incompatible_link_kinds" && issue.path == "/links/1"
             })
+        );
+    }
+
+    #[test]
+    fn payment_methods_and_units_are_open_cashu_strings() {
+        use serde_json::json;
+        for (binding, method) in [
+            (
+                json!({"type":"payment","method":"bolt11","unit":"sat"}),
+                PaymentMethod::Bolt11,
+            ),
+            (
+                json!({"type":"payment","method":"arkoor","unit":"usd_cents"}),
+                PaymentMethod::Custom("arkoor".into()),
+            ),
+        ] {
+            let parsed: DependencyBinding = serde_json::from_value(binding.clone()).unwrap();
+            assert!(
+                matches!(&parsed, DependencyBinding::Payment { method: bound, .. } if *bound == method)
+            );
+            assert_eq!(serde_json::to_value(&parsed).unwrap(), binding);
+        }
+        for method in ["Bolt11", "pay pal", "", &"x".repeat(54)] {
+            assert!(
+                serde_json::from_value::<DependencyBinding>(
+                    json!({"type":"payment","method":method,"unit":"sat"})
+                )
+                .is_err(),
+                "{method:?}"
+            );
+        }
+        // A custom method is only served by a payment processor.
+        let mut custom = valid_cell();
+        custom.links[1].binding = Some(DependencyBinding::Payment {
+            method: PaymentMethod::Custom("paypal".into()),
+            unit: "sat".into(),
+        });
+        assert!(
+            validate_cell(&custom).issues.iter().any(|issue| {
+                issue.code == "incompatible_link_kinds" && issue.path == "/links/1"
+            })
+        );
+        let mut unit = valid_cell();
+        unit.links[1].binding = Some(DependencyBinding::Payment {
+            method: PaymentMethod::Bolt11,
+            unit: "usd_cents".into(),
+        });
+        assert!(
+            !validate_cell(&unit)
+                .issues
+                .iter()
+                .any(|issue| issue.code == "invalid_payment_unit")
         );
     }
 

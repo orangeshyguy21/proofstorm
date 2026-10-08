@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:594e9cb40ae9db74ce74683a3f241dc653e0c2555199bef3111a79ba71d071bd",
+  "catalog_digest": "sha256:0ed9e10b4d18559be390e3060137faa9cb502bc2e6f8128d8236bbc86eb0dc00",
   "entries": [
     {
       "implementation": "bark-server",
@@ -385,7 +385,8 @@
         "payment_methods": [
           "bolt11",
           "bolt12",
-          "onchain"
+          "onchain",
+          "arkoor"
         ],
         "payment_backends": [
           "bdk",
@@ -445,6 +446,26 @@
             "unit": "sat",
             "backend": {
               "implementation": "cdk-ldk-server-processor",
+              "versions": [
+                "0.1.0-fe468ca"
+              ]
+            }
+          },
+          {
+            "method": "onchain",
+            "unit": "sat",
+            "backend": {
+              "implementation": "cdk-bark-processor",
+              "versions": [
+                "0.1.0-fe468ca"
+              ]
+            }
+          },
+          {
+            "method": "arkoor",
+            "unit": "sat",
+            "backend": {
+              "implementation": "cdk-bark-processor",
               "versions": [
                 "0.1.0-fe468ca"
               ]
@@ -543,7 +564,7 @@
       "release_channel": "prerelease",
       "support_lifecycle": "experimental",
       "config_version": "cdk-bark-processor/0.1/v1",
-      "config_schema_digest": "sha256:5632a759987dac1e6cd3ee0fecfc383bf5bc3aec55cd2439a68bf7c565aa22fa",
+      "config_schema_digest": "sha256:effb916fc6d3a9818de703f6520572459e6b0d008613c5d4658dd71708cd6c86",
       "image": "proofstorm-registry.localhost:5000/cdk-bark-processor@sha256:0d42619e268a902d7fe7058ce8c575d9efb6046d18f3762773669713c578e8f3",
       "fields": {
         "backend_endpoint": {
@@ -571,7 +592,7 @@
           "required": true
         },
         "payment_methods": {
-          "classification": "runtime_policy",
+          "classification": "agent_authorable",
           "required": true
         },
         "rpc_credentials": {
@@ -584,7 +605,9 @@
           "persistent_volume"
         ],
         "payment_methods": [
-          "bolt11"
+          "bolt11",
+          "onchain",
+          "arkoor"
         ],
         "payment_backends": [],
         "units": [

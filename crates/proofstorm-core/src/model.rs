@@ -190,14 +190,105 @@ pub enum DatabaseRole {
     Authentication,
 }
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
+/// A Cashu payment method name. CDK knows `bolt11`, `bolt12` and `onchain`;
+/// any other valid name is a custom method a payment processor advertises.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PaymentMethod {
     Bolt11,
     Bolt12,
     Onchain,
+    Custom(String),
+}
+
+/// CDK's custom kind limit (64) less its `_mint_quote` suffix.
+const MAX_CUSTOM_METHOD_LEN: usize = 53;
+
+impl PaymentMethod {
+    /// The method name as CDK registers it and processors advertise it.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Bolt11 => "bolt11",
+            Self::Bolt12 => "bolt12",
+            Self::Onchain => "onchain",
+            Self::Custom(name) => name,
+        }
+    }
+
+    /// The name of a custom method, which processors list in `GetSettings.custom`.
+    #[must_use]
+    pub fn custom_name(&self) -> Option<&str> {
+        match self {
+            Self::Custom(name) => Some(name),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for PaymentMethod {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for PaymentMethod {
+    type Err = String;
+
+    /// Accepts the canonical lowercase names CDK uses as URL path segments.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(match value {
+            "bolt11" => Self::Bolt11,
+            "bolt12" => Self::Bolt12,
+            "onchain" => Self::Onchain,
+            custom
+                if (1..=MAX_CUSTOM_METHOD_LEN).contains(&custom.len())
+                    && custom.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || byte == b'-'
+                            || byte == b'_'
+                    }) =>
+            {
+                Self::Custom(custom.into())
+            }
+            _ => {
+                return Err(format!(
+                    "invalid payment method {value:?}: use lowercase letters, digits, '-' or '_' (at most {MAX_CUSTOM_METHOD_LEN})"
+                ));
+            }
+        })
+    }
+}
+
+impl Serialize for PaymentMethod {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for PaymentMethod {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl JsonSchema for PaymentMethod {
+    fn schema_name() -> Cow<'static, str> {
+        "PaymentMethod".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::PaymentMethod").into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "pattern": "^[a-z0-9_-]{1,53}$"
+        })
+    }
 }
 
 #[derive(
@@ -277,8 +368,8 @@ impl JsonSchema for DependencyBinding {
                 "unit": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 16,
-                    "pattern": "^[a-z0-9-]+$"
+                    "maxLength": 64,
+                    "pattern": "^[a-z0-9_-]+$"
                 }
             },
             "additionalProperties": false,

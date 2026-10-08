@@ -7,7 +7,7 @@ use super::{
     resource, service_from_plan, stateful_set, target_port,
 };
 use proofstorm_core::{
-    BitcoinNetwork,
+    BarkProcessorConfig, BitcoinNetwork, ProcessorProfile, method_list,
     processor_ids::{BARK_PROCESSOR, BARK_SERVER},
 };
 
@@ -53,7 +53,8 @@ pub(super) fn service_name(value: &str) -> bool {
         && value.as_bytes()[value.len() - 1].is_ascii_alphanumeric()
 }
 
-/// Render one persistent BOLT11/sat Bark processor, without publishing an image.
+/// Render one persistent Bark processor advertising its configured methods,
+/// without publishing an image.
 /// # Errors
 /// Refuses incompatible plans, ambiguous dependencies and mismatched identities.
 pub fn render_processor(plan: &ComponentPlanContract) -> Result<RenderedComponent, AdapterError> {
@@ -63,7 +64,7 @@ pub fn render_processor(plan: &ComponentPlanContract) -> Result<RenderedComponen
             "Bark processor configuration missing".into(),
         ));
     };
-    validate_identity(plan, config.event_poll_interval_ms)?;
+    validate_identity(plan, config)?;
     let chain = dependency(
         plan,
         LinkKind::ChainBackend,
@@ -107,21 +108,16 @@ pub fn render_processor(plan: &ComponentPlanContract) -> Result<RenderedComponen
         rendered.secrets.push(resource(json!({"apiVersion":"v1","kind":"Secret","type":"Opaque",
             "metadata":metadata(&format!("{id}-{suffix}"),&plan.instance_key,&namespace,Some(id)),"stringData":data}))?);
     }
-    let workload = workload(
-        plan,
-        port,
-        chain,
-        rpc,
-        server,
-        ark,
-        config.event_poll_interval_ms,
-    );
+    let workload = workload(plan, port, chain, rpc, server, ark, config);
     rendered.stateful_sets.push(resource(workload)?);
     install_component_driver(&mut rendered)?;
     Ok(rendered)
 }
 
-fn validate_identity(plan: &ComponentPlanContract, poll: u64) -> Result<(), AdapterError> {
+fn validate_identity(
+    plan: &ComponentPlanContract,
+    config: &BarkProcessorConfig,
+) -> Result<(), AdapterError> {
     let backend = proofstorm_core::default_backend_registry()
         .require(BARK_PROCESSOR)
         .map_err(AdapterError::InvalidPlan)?;
@@ -143,7 +139,8 @@ fn validate_identity(plan: &ComponentPlanContract, poll: u64) -> Result<(), Adap
                     )
             })
         });
-    if !(1..=60_000).contains(&poll)
+    if !(1..=60_000).contains(&config.event_poll_interval_ms)
+        || !ProcessorProfile::Bark.accepts_methods(&config.payment_methods)
         || !mounts_match
         || plan.execution_context.component_id != plan.component_id
         || plan.execution_context.state_contract != backend.execution_state_contract
@@ -191,9 +188,10 @@ fn workload(
     rpc: u16,
     server: &TargetDescriptorContract,
     ark: u16,
-    poll: u64,
+    config: &BarkProcessorConfig,
 ) -> Value {
     let id = &plan.component_id;
+    let methods = method_list(&config.payment_methods);
     let mut workload = stateful_set(
         &plan.instance_key,
         &instance_namespace(&plan.instance_key),
@@ -205,7 +203,7 @@ fn workload(
         ]),
         &[],
         "/data",
-        &json!({"exec":{"command":[crate::drivers::DRIVER_PATH,"processor-settings",format!("https://127.0.0.1:{port}"),"/processor-client/tls",BARK_PROCESSOR]},"timeoutSeconds":3}),
+        &json!({"exec":{"command":[crate::drivers::DRIVER_PATH,"processor-settings",format!("https://127.0.0.1:{port}"),"/processor-client/tls",BARK_PROCESSOR,methods]},"timeoutSeconds":3}),
         Some(plan),
     );
     let pod = &mut workload["spec"]["template"]["spec"];
@@ -218,7 +216,7 @@ fn workload(
         ("TLS_KEY_PATH", "/processor-server/tls/server.key".into()),
         ("TLS_CLIENT_CA_PATH", "/processor-server/tls/ca.pem".into()),
         ("BARK_NETWORK", "regtest".into()),
-        ("BARK_PAYMENT_METHODS", "bolt11".into()),
+        ("BARK_PAYMENT_METHODS", methods),
         ("BARK_DATA_DIR", "/data".into()),
         (
             "BARK_SERVER_ADDRESS",
@@ -229,7 +227,10 @@ fn workload(
             format!("http://{}:{rpc}", chain.component_id),
         ),
         ("BARK_BITCOIND_COOKIEFILE", "/chain-rpc/rpc.cookie".into()),
-        ("BARK_EVENT_POLL_INTERVAL_MS", poll.to_string()),
+        (
+            "BARK_EVENT_POLL_INTERVAL_MS",
+            config.event_poll_interval_ms.to_string(),
+        ),
     ];
     pod["containers"][0]["env"] = json!(
         env.into_iter()

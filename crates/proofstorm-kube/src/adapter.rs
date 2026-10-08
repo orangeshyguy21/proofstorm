@@ -2028,17 +2028,17 @@ fn cdk_runtime_resources(
     };
     // Sections compose: at most one Lightning path (linked processor, linked
     // node or embedded LDK), plus embedded BDK on-chain when enabled.
-    let lightning_section = if let Some(target) = grpc_target {
+    let lightning_section = if let Some(grpc) = &grpc_target {
         volume_mounts.push(processor::tls_mount(
             "payment-processor",
             "/payment-processor/tls",
         ));
         volumes.push(processor::tls_volume(
             "payment-processor",
-            &target.component_id,
+            &grpc.descriptor.component_id,
             "client",
         ));
-        Some(processor::payment_backend_config(config, target)?)
+        Some(processor::payment_backend_config(config, grpc)?)
     } else if config.embeds_ldk() {
         let (chain, chain_rpc) = chain.ok_or_else(|| {
             AdapterError::InvalidPlan("embedded LDK Node requires a chain backend".into())
@@ -2140,8 +2140,8 @@ fn cdk_runtime_resources(
     if let Some(identity) = identity {
         init_containers.push(oidc_wait_container(identity)?);
     }
-    if let Some(target) = grpc_target {
-        init_containers.push(processor::wait_for_processor(plan, target)?);
+    if let Some(grpc) = &grpc_target {
+        init_containers.push(processor::wait_for_processor(plan, grpc)?);
     }
     if let Some(lightning) = lightning_target {
         let port = target_port(

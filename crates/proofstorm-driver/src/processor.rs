@@ -3,7 +3,11 @@ use anyhow::{Context, Result};
 use proofstorm_core::PaymentMethod;
 pub use proofstorm_core::ProcessorProfile as Profile;
 use serde::Serialize;
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    time::Duration,
+};
 use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -57,28 +61,55 @@ impl Settings {
     /// Check the complete advertised rail set before CDK registers it.
     /// # Errors
     /// Rejects missing, extra, or incompatible payment methods and units.
-    pub fn validate(&self, profile: Profile) -> Result<()> {
+    pub fn validate(&self, profile: Profile, methods: &BTreeSet<PaymentMethod>) -> Result<()> {
         let unit = profile.settings_unit();
-        let bolt11 = profile.methods().contains(&PaymentMethod::Bolt11);
-        let bolt12 = profile.methods().contains(&PaymentMethod::Bolt12);
-        let onchain = profile.methods().contains(&PaymentMethod::Onchain);
+        let custom = methods
+            .iter()
+            .filter_map(PaymentMethod::custom_name)
+            .collect::<BTreeSet<_>>();
         anyhow::ensure!(
-            self.unit == unit
-                && self.bolt11.is_some() == bolt11
-                && self.bolt12.is_some() == bolt12
-                && self.onchain.is_some() == onchain
-                && self.custom.is_empty(),
-            "payment processor settings do not match {profile:?}: expected {unit}, {:?} and no other rails",
-            profile.methods()
+            profile.accepts_methods(methods)
+                && self.unit == unit
+                && self.bolt11.is_some() == methods.contains(&PaymentMethod::Bolt11)
+                && self.bolt12.is_some() == methods.contains(&PaymentMethod::Bolt12)
+                && self.onchain.is_some() == methods.contains(&PaymentMethod::Onchain)
+                && self
+                    .custom
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>()
+                    == custom,
+            "payment processor settings do not match {profile:?}: expected {unit}, {} and no other rails",
+            proofstorm_core::method_list(methods)
         );
         Ok(())
     }
 }
 
+/// The expected set from an optional comma-separated argument; omitted
+/// means every method the profile supports.
+/// # Errors
+/// Rejects unknown, duplicate or unsupported methods.
+pub fn expected_methods(profile: Profile, value: Option<&str>) -> Result<BTreeSet<PaymentMethod>> {
+    value.map_or_else(
+        || Ok(profile.supported_methods()),
+        |value| {
+            profile
+                .parse_methods(value)
+                .with_context(|| format!("invalid {profile:?} payment methods {value:?}"))
+        },
+    )
+}
+
 /// Perform the same authenticated handshake for an explicitly selected profile.
 /// # Errors
 /// Rejects non-TLS endpoints, invalid credentials, failed RPCs and wrong capabilities.
-pub async fn settings_for(address: &str, tls: &Path, profile: Profile) -> Result<Settings> {
+pub async fn settings_for(
+    address: &str,
+    tls: &Path,
+    profile: Profile,
+    methods: &BTreeSet<PaymentMethod>,
+) -> Result<Settings> {
     anyhow::ensure!(
         address.starts_with("https://"),
         "processor readiness requires TLS"
@@ -112,7 +143,7 @@ pub async fn settings_for(address: &str, tls: &Path, profile: Profile) -> Result
             )
             .await?;
         let settings: Settings = response.into_inner();
-        settings.validate(profile)?;
+        settings.validate(profile, methods)?;
         Ok(settings)
     })
     .await

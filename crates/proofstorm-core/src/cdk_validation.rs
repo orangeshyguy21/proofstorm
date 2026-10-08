@@ -56,7 +56,7 @@ pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssu
             let Some(DependencyBinding::Payment { method, unit }) = &link.binding else {
                 continue;
             };
-            if !claimed.insert((*method, unit.as_str())) {
+            if !claimed.insert((method.clone(), unit.as_str())) {
                 issue(
                     issues,
                     "cdk_payment_method_conflict",

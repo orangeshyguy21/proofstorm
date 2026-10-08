@@ -25,13 +25,15 @@ with SQLite and PostgreSQL, Redis, Keycloak, workspace persistence and control-p
 lifecycle checks.
 
 The Bark compatibility case uses eight exact component versions on each native
-architecture. It covers the experimental BOLT11/sat CDK binding, server and
-CLN/hold dependencies, persistent state, original-quote reconciliation across
-restarts, nine mTLS refusals, independent settlement checks and owned cleanup.
+architecture. It covers the experimental CDK bindings for bolt11, onchain and
+arkoor in sat: the processor and the mint must both advertise exactly those three
+rails. It also covers server and CLN/hold dependencies, persistent state,
+original-quote reconciliation across restarts, nine mTLS refusals, independent
+settlement checks, an on-chain deposit boarded into Ark and owned cleanup.
 Each of the three published Bark images also has a native offline identity probe
 in compatibility, full and documentation suites. The small pull suite retains its
-existing scope. This does not advertise BOLT12, on-chain boarding or uninterrupted
-payment notification delivery, and it runs no model benchmark.
+existing scope. This does not qualify BOLT12, on-chain melts, arkoor payments or
+uninterrupted payment notification delivery, and it runs no model benchmark.
 
 Required CI checks Proofstorm's integration contract: image identity, startup,
 configuration, supported component pairings, ordinary payment/deposit flows,

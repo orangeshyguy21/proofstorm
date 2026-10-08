@@ -278,11 +278,7 @@
       "type": "string"
     },
     "PaymentMethod": {
-      "enum": [
-        "bolt11",
-        "bolt12",
-        "onchain"
-      ],
+      "pattern": "^[a-z0-9_-]{1,53}$",
       "type": "string"
     },
     "ReleaseChannel": {

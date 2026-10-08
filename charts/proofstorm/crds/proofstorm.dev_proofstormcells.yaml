@@ -88,10 +88,7 @@ spec:
                               pattern: ^[a-z][a-z0-9_]*$
                               type: string
                             method:
-                              enum:
-                              - bolt11
-                              - bolt12
-                              - onchain
+                              pattern: ^[a-z0-9_-]{1,53}$
                               type: string
                             network:
                               enum:
@@ -116,9 +113,9 @@ spec:
                               - authentication
                               type: string
                             unit:
-                              maxLength: 16
+                              maxLength: 64
                               minLength: 1
-                              pattern: ^[a-z0-9-]+$
+                              pattern: ^[a-z0-9_-]+$
                               type: string
                           required:
                           - type

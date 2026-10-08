@@ -100,12 +100,22 @@ fn bind_identity(data: &Path, mnemonic: &str) -> Result<()> {
     Ok(())
 }
 
+/// The rendered method selection. Upstream reads an absent list as every
+/// method, so a missing or malformed value is refused rather than widened.
+fn payment_methods(value: Option<&str>) -> Result<String> {
+    value
+        .and_then(|value| proofstorm_core::ProcessorProfile::Bark.parse_methods(value))
+        .map(|methods| proofstorm_core::method_list(&methods))
+        .context("BARK_PAYMENT_METHODS must list the rendered payment methods")
+}
+
 /// Load the private controller-generated seed and exec the native processor.
 /// The native binary remains the only wallet initializer. Once startup has been
 /// attempted, both databases are required; interrupted initialization fails closed.
 /// # Errors
-/// Refuses absent/invalid identity, partial state, changed seed and failed exec.
+/// Refuses absent/invalid identity or methods, partial state, changed seed and failed exec.
 pub fn exec_processor() -> Result<()> {
+    let methods = payment_methods(std::env::var("BARK_PAYMENT_METHODS").ok().as_deref())?;
     let seed = mnemonic(Path::new("/processor-identity/mnemonic"))?;
     for path in [
         "/chain-rpc/rpc.cookie",
@@ -123,7 +133,7 @@ pub fn exec_processor() -> Result<()> {
         .env("BARK_MNEMONIC", seed)
         .env("BARK_DATA_DIR", "/data")
         .env("BARK_NETWORK", "regtest")
-        .env("BARK_PAYMENT_METHODS", "bolt11")
+        .env("BARK_PAYMENT_METHODS", methods)
         .env_remove("BARK_ESPLORA_ADDRESS")
         .exec();
     Err(error).context("execute native Bark payment processor")
@@ -204,6 +214,21 @@ mod tests {
                 }
                 assert!(bind_identity(dir.path(), &seed(1)).is_err());
             }
+        }
+    }
+
+    #[test]
+    fn rendered_methods_pass_through_and_absent_methods_are_refused() {
+        assert_eq!(
+            payment_methods(Some("arkoor,bolt11")).unwrap(),
+            "bolt11,arkoor"
+        );
+        assert_eq!(
+            payment_methods(Some("bolt11,onchain,arkoor")).unwrap(),
+            "bolt11,onchain,arkoor"
+        );
+        for value in [None, Some(""), Some("bolt12"), Some("bolt11,bolt11")] {
+            assert!(payment_methods(value).is_err(), "{value:?}");
         }
     }
 

@@ -1,4 +1,4 @@
-//! Dependency graph of the reserved BOLT11/sat Bark profile. These checks do not
+//! Dependency graph of the reserved Bark stack. These checks do not
 //! enable catalog support or substitute for managed runtime qualification.
 use crate::{
     BitcoinNetwork, CellSpec, ComponentKind, ComponentSpec, DatabaseRole, DependencyBinding,

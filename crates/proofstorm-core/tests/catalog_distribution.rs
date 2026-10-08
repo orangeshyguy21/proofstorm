@@ -59,12 +59,21 @@ fn both_catalogs_distribute_verified_bark_images_with_experimental_contracts() {
             .iter()
             .filter(|binding| binding.backend.implementation == BARK_PROCESSOR)
             .collect();
-        assert_eq!(bindings.len(), 1);
-        assert_eq!(bindings[0].method, PaymentMethod::Bolt11);
-        assert_eq!(bindings[0].unit, "sat");
+        // CDK registers every method the processor can advertise.
         assert_eq!(
-            bindings[0].backend.versions,
-            ["0.1.0-fe468ca".into()].into()
+            bindings
+                .iter()
+                .map(|binding| binding.method.clone())
+                .collect::<Vec<_>>(),
+            [
+                PaymentMethod::Bolt11,
+                PaymentMethod::Onchain,
+                PaymentMethod::Custom("arkoor".into())
+            ]
         );
+        for binding in bindings {
+            assert_eq!(binding.unit, "sat");
+            assert_eq!(binding.backend.versions, ["0.1.0-fe468ca".into()].into());
+        }
     }
 }

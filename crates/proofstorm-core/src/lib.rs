@@ -1,7 +1,9 @@
 //! Domain contracts shared by every Proofstorm interface.
 pub mod processor_ids;
 mod processor_profile;
-pub use processor_profile::{ProcessorProfile, UnknownProcessorProfile};
+pub use processor_profile::{
+    PAYMENT_METHODS_FIELD, ProcessorProfile, UnknownProcessorProfile, method_list,
+};
 
 mod backend;
 mod candidate;

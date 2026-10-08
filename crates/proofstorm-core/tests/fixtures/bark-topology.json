@@ -16,6 +16,8 @@
     {"id":"ark-lightning","kind":"payment_backend","from":"ark","to":"cln","binding":{"type":"payment","method":"bolt11","unit":"sat"}},
     {"id":"processor-chain","kind":"chain_backend","from":"processor","to":"chain","binding":{"type":"chain","network":"regtest"}},
     {"id":"processor-ark","kind":"ark_backend","from":"processor","to":"ark","binding":{"type":"ark","network":"regtest"}},
-    {"id":"mint-bolt11","kind":"payment_backend","from":"mint","to":"processor","binding":{"type":"payment","method":"bolt11","unit":"sat"}}
+    {"id":"mint-bolt11","kind":"payment_backend","from":"mint","to":"processor","binding":{"type":"payment","method":"bolt11","unit":"sat"}},
+    {"id":"mint-onchain","kind":"payment_backend","from":"mint","to":"processor","binding":{"type":"payment","method":"onchain","unit":"sat"}},
+    {"id":"mint-arkoor","kind":"payment_backend","from":"mint","to":"processor","binding":{"type":"payment","method":"arkoor","unit":"sat"}}
   ]
 }

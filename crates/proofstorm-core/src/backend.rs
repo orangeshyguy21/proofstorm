@@ -221,6 +221,8 @@ pub enum ConfigValueKind {
     Number,
     Integer,
     String,
+    /// A non-empty array of distinct strings; `enum_values` constrains members.
+    StringSet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1246,8 +1248,17 @@ fn config_field_schema(field: &ConfigFieldContract, include_default: bool) -> Va
     } else {
         schema.insert("readOnly".into(), Value::Bool(true));
     }
-    if !field.enum_values.is_empty() {
-        schema.insert("enum".into(), Value::Array(field.enum_values.clone()));
+    let members = Value::Array(field.enum_values.clone());
+    if field.value_kind == ConfigValueKind::StringSet {
+        let mut items = serde_json::Map::from_iter([("type".into(), json!("string"))]);
+        if !field.enum_values.is_empty() {
+            items.insert("enum".into(), members);
+        }
+        schema.insert("items".into(), Value::Object(items));
+        schema.insert("uniqueItems".into(), Value::Bool(true));
+        schema.insert("minItems".into(), json!(1));
+    } else if !field.enum_values.is_empty() {
+        schema.insert("enum".into(), members);
     }
     insert_optional_number(&mut schema, "minimum", field.minimum);
     insert_optional_number(&mut schema, "maximum", field.maximum);
@@ -1262,6 +1273,7 @@ fn config_json_type(kind: ConfigValueKind) -> &'static str {
         ConfigValueKind::Number => "number",
         ConfigValueKind::Integer => "integer",
         ConfigValueKind::String => "string",
+        ConfigValueKind::StringSet => "array",
     }
 }
 
@@ -1327,6 +1339,9 @@ fn validate_config_value(
         ConfigValueKind::Number => value.is_number(),
         ConfigValueKind::Integer => value.as_i64().is_some() || value.as_u64().is_some(),
         ConfigValueKind::String => value.is_string(),
+        ConfigValueKind::StringSet => value
+            .as_array()
+            .is_some_and(|items| items.iter().all(Value::is_string)),
     };
     if !type_matches {
         return Err(config_diagnostic(
@@ -1335,6 +1350,31 @@ fn validate_config_value(
             name,
             &format!("expected {}", config_json_type(field.value_kind)),
         ));
+    }
+    if let Some(items) = value.as_array() {
+        let distinct = items
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<BTreeSet<_>>();
+        if items.is_empty() || distinct.len() != items.len() {
+            return Err(config_diagnostic(
+                "string_set_violation",
+                component,
+                name,
+                "expected at least one value and no duplicates",
+            ));
+        }
+        if !field.enum_values.is_empty()
+            && !items.iter().all(|item| field.enum_values.contains(item))
+        {
+            return Err(config_diagnostic(
+                "enum_violation",
+                component,
+                name,
+                "a member is not one of the declared enumeration values",
+            ));
+        }
+        return Ok(());
     }
     if !field.enum_values.is_empty() && !field.enum_values.contains(value) {
         return Err(config_diagnostic(
@@ -3600,6 +3640,66 @@ mod tests {
                 .expect_err("ordered mint bounds")
                 .starts_with("config_order_violation:")
         );
+    }
+
+    #[test]
+    fn bark_payment_methods_are_an_authored_set_with_the_upstream_default() {
+        let registry = default_backend_registry();
+        let schema = registry
+            .config_schema("cdk-bark-processor")
+            .expect("schema");
+        let all = json!(["bolt11", "onchain", "arkoor"]);
+        assert_eq!(
+            schema["properties"]["payment_methods"],
+            json!({
+                "description": schema["properties"]["payment_methods"]["description"],
+                "type": "array",
+                "items": {"type": "string", "enum": all},
+                "uniqueItems": true,
+                "minItems": 1,
+                "default": all,
+                "x-proofstorm-classification": "agent_authorable"
+            })
+        );
+        let mut processor = component(
+            "processor",
+            "cdk-bark-processor",
+            ComponentKind::PaymentProcessor,
+        );
+        processor
+            .config
+            .insert("payment_methods".into(), json!(["arkoor", "bolt11"]));
+        let effective = registry
+            .resolve_effective_component(&processor)
+            .expect("a subset resolves");
+        let EffectiveComponentConfig::BarkProcessor(config) =
+            EffectiveComponentConfig::try_from_component(&effective).expect("typed")
+        else {
+            panic!("Bark processor configuration")
+        };
+        assert_eq!(
+            config.payment_methods,
+            [
+                crate::PaymentMethod::Bolt11,
+                crate::PaymentMethod::Custom("arkoor".into())
+            ]
+            .into()
+        );
+        for invalid in [
+            json!([]),
+            json!(["bolt11", "bolt11"]),
+            json!(["bolt12"]),
+            json!([true]),
+            json!("bolt11"),
+        ] {
+            processor
+                .config
+                .insert("payment_methods".into(), invalid.clone());
+            assert!(
+                registry.resolve_effective_component(&processor).is_err(),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]
