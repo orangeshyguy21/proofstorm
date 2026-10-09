@@ -67,6 +67,8 @@ fn bitcoin(sat: u64) -> String {
 /// Lightning stages, since every observation mines a block.
 pub(super) fn mint(context: &GateContext, client: &mut McpClient, namespace: &str) -> Result<()> {
     let mut forward = http::PortForward::open(&context.kubectl, namespace, "service/mint", 3338)?;
+    // A new forward is not listening yet; a POST would be refused immediately.
+    http::get_json_retrying(&mut forward, "/v1/info", 30)?;
     let quote = http::post_json(
         &forward.url("/v1/mint/quote/onchain"),
         &json!({"unit":"sat","pubkey":PUBKEY}),
