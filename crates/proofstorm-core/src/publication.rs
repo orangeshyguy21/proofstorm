@@ -106,6 +106,7 @@ pub fn resolve_lock(cell: &CellSpec, catalog: &CatalogResponse) -> Result<Resolv
         .map(|component| {
             let entry = validate_catalog_component(component, catalog)?;
             let backend = backends.require(&entry.id)?;
+            require_supported_embedded_bindings(component, entry)?;
             let image = runtime_image(component, entry);
             let source_digest = if image == entry.image {
                 entry.source_digest.clone()
@@ -225,6 +226,33 @@ fn supports_authentication(entry: &CatalogEntry) -> bool {
         .authentication
         .iter()
         .any(|mode| *mode != crate::AuthenticationMode::Unauthenticated)
+}
+
+/// Embedded backends have no link to check, so their configured tuples must be
+/// listed by the exact catalog entry.
+fn require_supported_embedded_bindings(
+    component: &crate::ComponentSpec,
+    entry: &CatalogEntry,
+) -> Result<(), String> {
+    if component.implementation != "cdk" {
+        return Ok(());
+    }
+    for (method, unit, backend) in crate::validation::embedded_payment_tuples(component) {
+        if !entry
+            .support_matrix
+            .embedded_payment_bindings
+            .iter()
+            .any(|support| {
+                support.method == method && support.unit == unit && support.backend == backend
+            })
+        {
+            return Err(format!(
+                "component {:?} version {:?} does not support embedded payment tuple method {method:?}, unit {unit:?}, backend {backend:?}",
+                component.id, entry.version
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn require_compatible_dependency(
@@ -450,6 +478,28 @@ mod tests {
     }
 
     #[test]
+    fn embedded_payment_units_must_be_listed_by_the_exact_mint_version() {
+        let cell = |unit: &str| -> CellSpec {
+            serde_json::from_value(serde_json::json!({
+                "api_version": crate::API_VERSION,
+                "name": "cdk-embedded-unit",
+                "components": [
+                    {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
+                    {"id": "mint", "kind": "mint", "implementation": "cdk", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"embedded_lightning": "ldk-node", "embedded_lightning_unit": unit}}
+                ],
+                "links": [{"id": "mint-chain", "kind": "chain_backend", "from": "mint", "to": "chain", "binding": {"type": "chain", "network": "regtest"}}],
+                "policy": {"allow": [], "limits": {"max_components": 64, "max_links": 256, "max_config_bytes": 65536}}
+            }))
+            .unwrap()
+        };
+        resolve_lock(&cell("sat"), default_catalog()).expect("listed embedded unit");
+        let error = resolve_lock(&cell("msat"), default_catalog())
+            .expect_err("an embedded unit the catalog does not list must refuse publication");
+        assert!(error.contains("embedded payment tuple"), "{error}");
+        assert!(error.contains("unit \"msat\""), "{error}");
+    }
+
+    #[test]
     fn database_roles_refuse_crossed_primary_and_cache_implementations() {
         let component = |id: &str, implementation: &str, kind, control| ComponentSpec {
             id: id.into(),
@@ -578,13 +628,13 @@ mod tests {
                 serde_json::json!("https://proofstorm.invalid/mint.png"),
             ),
             ("input_fee_ppk", serde_json::json!(321)),
-            ("max_melt_sat", serde_json::json!(499_999)),
-            ("max_mint_sat", serde_json::json!(499_999)),
+            ("max_melt", serde_json::json!(499_999)),
+            ("max_mint", serde_json::json!(499_999)),
             ("max_inputs", serde_json::json!(999)),
             ("max_outputs", serde_json::json!(998)),
             ("melt_quote_ttl_seconds", serde_json::json!(333)),
-            ("min_melt_sat", serde_json::json!(2)),
-            ("min_mint_sat", serde_json::json!(2)),
+            ("min_melt", serde_json::json!(2)),
+            ("min_mint", serde_json::json!(2)),
             ("mint_quote_ttl_seconds", serde_json::json!(777)),
             ("motd", serde_json::json!("Agents welcome")),
             ("name", serde_json::json!("Custom CDK")),

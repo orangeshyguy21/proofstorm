@@ -86,6 +86,7 @@
         "description": "Proofstorm regtest CDK mint",
         "description_long": "",
         "embedded_lightning": "none",
+        "embedded_lightning_unit": "sat",
         "embedded_onchain": "none",
         "enable_info_page": false,
         "http_cache_tti_seconds": 60,
@@ -93,12 +94,12 @@
         "icon_url": "",
         "input_fee_ppk": 0,
         "max_inputs": 1000,
-        "max_melt_sat": 500000,
-        "max_mint_sat": 500000,
+        "max_melt": 500000,
+        "max_mint": 500000,
         "max_outputs": 1000,
         "melt_quote_ttl_seconds": 120,
-        "min_melt_sat": 1,
-        "min_mint_sat": 1,
+        "min_melt": 1,
+        "min_mint": 1,
         "mint_quote_ttl_seconds": 600,
         "motd": "",
         "name": "Proofstorm CDK mint",
@@ -236,7 +237,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:72ce5fe8632918f18a40f5c8a6c935a78537d99cbc14c133f17cdf796ebe95fa",
+    "rollout_digest": "sha256:1acdd037507371f71c393e41623c6c9d81307b706ecc9aee771fe1f39f0fece7",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -312,7 +313,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:72ce5fe8632918f18a40f5c8a6c935a78537d99cbc14c133f17cdf796ebe95fa"
+                "proofstorm.dev/rollout-digest": "sha256:1acdd037507371f71c393e41623c6c9d81307b706ecc9aee771fe1f39f0fece7"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

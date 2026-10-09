@@ -10,8 +10,10 @@ preservation. Anonymous manifest/config/layer reads and Docker pulls verified al
 six published images. The processor's patched upstream library suite passed all
 37 tests during image builds.
 
-The distributed catalog includes these images and CDK 0.18.1's explicit
-BOLT11/sat processor binding. Bark remains experimental, with no default version.
+The distributed catalog includes these images and CDK 0.18.1's bolt11, onchain
+and arkoor sat bindings to the processor. Each processor component selects the
+rails it advertises with `payment_methods`; the default is all three, as upstream.
+Bark remains experimental, with no default version.
 Normal on-demand installation and `setup --prefetch-all` obtain the public images;
 manual local seeding is unnecessary. Compatibility, full and documentation suites
 probe the three images on each native architecture. Compatibility/full suites also
@@ -25,7 +27,8 @@ ordinary qualification uses the published catalog digests directly.
 
 ## Build foundation
 
-This recipe builds the processor for the BOLT11/sat integration. The managed
+This recipe builds the processor. The pinned binary serves bolt11, onchain and
+arkoor; Proofstorm does not narrow that set. The managed
 Rust acceptance gate assembles Bitcoin, the server, PostgreSQL, CLN/hold, a
 Lightning peer, processor, CDK mint and CDK wallet. Native Linux qualification
 passed on AMD64 and ARM64; the managed gate replaces the exploratory Docker probe.
@@ -77,8 +80,10 @@ through its own read-only configuration volume. The wallet requires Bitcoin
 `txindex=1`. Existing explicit Esplora
 configurations remain usable when RPC and its credentials are absent.
 
-The runtime must explicitly select `BARK_PAYMENT_METHODS=bolt11`; upstream's
-empty method list still means all rails. Its stable mnemonic and complete data
+The renderer always sets `BARK_PAYMENT_METHODS` from the component's
+`payment_methods` (default `bolt11,onchain,arkoor`, the same set upstream
+advertises for an empty list). The startup driver refuses a missing or malformed
+list rather than letting upstream widen it. Its stable mnemonic and complete data
 directory must be preserved together, including `db.sqlite` and
 `onchain_state.redb`. This recipe does not create a second wallet initializer or
 manage volumes. The managed gate owns volumes and exercises wallet restarts;
@@ -90,15 +95,18 @@ The shared driver accepts an explicit profile:
 
 ```sh
 /opt/proofstorm/driver processor-settings https://processor:50051 \
-  /payment-processor/tls cdk-bark-processor
+  /payment-processor/tls cdk-bark-processor bolt11,onchain,arkoor
 ```
 
-It sends protocol `4.0.0`, authenticates both peers, and requires `sat`, BOLT11,
-no BOLT12, no on-chain settings, and an empty custom-method map. This checks the
-actual protobuf fields, including methods CDK would otherwise register silently.
-The catalog profile argument is required; it is not auto-detected from the
-response. Both profiles reject extra rails. Timeout and reply-size bounds
-are unchanged.
+It sends protocol `4.0.0`, authenticates both peers, and requires `sat` and
+exactly the listed rails: BOLT11 settings only for `bolt11`, on-chain settings
+only for `onchain`, a custom-method map of exactly `arkoor` only for `arkoor`,
+and never BOLT12. This checks the actual protobuf fields, including methods CDK
+would otherwise register silently. The catalog profile argument is required; it
+is not auto-detected from the response. An omitted method list means every rail
+the profile supports. Renderers always pass the Bark list explicitly; the fixed
+LDK profile keeps its implicit complete set. Both profiles reject extra rails.
+Timeout and reply-size bounds are unchanged.
 
 Core topology validation, mint rendering and the driver share one explicit
 processor contract:
@@ -106,10 +114,12 @@ processor contract:
 | Processor | Authored mint bindings | Native GetSettings unit |
 | --- | --- | --- |
 | `cdk-ldk-server-processor` | BOLT11/sat and BOLT12/sat | msat |
-| `cdk-bark-processor` | BOLT11/sat only | sat |
+| `cdk-bark-processor` | One per `payment_methods` entry: bolt11, onchain, arkoor (default all) | sat |
 
-Each mint must bind every method in its selected profile exactly once to one
-processor component. Missing or duplicate bindings, mixed endpoints/profiles,
+CDK registers every rail a processor advertises, so each mint must bind every
+advertised method exactly once to one processor component. Another backend of
+the same mint, such as embedded BDK for onchain, can serve a rail the Bark
+processor leaves out; two backends claiming one rail are refused. Missing or duplicate bindings, mixed endpoints/profiles,
 unknown processors, other units and extra methods are rejected. Rendering checks
 the compiled descriptors again, selects that processor's authenticated readiness
 profile, and projects only its CA and client certificate/key into the mint.
@@ -146,15 +156,24 @@ tests these requirements and resolves against both distributed platform catalogs
 
 ## Managed processor backend
 
-The CDK Bark processor has a typed backend and Kubernetes renderer. Its only authored setting is
-`event_poll_interval_ms` (default 5000, supported range 1–60000). Network, payment
-methods, endpoints, storage paths and credentials are managed settings.
+The CDK Bark processor has a typed backend and Kubernetes renderer. Its authored settings are
+`event_poll_interval_ms` (default 5000, supported range 1–60000) and
+`payment_methods`, a non-empty set of `bolt11`, `onchain` and `arkoor` (default
+all three). Network, endpoints, storage paths and credentials are managed settings.
+
+- `bolt11` settles through the Ark server's CLN/hold node.
+- `onchain` mint quotes return a processor wallet address. After one confirmation
+  the processor boards the deposit into Ark and credits the original quote with
+  the board fee deducted. `onchain` melts offboard from the processor's Ark balance.
+- `arkoor` is a CDK custom method for melts only. The request is an Ark address
+  on the same server, with zero fee. cdk-cli 0.18.1 cannot create custom-method
+  melts, and no catalog component provides a receiving Bark wallet yet.
 
 The processor runs as one StatefulSet with the complete `/data` directory on its
 owned PVC. Both `db.sqlite` and `onchain_state.redb` remain together. The renderer
 derives server and Bitcoin endpoints from the typed links, waits for both
-dependencies, explicitly selects regtest/BOLT11, and requires authenticated
-`GetSettings` with the Bark profile before readiness. It neither mounts another
+dependencies, explicitly selects regtest and the configured methods, and requires
+authenticated `GetSettings` with exactly those methods before readiness. It neither mounts another
 component's data volume nor exposes a public chain-service fallback.
 
 The controller creates a private mnemonic once and preserves it on reconciliation
@@ -333,7 +352,9 @@ The gate funds the server and a bidirectional Lightning channel. Its mint sets
 processor's melt fee reserve; it does not qualify nonzero Cashu input fees.
 It verifies:
 
-- BOLT11/sat processor settings and real gRPC refusal of plaintext, missing
+- Processor settings advertising exactly bolt11, onchain and arkoor in sat, and
+  the mint's NUT-04 and NUT-05 registration of the same three rails.
+- Real gRPC refusal of plaintext, missing
   client certificates and another service's client identity on all three TLS
   endpoints. Successful authenticated calls bracket the refusal checks.
   Each negative probe gets a fresh authenticated control tunnel because
@@ -348,6 +369,10 @@ It verifies:
 - A 30,000 sat melt, completed-state recovery across stack restarts and a second
   10,000 sat melt. Recipient invoice identity/amount, mint quote, native receipt,
   fee bounds and passive wallet conservation must agree.
+- A 50,000 sat on-chain deposit from Bitcoin Core to an original on-chain mint
+  quote. The quote must be credited after the processor boards the deposit into
+  Ark, with the board fee deducted. This stage runs last because each observation
+  mines a block. On-chain melts and arkoor payments are not exercised.
 - Cell removal even after an exercise failure, a verified teardown receipt,
   and independent namespace/action and owned volume absence inside the test cluster.
 

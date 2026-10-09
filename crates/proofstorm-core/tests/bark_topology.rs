@@ -4,6 +4,7 @@ use proofstorm_core::{
     LinkKind, PaymentMethod, catalog_for_platform, resolve_lock, validate_cell,
 };
 use serde_json::json;
+use std::collections::BTreeSet;
 
 fn fixture() -> CellSpec {
     serde_json::from_str(include_str!("fixtures/bark-topology.json")).unwrap()
@@ -36,24 +37,17 @@ fn complete_graph_resolves_on_both_qualified_platforms() {
             );
             assert_eq!(entry.build_provenance.as_ref().unwrap().platform, name);
             assert!(entry.image.contains("@sha256:"));
-            assert!(
-                entry
-                    .support_matrix
-                    .payment_methods
-                    .contains(&PaymentMethod::Bolt11)
-            );
-            assert!(
-                !entry
-                    .support_matrix
-                    .payment_methods
-                    .contains(&PaymentMethod::Bolt12)
-            );
-            assert!(
-                !entry
-                    .support_matrix
-                    .payment_methods
-                    .contains(&PaymentMethod::Onchain)
-            );
+            let methods: BTreeSet<_> = if id == "cdk-bark-processor" {
+                [
+                    PaymentMethod::Bolt11,
+                    PaymentMethod::Onchain,
+                    PaymentMethod::Custom("arkoor".into()),
+                ]
+                .into()
+            } else {
+                [PaymentMethod::Bolt11].into()
+            };
+            assert_eq!(entry.support_matrix.payment_methods, methods);
         }
     }
     let encoded = serde_json::to_string(&cell).unwrap();
@@ -246,4 +240,121 @@ fn ark_binding_refuses_undeclared_networks_and_irrelevant_fields() {
     ] {
         assert!(serde_json::from_value::<DependencyBinding>(binding).is_err());
     }
+}
+
+fn select(cell: &mut CellSpec, methods: &serde_json::Value, links: &[&str]) {
+    cell.components
+        .iter_mut()
+        .find(|component| component.id == "processor")
+        .unwrap()
+        .config
+        .insert("payment_methods".into(), methods.clone());
+    cell.links.retain(|link| {
+        link.from != "mint"
+            || link.kind != LinkKind::PaymentBackend
+            || links.contains(&link.id.as_str())
+    });
+}
+
+#[test]
+fn mint_binds_exactly_the_methods_the_processor_advertises() {
+    let catalog = catalog_for_platform(CatalogPlatform::LinuxArm64);
+    // The default advertises every method; dropping any binding is refused.
+    for missing in ["mint-bolt11", "mint-onchain", "mint-arkoor"] {
+        let mut invalid = fixture();
+        invalid.links.retain(|link| link.id != missing);
+        refuses(&invalid, "bark_processor_payment_bindings");
+    }
+    for (methods, links) in [
+        (json!(["bolt11"]), &["mint-bolt11"][..]),
+        (
+            json!(["arkoor", "onchain"]),
+            &["mint-onchain", "mint-arkoor"][..],
+        ),
+        (
+            json!(["bolt11", "onchain", "arkoor"]),
+            &["mint-bolt11", "mint-onchain", "mint-arkoor"][..],
+        ),
+    ] {
+        let mut cell = fixture();
+        select(&mut cell, &methods, links);
+        let report = validate_cell(&cell);
+        assert!(report.valid, "{methods}: {report:?}");
+        resolve_lock(&cell, &catalog).unwrap();
+        // Extra bindings to a method the processor does not advertise are refused.
+        let mut extra = fixture();
+        select(
+            &mut extra,
+            &methods,
+            &["mint-bolt11", "mint-onchain", "mint-arkoor"],
+        );
+        if links.len() < 3 {
+            refuses(&extra, "bark_processor_payment_bindings");
+        }
+    }
+    let mut duplicate = fixture();
+    duplicate.links.retain(|link| link.id != "mint-onchain");
+    duplicate
+        .links
+        .iter_mut()
+        .find(|link| link.id == "mint-arkoor")
+        .unwrap()
+        .binding = Some(DependencyBinding::Payment {
+        method: PaymentMethod::Bolt11,
+        unit: "sat".into(),
+    });
+    refuses(&duplicate, "bark_processor_payment_bindings");
+}
+
+#[test]
+fn embedded_bdk_can_serve_onchain_beside_a_bark_subset() {
+    let mut cell = fixture();
+    select(
+        &mut cell,
+        &json!(["bolt11", "arkoor"]),
+        &["mint-bolt11", "mint-arkoor"],
+    );
+    let mint = cell
+        .components
+        .iter_mut()
+        .find(|component| component.id == "mint")
+        .unwrap();
+    mint.config.insert("embedded_onchain".into(), json!("bdk"));
+    cell.links.push(
+        serde_json::from_value(json!({"id":"mint-chain","kind":"chain_backend","from":"mint","to":"chain","binding":{"type":"chain","network":"regtest"}}))
+            .unwrap(),
+    );
+    let report = validate_cell(&cell);
+    assert!(report.valid, "{report:?}");
+    resolve_lock(&cell, &catalog_for_platform(CatalogPlatform::LinuxArm64)).unwrap();
+    // The processor's default also advertises onchain, which BDK already claims.
+    let mut conflict = cell.clone();
+    select(
+        &mut conflict,
+        &json!(["bolt11", "onchain", "arkoor"]),
+        &["mint-bolt11", "mint-arkoor"],
+    );
+    conflict.links.push(
+        fixture()
+            .links
+            .into_iter()
+            .find(|link| link.id == "mint-onchain")
+            .unwrap(),
+    );
+    refuses(&conflict, "cdk_payment_method_conflict");
+}
+
+#[test]
+fn arkoor_bindings_only_target_a_payment_processor() {
+    let mut invalid = fixture();
+    invalid
+        .links
+        .iter_mut()
+        .find(|link| link.id == "ark-lightning")
+        .unwrap()
+        .binding = Some(DependencyBinding::Payment {
+        method: PaymentMethod::Custom("arkoor".into()),
+        unit: "sat".into(),
+    });
+    refuses(&invalid, "incompatible_link_kinds");
 }

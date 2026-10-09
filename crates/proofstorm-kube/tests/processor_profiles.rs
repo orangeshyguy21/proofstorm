@@ -53,7 +53,7 @@ fn bark_mint_selects_its_own_authenticated_readiness_profile() {
         .unwrap();
     let command = wait["command"][2].as_str().unwrap();
     assert!(command.contains(
-        "processor-settings https://bark-processor:50051 /payment-processor/tls cdk-bark-processor"
+        "processor-settings https://bark-processor:50051 /payment-processor/tls cdk-bark-processor bolt11;"
     ));
     assert!(!command.contains("cdk-ldk-server-processor"));
     let volume = pod["volumes"]
@@ -103,9 +103,13 @@ fn corrupt_plan(plan: &mut ComponentPlanContract, mutation: &str) {
                 unit: "msat".into(),
             });
         }
-        "onchain" => {
+        "onchain" | "bolt12" => {
             plan.relevant_links[index].binding = Some(DependencyBinding::Payment {
-                method: PaymentMethod::Onchain,
+                method: if mutation == "onchain" {
+                    PaymentMethod::Onchain
+                } else {
+                    PaymentMethod::Bolt12
+                },
                 unit: "sat".into(),
             });
         }
@@ -140,16 +144,21 @@ fn forged_plans_cannot_bypass_payment_binding_validation() {
     for profile in [ProcessorProfile::LdkServer, ProcessorProfile::Bark] {
         let plan = mint_plan(profile);
         assert!(render_cdk_component(&plan).is_ok());
+        // An onchain-only selection is a valid Bark subset, not a forgery.
+        let fixed = (profile == ProcessorProfile::LdkServer).then_some("onchain");
         for mutation in [
             "missing-binding",
             "wrong-unit",
-            "onchain",
+            "bolt12",
             "duplicate-binding",
             "wrong-source",
             "wrong-endpoint",
             "unknown-profile",
             "wrong-kind",
-        ] {
+        ]
+        .into_iter()
+        .chain(fixed)
+        {
             let mut invalid = plan.clone();
             corrupt_plan(&mut invalid, mutation);
             assert!(
@@ -165,28 +174,54 @@ fn forged_plans_cannot_bypass_payment_binding_validation() {
     }
 }
 
+fn with_method(plan: &mut ComponentPlanContract, method: PaymentMethod) {
+    let mut extra = plan.relevant_links[0].clone();
+    assert_eq!(extra.kind, LinkKind::PaymentBackend);
+    extra.id = format!("extra-{}", method.as_str());
+    extra.binding = Some(DependencyBinding::Payment {
+        method,
+        unit: "sat".into(),
+    });
+    plan.linked_targets
+        .insert(extra.id.clone(), plan.linked_targets["mint-bolt11"].clone());
+    plan.relevant_links.push(extra);
+}
+
+fn processor_wait(plan: &ComponentPlanContract) -> String {
+    let rendered = render_cdk_component(plan).unwrap();
+    let deployment = serde_json::to_value(&rendered.deployments[0]).unwrap();
+    deployment["spec"]["template"]["spec"]["initContainers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|init| init["name"] == "wait-for-payment-processor")
+        .unwrap()["command"][2]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
 #[test]
-fn missing_and_undeclared_rails_cannot_change_the_selected_profile() {
+fn undeclared_rails_are_refused_and_bark_subsets_are_checked_explicitly() {
     let mut ldk = mint_plan(ProcessorProfile::LdkServer);
+    // The fixed LDK profile keeps its implicit complete set.
+    assert!(processor_wait(&ldk).contains("/payment-processor/tls cdk-ldk-server-processor;"));
     ldk.relevant_links.retain(|link| link.id != "mint-bolt12");
     assert!(render_cdk_component(&ldk).is_err());
     let bark = mint_plan(ProcessorProfile::Bark);
-    for method in [PaymentMethod::Bolt12, PaymentMethod::Onchain] {
-        let mut invalid = bark.clone();
-        let mut extra = invalid.relevant_links[0].clone();
-        assert_eq!(extra.kind, LinkKind::PaymentBackend);
-        extra.id = "extra".into();
-        extra.binding = Some(DependencyBinding::Payment {
-            method,
-            unit: "sat".into(),
-        });
-        invalid.linked_targets.insert(
-            extra.id.clone(),
-            invalid.linked_targets["mint-bolt11"].clone(),
-        );
-        invalid.relevant_links.push(extra);
-        assert!(render_cdk_component(&invalid).is_err(), "{method:?}");
+    let mut invalid = bark.clone();
+    with_method(&mut invalid, PaymentMethod::Bolt12);
+    assert!(render_cdk_component(&invalid).is_err());
+    let mut all = bark.clone();
+    for method in [
+        PaymentMethod::Custom("arkoor".into()),
+        PaymentMethod::Onchain,
+    ] {
+        with_method(&mut all, method);
     }
+    assert!(processor_wait(&all).contains("cdk-bark-processor bolt11,onchain,arkoor;"));
+    all.relevant_links.reverse();
+    assert!(processor_wait(&all).contains("cdk-bark-processor bolt11,onchain,arkoor;"));
 }
 
 #[test]

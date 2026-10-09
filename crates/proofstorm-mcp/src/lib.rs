@@ -3331,6 +3331,7 @@ mod tests {
                 proofstorm_core::PaymentMethod::Bolt11,
                 proofstorm_core::PaymentMethod::Bolt12,
                 proofstorm_core::PaymentMethod::Onchain,
+                proofstorm_core::PaymentMethod::Custom("arkoor".into()),
             ]
             .into()
         );
@@ -3347,11 +3348,14 @@ mod tests {
             .into()
         );
         assert!(cdk.support_matrix.units.contains("sat"));
-        assert_eq!(cdk.support_matrix.payment_bindings.len(), 5);
+        assert_eq!(cdk.support_matrix.payment_bindings.len(), 7);
         assert!(cdk.support_matrix.payment_bindings.iter().all(|binding| {
             binding.unit == "sat"
                 && (binding.method == proofstorm_core::PaymentMethod::Bolt11
-                    || binding.backend.implementation == "cdk-ldk-server-processor")
+                    || matches!(
+                        binding.backend.implementation.as_str(),
+                        "cdk-ldk-server-processor" | "cdk-bark-processor"
+                    ))
         }));
         assert_eq!(
             cdk.support_matrix.compatible_wallet_adapters[0].implementation,

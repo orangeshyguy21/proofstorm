@@ -221,6 +221,8 @@ pub enum ConfigValueKind {
     Number,
     Integer,
     String,
+    /// A non-empty array of distinct strings; `enum_values` constrains members.
+    StringSet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -419,11 +421,14 @@ pub struct CdkMintConfig {
     pub http_cache_tti_seconds: u64,
     pub max_inputs: u64,
     pub max_outputs: u64,
-    pub min_mint_sat: u64,
-    pub max_mint_sat: u64,
-    pub min_melt_sat: u64,
-    pub max_melt_sat: u64,
+    /// Lightning quote limits, in the unit of the mint's Lightning payment section.
+    pub min_mint: u64,
+    pub max_mint: u64,
+    pub min_melt: u64,
+    pub max_melt: u64,
     pub embedded_lightning: CdkEmbeddedLightning,
+    /// Cashu unit of the embedded LDK Node payment section.
+    pub embedded_lightning_unit: String,
     pub embedded_onchain: CdkEmbeddedOnchain,
     pub onchain_min_mint_sat: u64,
     pub onchain_max_mint_sat: u64,
@@ -929,14 +934,15 @@ impl EffectiveComponentConfig {
                 http_cache_tti_seconds: integer("http_cache_tti_seconds")?,
                 max_inputs: integer("max_inputs")?,
                 max_outputs: integer("max_outputs")?,
-                min_mint_sat: integer("min_mint_sat")?,
-                max_mint_sat: integer("max_mint_sat")?,
-                min_melt_sat: integer("min_melt_sat")?,
-                max_melt_sat: integer("max_melt_sat")?,
+                min_mint: integer("min_mint")?,
+                max_mint: integer("max_mint")?,
+                min_melt: integer("min_melt")?,
+                max_melt: integer("max_melt")?,
                 embedded_lightning: serde_json::from_value(
                     required_config_value(component, "embedded_lightning")?.clone(),
                 )
                 .map_err(|_| typed_config_error(component, "embedded_lightning"))?,
+                embedded_lightning_unit: string("embedded_lightning_unit")?,
                 embedded_onchain: serde_json::from_value(
                     required_config_value(component, "embedded_onchain")?.clone(),
                 )
@@ -1246,8 +1252,17 @@ fn config_field_schema(field: &ConfigFieldContract, include_default: bool) -> Va
     } else {
         schema.insert("readOnly".into(), Value::Bool(true));
     }
-    if !field.enum_values.is_empty() {
-        schema.insert("enum".into(), Value::Array(field.enum_values.clone()));
+    let members = Value::Array(field.enum_values.clone());
+    if field.value_kind == ConfigValueKind::StringSet {
+        let mut items = serde_json::Map::from_iter([("type".into(), json!("string"))]);
+        if !field.enum_values.is_empty() {
+            items.insert("enum".into(), members);
+        }
+        schema.insert("items".into(), Value::Object(items));
+        schema.insert("uniqueItems".into(), Value::Bool(true));
+        schema.insert("minItems".into(), json!(1));
+    } else if !field.enum_values.is_empty() {
+        schema.insert("enum".into(), members);
     }
     insert_optional_number(&mut schema, "minimum", field.minimum);
     insert_optional_number(&mut schema, "maximum", field.maximum);
@@ -1262,6 +1277,7 @@ fn config_json_type(kind: ConfigValueKind) -> &'static str {
         ConfigValueKind::Number => "number",
         ConfigValueKind::Integer => "integer",
         ConfigValueKind::String => "string",
+        ConfigValueKind::StringSet => "array",
     }
 }
 
@@ -1327,6 +1343,9 @@ fn validate_config_value(
         ConfigValueKind::Number => value.is_number(),
         ConfigValueKind::Integer => value.as_i64().is_some() || value.as_u64().is_some(),
         ConfigValueKind::String => value.is_string(),
+        ConfigValueKind::StringSet => value
+            .as_array()
+            .is_some_and(|items| items.iter().all(Value::is_string)),
     };
     if !type_matches {
         return Err(config_diagnostic(
@@ -1335,6 +1354,31 @@ fn validate_config_value(
             name,
             &format!("expected {}", config_json_type(field.value_kind)),
         ));
+    }
+    if let Some(items) = value.as_array() {
+        let distinct = items
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<BTreeSet<_>>();
+        if items.is_empty() || distinct.len() != items.len() {
+            return Err(config_diagnostic(
+                "string_set_violation",
+                component,
+                name,
+                "expected at least one value and no duplicates",
+            ));
+        }
+        if !field.enum_values.is_empty()
+            && !items.iter().all(|item| field.enum_values.contains(item))
+        {
+            return Err(config_diagnostic(
+                "enum_violation",
+                component,
+                name,
+                "a member is not one of the declared enumeration values",
+            ));
+        }
+        return Ok(());
     }
     if !field.enum_values.is_empty() && !field.enum_values.contains(value) {
         return Err(config_diagnostic(
@@ -2000,14 +2044,6 @@ fn cdk_config_fields() -> BTreeMap<String, ConfigFieldContract> {
             integer("Input fee in parts per thousand", 100, 0, 1_000_000),
         ),
         (
-            "max_melt_sat".into(),
-            integer("Maximum melt quote amount", default_maximum, 1, 10_000_000),
-        ),
-        (
-            "max_mint_sat".into(),
-            integer("Maximum mint quote amount", default_maximum, 1, 10_000_000),
-        ),
-        (
             "max_inputs".into(),
             integer(
                 "Maximum inputs accepted by a swap or melt request",
@@ -2030,14 +2066,6 @@ fn cdk_config_fields() -> BTreeMap<String, ConfigFieldContract> {
             integer("Melt quote lifetime", 120, 1, 86_400),
         ),
         (
-            "min_melt_sat".into(),
-            integer("Minimum melt quote amount", default_minimum, 1, 10_000_000),
-        ),
-        (
-            "min_mint_sat".into(),
-            integer("Minimum mint quote amount", default_minimum, 1, 10_000_000),
-        ),
-        (
             "mint_quote_ttl_seconds".into(),
             integer("Mint quote lifetime", 600, 1, 86_400),
         ),
@@ -2050,8 +2078,54 @@ fn cdk_config_fields() -> BTreeMap<String, ConfigFieldContract> {
             ),
         ),
     ]));
+    fields.extend(cdk_lightning_limit_fields(default_minimum, default_maximum));
     fields.extend(cdk_backend_selection_fields());
     fields
+}
+
+/// Lightning quote limits are raw amounts in the Lightning section's unit.
+fn cdk_lightning_limit_fields(
+    default_minimum: u32,
+    default_maximum: u32,
+) -> BTreeMap<String, ConfigFieldContract> {
+    let integer = |description: &str, default: u32| {
+        config_field(
+            description,
+            ConfigValueKind::Integer,
+            ConfigDefault::Literal(json!(default)),
+        )
+        .with_numeric_bounds(1.0, 10_000_000.0)
+    };
+    BTreeMap::from([
+        (
+            "max_melt".into(),
+            integer(
+                "Maximum Lightning melt quote amount, in the Lightning payment section's unit",
+                default_maximum,
+            ),
+        ),
+        (
+            "max_mint".into(),
+            integer(
+                "Maximum Lightning mint quote amount, in the Lightning payment section's unit",
+                default_maximum,
+            ),
+        ),
+        (
+            "min_melt".into(),
+            integer(
+                "Minimum Lightning melt quote amount, in the Lightning payment section's unit",
+                default_minimum,
+            ),
+        ),
+        (
+            "min_mint".into(),
+            integer(
+                "Minimum Lightning mint quote amount, in the Lightning payment section's unit",
+                default_minimum,
+            ),
+        ),
+    ])
 }
 
 /// Embedded backends and their on-chain limits; linked backends are topology.
@@ -2082,6 +2156,15 @@ fn cdk_backend_selection_fields() -> BTreeMap<String, ConfigFieldContract> {
                 ConfigDefault::Literal(json!("none")),
             )
             .with_enum_values(&["none", "ldk-node"]),
+        ),
+        (
+            "embedded_lightning_unit".into(),
+            config_field(
+                "Cashu unit of the embedded LDK Node payment section (lowercase letters, digits, '-' or '_'). The catalog's embedded payment bindings list the units this mint version supports; linked backends take their unit from payment_backend link bindings",
+                ConfigValueKind::String,
+                ConfigDefault::Literal(json!("sat")),
+            )
+            .with_string_bounds(1, 64),
         ),
         (
             "embedded_onchain".into(),
@@ -2705,7 +2788,10 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             ),
             (
                 "unit".into(),
-                string("Proofstorm-selected Cashu unit", Policy),
+                string(
+                    "Each payment section's Cashu unit: payment_backend link bindings for linked backends, embedded_lightning_unit for LDK Node; embedded BDK on-chain is sat upstream",
+                    Topology,
+                ),
             ),
             (
                 "work_directory".into(),
@@ -3047,8 +3133,8 @@ fn contract(
     let (workload_kind, storage_requirements) = observation_contract(id);
     let config_rules = if id == "cdk" {
         [
-            ("min_mint_sat", "max_mint_sat"),
-            ("min_melt_sat", "max_melt_sat"),
+            ("min_mint", "max_mint"),
+            ("min_melt", "max_melt"),
             ("onchain_min_mint_sat", "onchain_max_mint_sat"),
             ("onchain_min_melt_sat", "onchain_max_melt_sat"),
         ]
@@ -3592,14 +3678,74 @@ mod tests {
         assert_eq!(keycloak.config["access_token_lifespan_seconds"], json!(300));
 
         let mut invalid = component("mint", "cdk", ComponentKind::Mint);
-        invalid.config.insert("min_mint_sat".into(), json!(10));
-        invalid.config.insert("max_mint_sat".into(), json!(9));
+        invalid.config.insert("min_mint".into(), json!(10));
+        invalid.config.insert("max_mint".into(), json!(9));
         assert!(
             registry
                 .validate_component_config(&invalid)
                 .expect_err("ordered mint bounds")
                 .starts_with("config_order_violation:")
         );
+    }
+
+    #[test]
+    fn bark_payment_methods_are_an_authored_set_with_the_upstream_default() {
+        let registry = default_backend_registry();
+        let schema = registry
+            .config_schema("cdk-bark-processor")
+            .expect("schema");
+        let all = json!(["bolt11", "onchain", "arkoor"]);
+        assert_eq!(
+            schema["properties"]["payment_methods"],
+            json!({
+                "description": schema["properties"]["payment_methods"]["description"],
+                "type": "array",
+                "items": {"type": "string", "enum": all},
+                "uniqueItems": true,
+                "minItems": 1,
+                "default": all,
+                "x-proofstorm-classification": "agent_authorable"
+            })
+        );
+        let mut processor = component(
+            "processor",
+            "cdk-bark-processor",
+            ComponentKind::PaymentProcessor,
+        );
+        processor
+            .config
+            .insert("payment_methods".into(), json!(["arkoor", "bolt11"]));
+        let effective = registry
+            .resolve_effective_component(&processor)
+            .expect("a subset resolves");
+        let EffectiveComponentConfig::BarkProcessor(config) =
+            EffectiveComponentConfig::try_from_component(&effective).expect("typed")
+        else {
+            panic!("Bark processor configuration")
+        };
+        assert_eq!(
+            config.payment_methods,
+            [
+                crate::PaymentMethod::Bolt11,
+                crate::PaymentMethod::Custom("arkoor".into())
+            ]
+            .into()
+        );
+        for invalid in [
+            json!([]),
+            json!(["bolt11", "bolt11"]),
+            json!(["bolt12"]),
+            json!([true]),
+            json!("bolt11"),
+        ] {
+            processor
+                .config
+                .insert("payment_methods".into(), invalid.clone());
+            assert!(
+                registry.resolve_effective_component(&processor).is_err(),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]

@@ -7,11 +7,20 @@ use super::{
     plan_linked_target, plan_pod_metadata, plan_workload_metadata, pod_security,
     require_plan_backend, resource, service_from_plan, stateful_set, target_port,
 };
-use proofstorm_core::ProcessorProfile;
+use proofstorm_core::{PaymentMethod, ProcessorProfile, method_list};
+use std::collections::BTreeSet;
+
+/// A validated processor dependency and the method set its links bind.
+pub(super) struct ProcessorTarget<'a> {
+    pub(super) descriptor: &'a TargetDescriptorContract,
+    pub(super) profile: ProcessorProfile,
+    pub(super) unit: String,
+    pub(super) methods: BTreeSet<PaymentMethod>,
+}
 
 pub(super) fn grpc_target(
     plan: &ComponentPlanContract,
-) -> Result<Option<&TargetDescriptorContract>, AdapterError> {
+) -> Result<Option<ProcessorTarget<'_>>, AdapterError> {
     if plan.backend_id != "cdk" {
         return Ok(None);
     }
@@ -46,7 +55,7 @@ fn payment_target<'a>(
     profile: ProcessorProfile,
     implementation: &str,
     kind: ComponentKind,
-) -> Result<&'a TargetDescriptorContract, AdapterError> {
+) -> Result<ProcessorTarget<'a>, AdapterError> {
     let links = plan
         .relevant_links
         .iter()
@@ -55,7 +64,10 @@ fn payment_target<'a>(
     let target = links
         .first()
         .and_then(|link| plan.linked_targets.get(&link.id));
-    if !profile.accepts_bindings(links.iter().map(|link| link.binding.as_ref()))
+    // Topology validation already matched these bindings to the processor's
+    // advertised set; readiness compares them with its live settings.
+    let bound = profile.bound_methods(links.iter().map(|link| link.binding.as_ref()));
+    if bound.is_none()
         || !target.is_some_and(|target| {
             target.backend_id == implementation
                 && target.kind == kind
@@ -72,7 +84,13 @@ fn payment_target<'a>(
             profile.binding_description()
         )));
     }
-    Ok(target.expect("validated payment target"))
+    let (unit, methods) = bound.expect("validated payment bindings");
+    Ok(ProcessorTarget {
+        descriptor: target.expect("validated payment target"),
+        profile,
+        unit,
+        methods,
+    })
 }
 
 /// Render a persistent native LDK Server node.
@@ -143,7 +161,8 @@ pub fn render_processor(plan: &ComponentPlanContract) -> Result<RenderedComponen
         ProcessorProfile::LdkServer,
         "ldk-server",
         ComponentKind::Lightning,
-    )?;
+    )?
+    .descriptor;
     let credentials = plan_execution_credential(plan, "ldk-server")?;
     if credentials.source_component_id != node.component_id {
         return Err(AdapterError::InvalidPlan(
@@ -216,25 +235,31 @@ pub(super) fn tls_mount(name: &str, path: &str) -> Value {
 
 pub(super) fn payment_backend_config(
     config: &CdkMintConfig,
-    target: &TargetDescriptorContract,
+    processor: &ProcessorTarget<'_>,
 ) -> Result<String, AdapterError> {
+    let target = processor.descriptor;
     let grpc_port = target_port(target, "grpc")?;
+    let unit = super::cashu_unit(&processor.unit)?;
     Ok(format!(
-        "[payment_backend]\nbackend = \"grpcprocessor\"\nunit = \"sat\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[grpc_processor]\nsupported_units = [\"sat\"]\naddress = \"{}\"\nport = {grpc_port}\ntls_dir = \"/payment-processor/tls\"\nallow_insecure = false\n",
-        config.min_mint_sat,
-        config.max_mint_sat,
-        config.min_melt_sat,
-        config.max_melt_sat,
-        target.component_id
+        "[payment_backend]\nbackend = \"grpcprocessor\"\nunit = \"{unit}\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[grpc_processor]\nsupported_units = [\"{unit}\"]\naddress = \"{}\"\nport = {grpc_port}\ntls_dir = \"/payment-processor/tls\"\nallow_insecure = false\n",
+        config.min_mint, config.max_mint, config.min_melt, config.max_melt, target.component_id
     ))
 }
 
 pub(super) fn wait_for_processor(
     plan: &ComponentPlanContract,
-    target: &TargetDescriptorContract,
+    processor: &ProcessorTarget<'_>,
 ) -> Result<Value, AdapterError> {
+    let target = processor.descriptor;
     let port = target_port(target, "grpc")?;
+    // Fixed profiles check their complete set by default; configurable ones
+    // must advertise exactly the methods this mint binds.
+    let methods = if processor.profile.configurable() {
+        format!(" {}", method_list(&processor.methods))
+    } else {
+        String::new()
+    };
     Ok(
-        json!({"name":"wait-for-payment-processor","image":plan.execution_context.image,"command":["sh","-ec",format!("for attempt in $(seq 1 120); do if /opt/proofstorm/driver processor-settings https://{}:{port} /payment-processor/tls {}; then exit 0; fi; sleep 1; done; echo 'Payment processor dependency did not become ready' >&2; exit 1",target.component_id,target.backend_id)],"securityContext":container_security(),"volumeMounts":[tls_mount("payment-processor","/payment-processor/tls"),{"name":"proofstorm-driver","mountPath":"/opt/proofstorm","readOnly":true}]}),
+        json!({"name":"wait-for-payment-processor","image":plan.execution_context.image,"command":["sh","-ec",format!("for attempt in $(seq 1 120); do if /opt/proofstorm/driver processor-settings https://{}:{port} /payment-processor/tls {}{methods}; then exit 0; fi; sleep 1; done; echo 'Payment processor dependency did not become ready' >&2; exit 1",target.component_id,target.backend_id)],"securityContext":container_security(),"volumeMounts":[tls_mount("payment-processor","/payment-processor/tls"),{"name":"proofstorm-driver","mountPath":"/opt/proofstorm","readOnly":true}]}),
     )
 }

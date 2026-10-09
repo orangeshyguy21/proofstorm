@@ -5,7 +5,10 @@ use super::{
     StorageBackend, SupportLifecycle, catalog_entry_with_lifecycle, dependency, payment_binding,
     runtime_endpoint, support_matrix,
 };
-use crate::processor_ids::{BARK_PROCESSOR, BARK_SERVER, CLN_HOLD};
+use crate::{
+    ProcessorProfile,
+    processor_ids::{BARK_PROCESSOR, BARK_SERVER, CLN_HOLD},
+};
 use std::collections::BTreeMap;
 
 #[derive(serde::Deserialize)]
@@ -19,7 +22,7 @@ struct Images {
 const PROCESSOR_VERSION: &str = "0.1.0-fe468ca";
 const SERVER_VERSION: &str = "0.7.0-6188e2d";
 const CLN_HOLD_VERSION: &str = "26.06.7-hold.0.3.3";
-const QUALIFICATION: &str = "Experimental BOLT11/sat support on Linux AMD64 and ARM64. Published native images passed managed payment/restart qualification with original-quote reconciliation. Ordinary native qualification covers the distributed pins.";
+const QUALIFICATION: &str = "Experimental support on Linux AMD64 and ARM64. Published native images passed managed BOLT11/sat payment/restart qualification with original-quote reconciliation. Ordinary native qualification covers the distributed pins.";
 
 #[allow(
     clippy::too_many_lines,
@@ -79,7 +82,7 @@ pub(super) fn extend(
         BARK_SERVER,
         backends,
         ComponentKind::ArkServer,
-        "Bark Ark server for experimental BOLT11/sat payments",
+        "Bark Ark server for experimental Lightning, on-chain and arkoor payments",
         adapter_version,
         SERVER_VERSION,
         ReleaseChannel::Prerelease,
@@ -129,6 +132,7 @@ pub(super) fn extend(
             CatalogFeature::Regtest,
             CatalogFeature::PersistentState,
             CatalogFeature::Bolt11,
+            CatalogFeature::Onchain,
         ]),
         vec![
             dependency(LinkKind::ChainBackend, "bitcoin-core", &["31.1"]),
@@ -136,7 +140,7 @@ pub(super) fn extend(
         ],
         support_matrix(
             &[StorageBackend::PersistentVolume],
-            &[PaymentMethod::Bolt11],
+            &Vec::from_iter(ProcessorProfile::Bark.supported_methods()),
             &[],
             &["sat"],
             &[],
@@ -172,15 +176,23 @@ pub(super) fn extend(
             BARK_PROCESSOR,
             &[PROCESSOR_VERSION],
         ));
-        entry
-            .support_matrix
-            .payment_bindings
-            .insert(payment_binding(
-                PaymentMethod::Bolt11,
-                "sat",
-                BARK_PROCESSOR,
-                &[PROCESSOR_VERSION],
-            ));
+        // CDK 0.18.1 registers every method a gRPC processor advertises,
+        // including on-chain and custom methods.
+        for method in ProcessorProfile::Bark.supported_methods() {
+            entry
+                .features
+                .extend(CatalogFeature::for_payment_method(&method));
+            entry.support_matrix.payment_methods.insert(method.clone());
+            entry
+                .support_matrix
+                .payment_bindings
+                .insert(payment_binding(
+                    method,
+                    "sat",
+                    BARK_PROCESSOR,
+                    &[PROCESSOR_VERSION],
+                ));
+        }
         entry.source_digest = crate::digest_json(&(
             &entry.source_digest,
             &entry.support_matrix,
@@ -193,11 +205,11 @@ pub(super) fn endpoints(implementation: &str) -> Option<Vec<CatalogRuntimeEndpoi
     let (kind, guidance) = match implementation {
         BARK_PROCESSOR => (
             "payment_processor",
-            "CDK payment protocol 4.0.0, BOLT11/sat only. Link to one Bark server with ark_backend/regtest and the same indexed Bitcoin regtest node with chain_backend/regtest. CDK 0.18.1 mints bind bolt11/sat to this processor. event_poll_interval_ms is 1–60000 (default 5000). GetSettings: /opt/proofstorm/driver processor-settings https://127.0.0.1:50051 /processor-client/tls cdk-bark-processor. The generated seed, db.sqlite and onchain_state.redb persist together; missing identity or partial state requires explicit recovery. Verify original quote state and independent Lightning settlement after interruptions.",
+            "CDK payment protocol 4.0.0, unit sat. payment_methods selects what the processor advertises from bolt11, onchain and arkoor; the default is all three, as upstream. The CDK 0.18.1 mint registers every advertised method, so bind each one exactly once with a payment_backend link (method, sat) to this component. Another backend of the mint, such as embedded BDK for onchain, can serve a method left out. bolt11 settles through the Ark server's Lightning node. onchain mint quotes return a processor wallet address; after 1 confirmation the deposit is boarded into Ark with the board fee deducted from the minted amount. onchain melts offboard from the processor's Ark balance. arkoor is melt-only: the request is an Ark address on the same server, with zero fee; cdk-cli 0.18.1 cannot create custom-method melts. Managed qualification does not exercise on-chain melts or arkoor payments. Link to one Bark server with ark_backend/regtest and the same indexed Bitcoin regtest node with chain_backend/regtest. event_poll_interval_ms is 1–60000 (default 5000). GetSettings: /opt/proofstorm/driver processor-settings https://127.0.0.1:50051 /processor-client/tls cdk-bark-processor METHODS, where METHODS is payment_methods comma-separated (omitted means bolt11,onchain,arkoor). The generated seed, db.sqlite and onchain_state.redb persist together; missing identity or partial state requires explicit recovery. Verify original quote state and independent settlement after interruptions.",
         ),
         BARK_SERVER => (
             "ark_server",
-            "BOLT11/sat regtest profile. Requires indexed Bitcoin, primary PostgreSQL and CLN/hold on the same chain. Public Ark RPC uses port 3535; admin/integration APIs remain on loopback. Native entrypoint: captaind --config /usr/local/share/bark/captaind.default.toml rpc. Use component_exec_live for loopback access. Native mnemonic/state and the PostgreSQL identity seal must persist together. Restore missing retained state rather than reinitializing it. No standalone Bark CLI wallet or on-chain/boarding payment rail is exposed.",
+            "Regtest Ark server; Lightning payments route through CLN/hold (bolt11/sat). Requires indexed Bitcoin, primary PostgreSQL and CLN/hold on the same chain. Public Ark RPC uses port 3535; admin/integration APIs remain on loopback. Native entrypoint: captaind --config /usr/local/share/bark/captaind.default.toml rpc. Use component_exec_live for loopback access. Native mnemonic/state and the PostgreSQL identity seal must persist together. Restore missing retained state rather than reinitializing it. No standalone Bark CLI wallet is included; the CDK Bark processor holds the managed Bark wallet.",
         ),
         CLN_HOLD => (
             "lightning",

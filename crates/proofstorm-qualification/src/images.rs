@@ -131,12 +131,13 @@ mod tests {
                     matches!(mode, Mode::Compatibility | Mode::Full)
                 );
                 assert_eq!(gate.components.len(), 8);
-                assert!(
-                    gate.claims
-                        .iter()
-                        .any(|claim| claim.starts_with("cdk@0.18.1:payment:")
-                            && claim.contains("cdk-bark-processor"))
-                );
+                // The gate checks registration of every rail and pays bolt11 and onchain.
+                for method in ["bolt11", "onchain", "arkoor"] {
+                    let claim = format!(
+                        "cdk@0.18.1:payment:[\"{method}\",\"sat\",\"cdk-bark-processor\",\"0.1.0-fe468ca\"]"
+                    );
+                    assert!(gate.claims.contains(&claim), "{claim}");
+                }
                 for id in ["cdk-bark-processor", "bark-server", "cln-hold"] {
                     let component = gate
                         .components

@@ -74,7 +74,12 @@
     "credentials": [],
     "effective_config": {
       "config": {
-        "event_poll_interval_ms": 5000
+        "event_poll_interval_ms": 5000,
+        "payment_methods": [
+          "bolt11",
+          "onchain",
+          "arkoor"
+        ]
       },
       "implementation": "cdk-bark-processor"
     },
@@ -410,7 +415,7 @@
                     },
                     {
                       "name": "BARK_PAYMENT_METHODS",
-                      "value": "bolt11"
+                      "value": "bolt11,onchain,arkoor"
                     },
                     {
                       "name": "BARK_DATA_DIR",
@@ -449,7 +454,8 @@
                         "processor-settings",
                         "https://127.0.0.1:50051",
                         "/processor-client/tls",
-                        "cdk-bark-processor"
+                        "cdk-bark-processor",
+                        "bolt11,onchain,arkoor"
                       ]
                     },
                     "failureThreshold": 40,

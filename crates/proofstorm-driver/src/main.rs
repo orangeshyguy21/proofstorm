@@ -59,12 +59,20 @@ async fn run() -> Result<()> {
         [command, url, cookie] if command == "wait-bark-chain" => {
             return proofstorm_driver::bark_stack::wait_chain(url, Path::new(cookie)).await;
         }
-        [command, address, tls, profile] if command == "processor-settings" => {
+        [command, address, tls, profile, methods @ ..]
+            if command == "processor-settings" && methods.len() <= 1 =>
+        {
+            let profile = profile.parse()?;
+            let methods = proofstorm_driver::processor::expected_methods(
+                profile,
+                methods.first().map(String::as_str),
+            )?;
             serde_json::to_value(
                 proofstorm_driver::processor::settings_for(
                     address,
                     Path::new(tls),
-                    profile.parse()?,
+                    profile,
+                    &methods,
                 )
                 .await?,
             )?

@@ -85,7 +85,7 @@ fn obligations(entry: &CatalogEntry) -> BTreeSet<String> {
                 entry,
                 "payment",
                 &(
-                    binding.method,
+                    &binding.method,
                     &binding.unit,
                     &binding.backend.implementation,
                     version,
@@ -292,7 +292,7 @@ impl Builder<'_> {
                                     mint,
                                     "payment",
                                     &(
-                                        binding.method,
+                                        &binding.method,
                                         &binding.unit,
                                         &binding.backend.implementation,
                                         version,
@@ -589,7 +589,7 @@ impl Builder<'_> {
                     claims.insert(claim(
                         mint,
                         "payment",
-                        &(binding.method, &binding.unit, &processor.id, version),
+                        &(&binding.method, &binding.unit, &processor.id, version),
                     ));
                 }
             }
@@ -614,7 +614,7 @@ impl Builder<'_> {
                     claims.insert(claim(
                         mint,
                         "payment",
-                        &(binding.method, &binding.unit, &processor.id, version),
+                        &(&binding.method, &binding.unit, &processor.id, version),
                     ));
                 }
             }

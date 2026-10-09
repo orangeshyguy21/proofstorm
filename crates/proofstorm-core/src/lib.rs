@@ -1,7 +1,9 @@
 //! Domain contracts shared by every Proofstorm interface.
 pub mod processor_ids;
 mod processor_profile;
-pub use processor_profile::{ProcessorProfile, UnknownProcessorProfile};
+pub use processor_profile::{
+    PAYMENT_METHODS_FIELD, ProcessorProfile, UnknownProcessorProfile, method_list,
+};
 
 mod backend;
 mod candidate;
@@ -94,7 +96,7 @@ pub use publication::{
 };
 pub use quote::{WalletQuoteDirection, WalletQuoteObservation, WalletQuoteObservationRole};
 pub use schema::schema_documents;
-pub use validation::{ValidationIssue, ValidationReport, validate_cell};
+pub use validation::{ValidationIssue, ValidationReport, is_cashu_unit, validate_cell};
 pub mod native;
 pub mod workspace;
 

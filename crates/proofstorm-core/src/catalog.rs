@@ -57,6 +57,20 @@ pub enum CatalogOrigin {
     Candidate,
 }
 
+impl CatalogFeature {
+    /// The feature a known payment method requires; custom methods are
+    /// identified by their advertised name alone.
+    #[must_use]
+    pub const fn for_payment_method(method: &PaymentMethod) -> Option<Self> {
+        match method {
+            PaymentMethod::Bolt11 => Some(Self::Bolt11),
+            PaymentMethod::Bolt12 => Some(Self::Bolt12),
+            PaymentMethod::Onchain => Some(Self::Onchain),
+            PaymentMethod::Custom(_) => None,
+        }
+    }
+}
+
 impl CatalogEntry {
     #[must_use]
     pub const fn origin(&self) -> CatalogOrigin {
@@ -932,11 +946,7 @@ fn validate_support_matrix(entry: &CatalogEntry, entries: &[CatalogEntry]) -> Re
                 .support_matrix
                 .payment_methods
                 .iter()
-                .map(|method| match method {
-                    PaymentMethod::Bolt11 => CatalogFeature::Bolt11,
-                    PaymentMethod::Bolt12 => CatalogFeature::Bolt12,
-                    PaymentMethod::Onchain => CatalogFeature::Onchain,
-                }),
+                .filter_map(CatalogFeature::for_payment_method),
         )
         .chain(
             entry
@@ -1070,8 +1080,12 @@ fn validate_payment_bindings(entry: &CatalogEntry, entries: &[CatalogEntry]) -> 
     if entry.kind == ComponentKind::Mint {
         let methods = bindings
             .iter()
-            .map(|binding| binding.method)
-            .chain(embedded_bindings.iter().map(|binding| binding.method))
+            .map(|binding| binding.method.clone())
+            .chain(
+                embedded_bindings
+                    .iter()
+                    .map(|binding| binding.method.clone()),
+            )
             .collect::<BTreeSet<_>>();
         let units = bindings
             .iter()
@@ -1586,7 +1600,7 @@ fn support_matrix(
 ) -> CatalogSupportMatrix {
     CatalogSupportMatrix {
         storage: storage.iter().copied().collect(),
-        payment_methods: payment_methods.iter().copied().collect(),
+        payment_methods: payment_methods.iter().cloned().collect(),
         payment_backends: payment_backends
             .iter()
             .map(|value| (*value).into())

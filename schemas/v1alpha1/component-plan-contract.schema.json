@@ -7,10 +7,18 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "payment_methods": {
+          "items": {
+            "$ref": "#/$defs/PaymentMethod"
+          },
+          "type": "array",
+          "uniqueItems": true
         }
       },
       "required": [
-        "event_poll_interval_ms"
+        "event_poll_interval_ms",
+        "payment_methods"
       ],
       "type": "object"
     },
@@ -71,6 +79,10 @@
         "embedded_lightning": {
           "$ref": "#/$defs/CdkEmbeddedLightning"
         },
+        "embedded_lightning_unit": {
+          "description": "Cashu unit of the embedded LDK Node payment section.",
+          "type": "string"
+        },
         "embedded_onchain": {
           "$ref": "#/$defs/CdkEmbeddedOnchain"
         },
@@ -100,12 +112,12 @@
           "minimum": 0,
           "type": "integer"
         },
-        "max_melt_sat": {
+        "max_melt": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
-        "max_mint_sat": {
+        "max_mint": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -120,12 +132,13 @@
           "minimum": 0,
           "type": "integer"
         },
-        "min_melt_sat": {
+        "min_melt": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
-        "min_mint_sat": {
+        "min_mint": {
+          "description": "Lightning quote limits, in the unit of the mint's Lightning payment section.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -186,11 +199,12 @@
         "http_cache_tti_seconds",
         "max_inputs",
         "max_outputs",
-        "min_mint_sat",
-        "max_mint_sat",
-        "min_melt_sat",
-        "max_melt_sat",
+        "min_mint",
+        "max_mint",
+        "min_melt",
+        "max_melt",
         "embedded_lightning",
+        "embedded_lightning_unit",
         "embedded_onchain",
         "onchain_min_mint_sat",
         "onchain_max_mint_sat",
@@ -342,11 +356,7 @@
           "type": "string"
         },
         "method": {
-          "enum": [
-            "bolt11",
-            "bolt12",
-            "onchain"
-          ],
+          "pattern": "^[a-z0-9_-]{1,53}$",
           "type": "string"
         },
         "network": {
@@ -380,9 +390,9 @@
           "type": "string"
         },
         "unit": {
-          "maxLength": 16,
+          "maxLength": 64,
           "minLength": 1,
-          "pattern": "^[a-z0-9-]+$",
+          "pattern": "^[a-z0-9_-]+$",
           "type": "string"
         }
       },
@@ -1109,6 +1119,10 @@
         "wallet_payment",
         "authentication"
       ],
+      "type": "string"
+    },
+    "PaymentMethod": {
+      "pattern": "^[a-z0-9_-]{1,53}$",
       "type": "string"
     },
     "PostgresConfig": {

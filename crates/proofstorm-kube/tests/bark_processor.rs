@@ -1,7 +1,7 @@
 //! Backend/rendering contracts only: no fabricated Bark catalog image or live qualification.
 use proofstorm_core::{
     CatalogPlatform, CellSpec, ComponentConditionType, ComponentKind, ComponentPlanContract,
-    DependencyBinding, EffectiveComponentConfig, LinkKind, WorkloadControllerKind,
+    DependencyBinding, EffectiveComponentConfig, LinkKind, PaymentMethod, WorkloadControllerKind,
     catalog_for_platform, default_backend_registry, processor_ids::BARK_PROCESSOR, resolve_lock,
 };
 use proofstorm_kube::render_bark_processor_component;
@@ -50,12 +50,23 @@ fn contract_requires_owned_storage_and_keeps_runtime_settings_out_of_authored_co
         .iter()
         .find(|c| c.id == "processor")
         .unwrap();
+    let resolved = registry.resolve_effective_component(component).unwrap();
+    assert_eq!(resolved.config["event_poll_interval_ms"], 5000);
+    // Unset means every method upstream supports.
+    assert_eq!(
+        resolved.config["payment_methods"],
+        json!(["bolt11", "onchain", "arkoor"])
+    );
+    let mut subset = component.clone();
+    subset
+        .config
+        .insert("payment_methods".into(), json!(["arkoor", "onchain"]));
     assert_eq!(
         registry
-            .resolve_effective_component(component)
+            .resolve_effective_component(&subset)
             .unwrap()
-            .config["event_poll_interval_ms"],
-        5000
+            .config["payment_methods"],
+        json!(["arkoor", "onchain"])
     );
     for (name, value) in [
         ("event_poll_interval_ms", json!(0)),
@@ -66,6 +77,11 @@ fn contract_requires_owned_storage_and_keeps_runtime_settings_out_of_authored_co
         ("network", json!("mainnet")),
         ("backend_endpoint", json!("https://example.com")),
         ("payment_methods", json!("arkoor")),
+        ("payment_methods", json!([])),
+        ("payment_methods", json!(["bolt12"])),
+        ("payment_methods", json!(["lightning"])),
+        ("payment_methods", json!(["bolt11", "bolt11"])),
+        ("payment_methods", json!([11])),
         ("rpc_credentials", json!("other")),
         ("data_dir", json!("/tmp")),
     ] {
@@ -115,7 +131,7 @@ fn renderer_uses_the_full_owned_wallet_and_narrow_credential_projections() {
     let environment = env(&pod);
     for (key, value) in [
         ("BARK_NETWORK", "regtest"),
-        ("BARK_PAYMENT_METHODS", "bolt11"),
+        ("BARK_PAYMENT_METHODS", "bolt11,onchain,arkoor"),
         ("BARK_DATA_DIR", "/data"),
         ("BARK_BITCOIND_COOKIEFILE", "/chain-rpc/rpc.cookie"),
         ("TLS_ENABLE", "true"),
@@ -136,7 +152,8 @@ fn renderer_uses_the_full_owned_wallet_and_narrow_credential_projections() {
             "processor-settings",
             "https://127.0.0.1:50051",
             "/processor-client/tls",
-            BARK_PROCESSOR
+            BARK_PROCESSOR,
+            "bolt11,onchain,arkoor"
         ])
     );
     let volumes = pod["volumes"].as_array().unwrap();
@@ -223,8 +240,18 @@ fn endpoints_and_polling_come_from_the_compiled_plan() {
         panic!("profile")
     };
     config.event_poll_interval_ms = 1234;
+    config.payment_methods = [
+        PaymentMethod::Custom("arkoor".into()),
+        PaymentMethod::Bolt11,
+    ]
+    .into();
     let pod = pod(&plan);
     let environment = env(&pod);
+    assert_eq!(environment["BARK_PAYMENT_METHODS"], "bolt11,arkoor");
+    assert_eq!(
+        pod["containers"][0]["readinessProbe"]["exec"]["command"][5],
+        "bolt11,arkoor"
+    );
     assert_eq!(environment["BARK_SERVER_ADDRESS"], "http://other-ark:4535");
     assert_eq!(
         environment["BARK_BITCOIND_ADDRESS"],
@@ -310,9 +337,18 @@ fn corrupted_dependencies_and_storage_are_refused_before_rendering() {
         "extra-port",
         "zero-port",
         "unused",
+        "no-methods",
+        "bolt12",
     ] {
         let mut plan = plan();
+        let EffectiveComponentConfig::BarkProcessor(config) = &mut plan.effective_config else {
+            panic!("profile")
+        };
         match mutation {
+            "no-methods" => config.payment_methods.clear(),
+            "bolt12" => {
+                config.payment_methods.insert(PaymentMethod::Bolt12);
+            }
             "claim" => plan.storage[0].claim_name = "data-other-0".into(),
             "mount" => plan.execution_context.mounts[0].read_only = true,
             "workload" => plan.workload.kind = WorkloadControllerKind::Deployment,

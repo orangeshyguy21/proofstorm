@@ -1,19 +1,25 @@
 //! Reserved Bark backends. Catalog publication remains gated on
 //! managed-stack qualification and actual image identities.
+use crate::{PAYMENT_METHODS_FIELD, PaymentMethod, ProcessorProfile};
+use std::collections::BTreeSet;
+
 use super::{
     BTreeMap, ComponentBackendContract, ComponentKind, ComponentSpec, ConfigDefault,
-    ConfigSettingClass, ConfigValueKind, Deserialize, EffectiveComponentConfig,
-    ExecutionMountRequirement, ExecutionMountTemplateContract, ExecutionStorageTemplateSource,
-    JsonSchema, ProtocolProbeContract, Serialize, StorageRequirementTemplate,
-    WorkloadControllerKind, config_field, contract, json, managed_field, required_config_value,
-    service_conditions, typed_config_error,
+    ConfigFieldContract, ConfigSettingClass, ConfigValueKind, Deserialize,
+    EffectiveComponentConfig, ExecutionMountRequirement, ExecutionMountTemplateContract,
+    ExecutionStorageTemplateSource, JsonSchema, ProtocolProbeContract, Serialize,
+    StorageRequirementTemplate, WorkloadControllerKind, config_field, contract, json,
+    managed_field, required_config_value, service_conditions, typed_config_error,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BarkProcessorConfig {
     pub event_poll_interval_ms: u64,
+    pub payment_methods: BTreeSet<PaymentMethod>,
 }
+
+const PROFILE: ProcessorProfile = ProcessorProfile::Bark;
 
 pub(super) fn stack_contracts() -> [ComponentBackendContract; 2] {
     [
@@ -117,13 +123,32 @@ fn stack_contract(
 pub(super) fn effective_config(
     component: &ComponentSpec,
 ) -> Result<EffectiveComponentConfig, String> {
+    required_config_value(component, PAYMENT_METHODS_FIELD)?;
     Ok(EffectiveComponentConfig::BarkProcessor(
         BarkProcessorConfig {
             event_poll_interval_ms: required_config_value(component, "event_poll_interval_ms")?
                 .as_u64()
                 .ok_or_else(|| typed_config_error(component, "event_poll_interval_ms"))?,
+            payment_methods: PROFILE
+                .advertised_methods(&component.config)
+                .ok_or_else(|| typed_config_error(component, PAYMENT_METHODS_FIELD))?,
         },
     ))
+}
+
+/// Upstream's selectable rails; the default advertises all of them.
+fn payment_methods_field() -> ConfigFieldContract {
+    let supported = PROFILE.supported_methods();
+    let methods = supported
+        .iter()
+        .map(PaymentMethod::as_str)
+        .collect::<Vec<_>>();
+    config_field(
+        "Methods advertised to the mint (BARK_PAYMENT_METHODS): bolt11 settles through the Ark server, onchain boards confirmed deposits into Ark and sends on-chain, arkoor is the CDK custom method paying an Ark address. The default is every method, as upstream. The mint registers each advertised method, so it must bind each one exactly once",
+        ConfigValueKind::StringSet,
+        ConfigDefault::Literal(json!(methods)),
+    )
+    .with_enum_values(&methods)
 }
 
 pub(super) fn processor_contract() -> ComponentBackendContract {
@@ -131,15 +156,18 @@ pub(super) fn processor_contract() -> ComponentBackendContract {
         crate::processor_ids::BARK_PROCESSOR,
         ComponentKind::PaymentProcessor,
         "cdk-bark-processor/0.1/v1",
-        BTreeMap::from([(
-            "event_poll_interval_ms".into(),
-            config_field(
-                "Interval between native Bark payment event polling passes in milliseconds",
-                ConfigValueKind::Integer,
-                ConfigDefault::Literal(json!(5000)),
-            )
-            .with_numeric_bounds(1.0, 60_000.0),
-        )]),
+        BTreeMap::from([
+            (
+                "event_poll_interval_ms".into(),
+                config_field(
+                    "Interval between native Bark payment event polling passes in milliseconds",
+                    ConfigValueKind::Integer,
+                    ConfigDefault::Literal(json!(5000)),
+                )
+                .with_numeric_bounds(1.0, 60_000.0),
+            ),
+            (PAYMENT_METHODS_FIELD.into(), payment_methods_field()),
+        ]),
         BTreeMap::from([("grpc".into(), 50051)]),
         "proofstorm/cdk-bark-processor-state/v1",
         // Secret validity is enforced at provisioning/startup and by authenticated
@@ -182,11 +210,6 @@ pub(super) fn processor_contract() -> ComponentBackendContract {
         (
             "network",
             "Owned Bitcoin regtest only",
-            ConfigSettingClass::RuntimePolicy,
-        ),
-        (
-            "payment_methods",
-            "BOLT11/sat only",
             ConfigSettingClass::RuntimePolicy,
         ),
         (

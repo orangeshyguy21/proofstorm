@@ -6,6 +6,7 @@ use std::{thread::sleep, time::Duration};
 use crate::{GateContext, McpClient, cell, http, json as expect, native};
 
 mod funding;
+mod onchain;
 mod payments;
 mod recovery;
 #[cfg(test)]
@@ -115,7 +116,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     cleanup?;
     result?;
     println!(
-        "Managed Bark: settlement, unpaid and interrupted payment recovery, TLS refusal and cleanup passed"
+        "Managed Bark: rail registration, settlement, unpaid and interrupted payment recovery, on-chain boarding, TLS refusal and cleanup passed"
     );
     Ok(())
 }
@@ -158,17 +159,14 @@ fn exercise(context: &GateContext, client: &mut McpClient, namespace: &str) -> R
         RUN,
         "processor",
         "bark-settings",
-        "/opt/proofstorm/driver processor-settings https://127.0.0.1:50051 /processor-client/tls cdk-bark-processor",
+        &format!(
+            "/opt/proofstorm/driver processor-settings https://127.0.0.1:50051 /processor-client/tls cdk-bark-processor {}",
+            onchain::METHODS
+        ),
     )?;
-    ensure!(
-        settings["unit"] == "sat"
-            && settings["bolt11"].is_object()
-            && settings["bolt12"].is_null()
-            && settings["onchain"].is_null()
-            && settings["custom"].is_null(),
-        "Bark capabilities differ from its BOLT11/sat profile"
-    );
     context.record("bark-settings.json", &settings)?;
+    onchain::check_settings(&settings)?;
+    onchain::registered(context, namespace)?;
     transport::verify(context, namespace)?;
     context.qualification_stage("bark-funding")?;
     funding::run(context, client)?;
@@ -193,7 +191,8 @@ fn exercise(context: &GateContext, client: &mut McpClient, namespace: &str) -> R
     context.record("bark-issued-after-restart.json", &issued)?;
     balance(context, client, "bark-wallet-recovered", remaining)?;
     payments::melt(context, client, namespace, "recovered", 10_000, remaining)?;
-    Ok(())
+    context.qualification_stage("bark-onchain-mint")?;
+    onchain::mint(context, client, namespace)
 }
 
 fn balance(context: &GateContext, client: &mut McpClient, id: &str, expected: u64) -> Result<()> {

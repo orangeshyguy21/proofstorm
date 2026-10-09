@@ -95,3 +95,57 @@ fn passive_wallet_must_have_no_pending_or_reserved_value() {
         assert!(check_balance(&bad, 69_993).is_err());
     }
 }
+
+#[test]
+fn processor_and_mint_must_advertise_exactly_the_default_rails() {
+    let settings = json!({
+        "unit":"sat",
+        "bolt11":{"mpp":false,"amountless":false,"invoice_description":true},
+        "bolt12":null,
+        "onchain":{"confirmations":1,"min_receive_amount_sat":1,"min_send_amount_sat":1},
+        "custom":{"arkoor":"{}"}
+    });
+    onchain::check_settings(&settings).unwrap();
+    for (pointer, value) in [
+        ("/unit", json!("msat")),
+        ("/bolt11", Value::Null),
+        (
+            "/bolt12",
+            json!({"amountless":false,"invoice_description":true}),
+        ),
+        ("/onchain", Value::Null),
+        ("/custom", json!({"arkoor":"{}","other":"{}"})),
+        ("/custom", Value::Null),
+    ] {
+        let mut bad = settings.clone();
+        *bad.pointer_mut(pointer).unwrap() = value;
+        assert!(onchain::check_settings(&bad).is_err(), "{pointer}");
+    }
+    let rails = |methods: &[&str]| {
+        json!(
+            methods
+                .iter()
+                .map(|method| json!({"method":method,"unit":"sat"}))
+                .collect::<Vec<_>>()
+        )
+    };
+    let info =
+        |mint: Value, melt: Value| json!({"nuts":{"4":{"methods":mint},"5":{"methods":melt}}});
+    let all = rails(&["bolt11", "onchain", "arkoor"]);
+    onchain::check_registered(&info(all.clone(), all.clone())).unwrap();
+    for bad in [
+        rails(&["bolt11"]),
+        rails(&["bolt11", "onchain", "arkoor", "arkoor"]),
+        rails(&["bolt11", "onchain", "arkoor", "bolt12"]),
+        json!([{"method":"bolt11","unit":"msat"},{"method":"onchain","unit":"sat"},{"method":"arkoor","unit":"sat"}]),
+    ] {
+        assert!(
+            onchain::check_registered(&info(all.clone(), bad.clone())).is_err(),
+            "{bad}"
+        );
+        assert!(
+            onchain::check_registered(&info(bad.clone(), all.clone())).is_err(),
+            "{bad}"
+        );
+    }
+}
