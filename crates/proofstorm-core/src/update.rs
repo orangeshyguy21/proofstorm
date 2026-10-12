@@ -80,15 +80,15 @@ impl CellUpdatePlan {
                 for key in [
                     "storage",
                     "storage_backend",
+                    "storage_size",
                     "database",
                     "network",
                     "wallet_name",
                 ] {
                     if previous.config.get(key) != component.config.get(key) {
-                        changes.unsupported.push(format!(
-                            "{}: changing {key} requires an explicit state migration",
-                            component.id
-                        ));
+                        changes
+                            .unsupported
+                            .push(unsupported_config_change(&component.id, key));
                     }
                 }
                 if prior.rollout_digest == next.rollout_digest {
@@ -172,6 +172,17 @@ impl CellUpdatePlan {
             .chain(&self.changes.removed)
             .cloned()
             .collect()
+    }
+}
+
+fn unsupported_config_change(component: &str, key: &str) -> String {
+    if key == "storage_size" {
+        format!(
+            "{component}: live storage resizing is unsupported; \
+             set storage_size when adding a new component"
+        )
+    } else {
+        format!("{component}: changing {key} requires an explicit state migration")
     }
 }
 

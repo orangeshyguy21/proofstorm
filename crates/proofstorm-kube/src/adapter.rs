@@ -1550,6 +1550,8 @@ pub fn render_keycloak_component(
     let secret_name = format!("{}-credentials", plan.component_id);
     let labels = labels(&plan.instance_key, Some(&plan.component_id));
     let mut rendered = RenderedComponent::default();
+    // This Secret bootstraps identity once. Mutable realm policy is applied by
+    // the startup driver, because importing an existing realm is a no-op.
     rendered.secrets.push(resource(json!({
         "apiVersion": "v1", "kind": "Secret",
         "metadata": metadata(&secret_name, &plan.instance_key, &namespace, Some(&plan.component_id)),
@@ -1563,7 +1565,7 @@ pub fn render_keycloak_component(
     rendered.deployments.push(resource(json!({
         "apiVersion": "apps/v1", "kind": "Deployment",
         "metadata": plan_workload_metadata(plan),
-        "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
+        "spec": {"replicas": 1, "strategy": {"type": "Recreate"}, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
                 "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key),
@@ -1584,6 +1586,8 @@ pub fn render_keycloak_component(
                         {"name": "KC_HEALTH_ENABLED", "value": "true"},
                         {"name": "JAVA_OPTS_KC_HEAP", "value": "-XX:InitialRAMPercentage=10 -XX:MaxRAMPercentage=45"},
                         {"name": "KEYCLOAK_ADMIN", "value": "proofstorm-admin"},
+                        {"name": "PROOFSTORM_OIDC_PORT", "value": http_port.to_string()},
+                        {"name": "OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS", "value": access_token_lifespan_seconds.to_string()},
                         {"name": "KEYCLOAK_ADMIN_PASSWORD", "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "KEYCLOAK_ADMIN_PASSWORD"}}}
                     ],
                     "ports": [{"name": "http", "containerPort": http_port}],
@@ -1592,6 +1596,7 @@ pub fn render_keycloak_component(
                     // augments and imports the realm at startup, and its peak resident
                     // set does not fit that default, so declare the limit here.
                     "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "2", "memory": "2Gi"}},
+                    "startupProbe": {"exec": {"command": [crate::drivers::DRIVER_PATH, "keycloak", "configure"]}, "timeoutSeconds": 10, "periodSeconds": 3, "failureThreshold": 60},
                     "readinessProbe": {"httpGet": {"path": "/realms/proofstorm/.well-known/openid-configuration", "port": http_port}, "periodSeconds": 3, "failureThreshold": 60},
                     "volumeMounts": [{"name": "realm-import", "mountPath": "/opt/keycloak/data/import/realm.json", "subPath": "realm.json", "readOnly": true}]
                 }],
@@ -1599,6 +1604,7 @@ pub fn render_keycloak_component(
             }
         }}
     }))?);
+    install_component_driver(&mut rendered)?;
     Ok(rendered)
 }
 

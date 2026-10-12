@@ -1095,6 +1095,9 @@
               "proofstorm.dev/network-identity": "identity"
             }
           },
+          "strategy": {
+            "type": "Recreate"
+          },
           "template": {
             "metadata": {
               "annotations": {
@@ -1184,6 +1187,14 @@
                       "value": "proofstorm-admin"
                     },
                     {
+                      "name": "PROOFSTORM_OIDC_PORT",
+                      "value": "8080"
+                    },
+                    {
+                      "name": "OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS",
+                      "value": "300"
+                    },
+                    {
                       "name": "KEYCLOAK_ADMIN_PASSWORD",
                       "valueFrom": {
                         "secretKeyRef": {
@@ -1228,18 +1239,70 @@
                       ]
                     }
                   },
+                  "startupProbe": {
+                    "exec": {
+                      "command": [
+                        "/opt/proofstorm/driver",
+                        "keycloak",
+                        "configure"
+                      ]
+                    },
+                    "failureThreshold": 60,
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 10
+                  },
                   "volumeMounts": [
                     {
                       "mountPath": "/opt/keycloak/data/import/realm.json",
                       "name": "realm-import",
                       "readOnly": true,
                       "subPath": "realm.json"
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
                     }
                   ]
                 }
               ],
               "enableServiceLinks": false,
               "initContainers": [
+                {
+                  "command": [
+                    "/usr/local/lib/proofstorm-driver",
+                    "install"
+                  ],
+                  "image": "proofstorm-controller:driver-image-required",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "proofstorm-driver",
+                  "resources": {
+                    "limits": {
+                      "cpu": "200m",
+                      "memory": "128Mi"
+                    },
+                    "requests": {
+                      "cpu": "10m",
+                      "memory": "16Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    },
+                    "readOnlyRootFilesystem": true,
+                    "runAsNonRoot": true
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver"
+                    }
+                  ]
+                },
                 {
                   "command": [
                     "sh",
@@ -1291,6 +1354,10 @@
                     "defaultMode": 288,
                     "secretName": "identity-credentials"
                   }
+                },
+                {
+                  "emptyDir": {},
+                  "name": "proofstorm-driver"
                 }
               ]
             }

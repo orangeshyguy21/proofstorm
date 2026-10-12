@@ -67,7 +67,7 @@ fn login(context: &GateContext, url: &str, username: &str, password: &str) -> Re
     ))
 }
 
-fn observe(context: &GateContext, namespace: &str) -> Result<Value> {
+fn observe(context: &GateContext, namespace: &str, lifetime: u64) -> Result<Value> {
     let mut forward =
         http::PortForward::open(&context.kubectl, namespace, "service/identity", 8080)?;
     let discovery = http::get_json_retrying(
@@ -117,7 +117,7 @@ fn observe(context: &GateContext, namespace: &str) -> Result<Value> {
         "unexpected OIDC token claims"
     );
     ensure!(
-        expect::integer(&claims, "/exp")? - expect::integer(&claims, "/iat")? == 600,
+        expect::integer(&claims, "/exp")? - expect::integer(&claims, "/iat")? == lifetime,
         "unexpected OIDC token lifetime"
     );
     let subject = expect::string(&claims, "/sub")?;
@@ -133,7 +133,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     let ready = cell::wait_ready_recorded(context, &mut client, INSTANCE)?;
     let namespace = expect::string(&ready, "/instance_namespace")?;
     context.qualification_stage("configuration")?;
-    let before = observe(context, namespace)?;
+    let before = observe(context, namespace, 600)?;
     let secrets = [
         "secret/identity-credentials",
         "secret/identity-db-credentials",
@@ -145,6 +145,30 @@ pub fn run(context: &GateContext) -> Result<()> {
     });
     let [identity_digest, database_digest] = digests;
     let digests = [identity_digest?, database_digest?];
+    // Exercise both an increase and a decrease on the same persisted realm.
+    for lifetime in [900, 120] {
+        let state = client.call("cell_inspect", json!({"name":INSTANCE}))?;
+        let mut desired = document();
+        desired["components"][1]["config"]["access_token_lifespan_seconds"] = json!(lifetime);
+        let preview = client.call("cell_plan", json!({"name":INSTANCE,
+            "request_id":format!("lifetime-{lifetime}"),"cell":context.document(desired)?,
+            "expected_generation":state["desired_generation"],"expected_instance_key":state["instance_key"]}))?;
+        ensure!(
+            preview["changes"]["supported"] == true,
+            "OIDC lifetime edit rejected"
+        );
+        let applied = cell::apply(&mut client, &preview)?;
+        let ready = cell::wait_ready_recorded(context, &mut client, INSTANCE)?;
+        ensure!(
+            ready["generation"] == applied["accepted_generation"]
+                && ready["observed_generation"] == applied["accepted_generation"],
+            "OIDC edit generation changed"
+        );
+        ensure!(
+            observe(context, namespace, lifetime)? == before,
+            "OIDC lifetime edit changed user identity or signing keys"
+        );
+    }
     context.qualification_stage("restart")?;
     context
         .kubectl
@@ -162,14 +186,14 @@ pub fn run(context: &GateContext) -> Result<()> {
         );
     }
     ensure!(
-        observe(context, namespace)? == before,
+        observe(context, namespace, 120)? == before,
         "OIDC restart changed user identity or signing keys"
     );
     context.qualification_stage("teardown")?;
     client.call("cell_remove", json!({"name":INSTANCE}))?;
     cell::wait_closed(&mut client, INSTANCE)?;
     println!(
-        "Keycloak discovery, login/rejection, PostgreSQL persistence, stable credentials and signing keys, and teardown passed"
+        "Keycloak discovery, login/rejection, live lifetime edits, PostgreSQL persistence, stable credentials and signing keys, and teardown passed"
     );
     Ok(())
 }

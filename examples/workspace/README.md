@@ -358,7 +358,9 @@ The first implementation allows 16 concurrent tasks, 128 retained task records,
 and source snapshots up to 16 MiB / 512 entries / 32 directory levels. Source
 symlinks and special files are refused. The workspace has a 1 GiB memory limit
 and two CPU limit. Storage defaults to 1 GiB (`storage_size` also accepts 2, 5,
-or 10 GiB). Task-created output consumes that volume and is the script's
+or 10 GiB when creating a component). Live storage resizing is unsupported;
+editing an existing component's `storage_size` is rejected before changing the
+cell. Task-created output consumes that volume and is the script's
 responsibility to bound. Removing the cell deletes its workspace state.
 
 Scripts can call cell services directly or use scoped native, lifecycle and

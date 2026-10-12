@@ -15,6 +15,8 @@ pub mod http;
 #[cfg(feature = "runtime")]
 pub mod inspect;
 #[cfg(feature = "runtime")]
+pub mod keycloak;
+#[cfg(feature = "runtime")]
 pub mod management;
 #[cfg(feature = "runtime")]
 pub mod nutshell;
