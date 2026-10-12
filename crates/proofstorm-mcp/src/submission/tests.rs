@@ -1,4 +1,5 @@
 use super::*;
+use rmcp::handler::server::wrapper::Parameters;
 use serde_json::{Value, json};
 
 fn service() -> ProofstormMcp {
@@ -19,6 +20,200 @@ fn inline() -> Value {
     let document = document();
     json!({"name":"inline-cell","request_id":"author","components":document["components"],
         "links":[{"id":"mint-chain","kind":"chain_backend","from":"mint","to":"chain","network":"regtest"}]})
+}
+
+fn storage_document(size: Option<&str>) -> Value {
+    let config = size.map_or_else(|| json!({}), |size| json!({"storage_size":size}));
+    json!({"api_version":"proofstorm/v1alpha1","name":"storage-cell","links":[],
+    "components":[
+        {"id":"scripts","kind":"workspace","implementation":"workspace",
+         "config_version":"workspace/0.1/v1","control":"workspace","config":config},
+        {"id":"db","kind":"database","implementation":"postgresql",
+         "config_version":"postgresql/17/v1","control":"cell","config":config}
+    ]})
+}
+
+#[tokio::test]
+async fn storage_resize_is_unsupported_in_preview_and_submission_before_runtime_access() {
+    let mcp = service().with_kubernetes(crate::lifecycle_tests::cluster_client(), "system");
+    let document = storage_document(Some("2Gi"));
+    mcp.proofstorm_cell_up(Parameters(
+        serde_json::from_value(json!({
+            "name":"storage-cell","request_id":"create","cell":document
+        }))
+        .unwrap(),
+    ))
+    .await
+    .unwrap();
+    let handle = mcp
+        .store
+        .resolve_cell("alpha", "designer", "storage-cell")
+        .unwrap();
+    let original = mcp
+        .store
+        .instance("alpha", "designer", &handle.instance_id)
+        .unwrap();
+    let state = json!(
+        mcp.store
+            .update_state("alpha", "designer", &handle.instance_id)
+            .unwrap()
+    );
+    let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = requests.clone();
+    let client = kube::Client::new(
+        tower::service_fn(move |_: http::Request<kube::client::Body>| {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::future::ready(Err::<http::Response<kube::client::Body>, _>(
+                std::io::Error::other(
+                    "storage resize must be rejected before accessing Kubernetes",
+                ),
+            ))
+        }),
+        "system",
+    );
+    let mcp = mcp.with_kubernetes(client, "system");
+    for index in 0..2 {
+        for size in [Some("1Gi"), Some("5Gi"), None] {
+            let mut edited = document.clone();
+            edited["components"][index]["config"] =
+                size.map_or_else(|| json!({}), |size| json!({"storage_size":size}));
+            let key = format!("resize-{index}-{size:?}");
+            let input = json!({"name":"storage-cell","request_id":key,"cell":edited,
+                "expected_generation":original.generation,"expected_instance_key":original.instance_key});
+            let plan = mcp
+                .proofstorm_cell_plan(Parameters(serde_json::from_value(input.clone()).unwrap()))
+                .unwrap()
+                .structured_content
+                .unwrap();
+            assert_eq!(plan["changes"]["supported"], false);
+            let mut direct = input;
+            direct["request_id"] = json!(format!("{key}-direct"));
+            for submission in [
+                direct,
+                json!({"name":"storage-cell","request_id":format!("{key}-saved"),"plan":plan["plan"]}),
+            ] {
+                let error = mcp
+                    .proofstorm_cell_up(Parameters(serde_json::from_value(submission).unwrap()))
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.data.unwrap()["code"], "cell_update_unsupported");
+                assert!(
+                    error
+                        .message
+                        .contains(document["components"][index]["id"].as_str().unwrap())
+                );
+                assert!(error.message.contains("storage_size"));
+                assert!(
+                    error
+                        .message
+                        .contains("live storage resizing is unsupported")
+                );
+                assert_eq!(
+                    mcp.store
+                        .instance("alpha", "designer", &handle.instance_id)
+                        .unwrap(),
+                    original
+                );
+                assert_eq!(
+                    json!(
+                        mcp.store
+                            .update_state("alpha", "designer", &handle.instance_id)
+                            .unwrap()
+                    ),
+                    state
+                );
+                assert!(
+                    mcp.store
+                        .pending_updates("alpha", "designer")
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+        }
+    }
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn storage_sizes_remain_configurable_for_new_components_and_defaults_are_equivalent() {
+    let mcp = service().with_kubernetes(crate::lifecycle_tests::cluster_client(), "system");
+    mcp.proofstorm_cell_up(Parameters(
+        serde_json::from_value(json!({
+            "name":"storage-cell","request_id":"create","cell":storage_document(None)
+        }))
+        .unwrap(),
+    ))
+    .await
+    .unwrap();
+    let handle = mcp
+        .store
+        .resolve_cell("alpha", "designer", "storage-cell")
+        .unwrap();
+    let original = mcp
+        .store
+        .instance("alpha", "designer", &handle.instance_id)
+        .unwrap();
+    // Explicitly spelling the default is a no-op, not a resize.
+    let mut document = storage_document(Some("1Gi"));
+    let input = json!({"name":"storage-cell","request_id":"same-size","cell":document,
+        "expected_generation":1,"expected_instance_key":original.instance_key});
+    let plan = mcp
+        .proofstorm_cell_plan(Parameters(serde_json::from_value(input.clone()).unwrap()))
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(plan["changes"]["supported"], true);
+    assert_eq!(plan["changes"]["unchanged"], 2);
+    mcp.proofstorm_cell_up(Parameters(serde_json::from_value(input).unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(
+        mcp.store
+            .instance("alpha", "designer", &handle.instance_id)
+            .unwrap(),
+        original
+    );
+
+    let mut additions = storage_document(Some("10Gi"));
+    for component in additions["components"].as_array_mut().unwrap() {
+        component["id"] = json!(format!("new-{}", component["id"].as_str().unwrap()));
+        document["components"]
+            .as_array_mut()
+            .unwrap()
+            .push(component.clone());
+    }
+    let input = json!({"name":"storage-cell","request_id":"add-storage","cell":document,
+        "expected_generation":1,"expected_instance_key":original.instance_key});
+    let plan = mcp
+        .proofstorm_cell_plan(Parameters(serde_json::from_value(input.clone()).unwrap()))
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(plan["changes"]["supported"], true);
+    assert_eq!(plan["changes"]["added"], 2);
+    mcp.proofstorm_cell_up(Parameters(serde_json::from_value(input).unwrap()))
+        .await
+        .unwrap();
+    let updated = mcp
+        .store
+        .instance("alpha", "designer", &handle.instance_id)
+        .unwrap();
+    assert_eq!(updated.generation, 2);
+    assert_eq!(updated.instance_key, original.instance_key);
+    let revision = mcp
+        .store
+        .revision("alpha", "designer", &updated.revision_digest)
+        .unwrap();
+    for component in &revision.cell.components {
+        assert_eq!(
+            component.config["storage_size"],
+            if component.id.starts_with("new-") {
+                "10Gi"
+            } else {
+                "1Gi"
+            }
+        );
+    }
 }
 
 #[test]

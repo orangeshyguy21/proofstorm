@@ -652,6 +652,78 @@ fn cdk_waits_for_external_lightning_before_reading_credentials_or_opening_rpc() 
 }
 
 #[test]
+fn keycloak_lifetime_edits_roll_only_the_provider_and_gate_readiness_on_policy_application() {
+    for platform in [CatalogPlatform::LinuxAmd64, CatalogPlatform::LinuxArm64] {
+        let (mut spec, _) = backend_cell("keycloak");
+        let catalog = catalog_for_platform(platform);
+        let lock = resolve_lock(&spec, &catalog).unwrap();
+        let original =
+            compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+        for lifetime in [600, 60] {
+            spec.components
+                .iter_mut()
+                .find(|c| c.id == "identity")
+                .unwrap()
+                .config
+                .insert("access_token_lifespan_seconds".into(), json!(lifetime));
+            let lock = resolve_lock(&spec, &catalog).unwrap();
+            let plans =
+                compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+            for plan in &plans {
+                let prior = original
+                    .iter()
+                    .find(|p| p.component_id == plan.component_id)
+                    .unwrap();
+                assert_eq!(
+                    plan.rollout_digest == prior.rollout_digest,
+                    plan.component_id != "identity"
+                );
+            }
+            let identity = plans.iter().find(|p| p.component_id == "identity").unwrap();
+            let rendered = render_keycloak_component(identity).unwrap();
+            let deployment = serde_json::to_value(&rendered.deployments[0]).unwrap();
+            assert_eq!(deployment["spec"]["strategy"]["type"], "Recreate");
+            let pod = &deployment["spec"]["template"]["spec"];
+            let container = &pod["containers"][0];
+            assert_eq!(
+                container["startupProbe"]["exec"]["command"],
+                json!([
+                    proofstorm_kube::drivers::DRIVER_PATH,
+                    "keycloak",
+                    "configure"
+                ])
+            );
+            assert!(
+                container["startupProbe"]["timeoutSeconds"]
+                    .as_u64()
+                    .unwrap()
+                    > 8
+            );
+            assert!(
+                container["readinessProbe"]["httpGet"]["path"]
+                    .as_str()
+                    .unwrap()
+                    .contains("openid-configuration")
+            );
+            let env = container["env"].as_array().unwrap();
+            assert_eq!(
+                env.iter()
+                    .find(|v| v["name"] == "OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS")
+                    .unwrap()["value"],
+                lifetime.to_string()
+            );
+            assert_eq!(
+                env.iter()
+                    .find(|v| v["name"] == "KEYCLOAK_ADMIN_PASSWORD")
+                    .unwrap()["valueFrom"]["secretKeyRef"]["name"],
+                "identity-credentials"
+            );
+            assert_eq!(pod["initContainers"][0]["name"], "proofstorm-driver");
+        }
+    }
+}
+
+#[test]
 fn keycloak_waits_for_its_actual_database_service_without_database_credentials() {
     for platform in [CatalogPlatform::LinuxAmd64, CatalogPlatform::LinuxArm64] {
         let (mut spec, _) = backend_cell("keycloak");
@@ -678,14 +750,15 @@ fn keycloak_waits_for_its_actual_database_service_without_database_credentials()
             .as_ref()
             .unwrap();
         let init = pod.init_containers.as_ref().unwrap();
-        assert_eq!(init.len(), 1);
-        assert_eq!(init[0].name, "ensure-database");
+        assert_eq!(init.len(), 2);
+        assert_eq!(init[0].name, "proofstorm-driver");
+        assert_eq!(init[1].name, "ensure-database");
         assert_eq!(
-            &init[0].command.as_ref().unwrap()[4..],
+            &init[1].command.as_ref().unwrap()[4..],
             ["identity-storage", "5432", "identity_primary"]
         );
-        assert_ensure_database_credential(&init[0]);
-        assert!(init[0].volume_mounts.is_none());
+        assert_ensure_database_credential(&init[1]);
+        assert!(init[1].volume_mounts.is_none());
         let database = plans
             .iter()
             .find(|p| p.component_id == "identity-storage")

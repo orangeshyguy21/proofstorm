@@ -110,6 +110,15 @@ async fn run() -> Result<()> {
             let config = proofstorm_driver::authentication::Config::environment()?;
             proofstorm_driver::authentication::run(mode, &config).await?
         }
+        [command, mode] if command == "keycloak" && mode == "configure" => {
+            proofstorm_driver::keycloak::configure(
+                required("PROOFSTORM_OIDC_PORT")?.parse()?,
+                required("OIDC_ACCESS_TOKEN_LIFESPAN_SECONDS")?.parse()?,
+                &proofstorm_driver::http::required("KEYCLOAK_ADMIN_PASSWORD")?,
+            )
+            .await?;
+            return Ok(());
+        }
         [command, mode] if command == "nutshell" => {
             #[cfg(unix)]
             if mode == "rune-probe" {
@@ -228,6 +237,7 @@ async fn main() {
             [command, ..] if matches!(command.as_str(), "holdings" | "observe" | "quote") => {
                 "wallet_orchestration_failed"
             }
+            [command, ..] if command == "keycloak" => "oidc_policy_configuration_failed",
             _ => "component_driver_failed",
         };
         let (stage, reason) = match arguments.first().map(String::as_str) {
