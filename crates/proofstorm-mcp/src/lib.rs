@@ -1104,7 +1104,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "candidate_build",
-        description = "Build a durable candidate mint or wallet from a public GitHub PR, full commit SHA or release tag; then wait. Uses container toolchains and inherits an unverified baseline contract. One CDK mint build serves cdk, cdk-ldk and cdk-bdk. On success, copy a returned catalog_entries selector into a cell_plan component; catalog_entry is the requested preset"
+        description = "Build a durable candidate mint or wallet from a public GitHub PR, release tag or full commit SHA (a commit may be in a public fork: set source.repository); then wait. Uses container toolchains and inherits an unverified baseline contract. On success, copy a returned catalog_entries selector into a cell_plan component; catalog_entry is the requested preset"
     )]
     async fn proofstorm_candidate_build(
         &self,

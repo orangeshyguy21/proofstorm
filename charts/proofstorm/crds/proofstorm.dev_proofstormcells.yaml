@@ -466,6 +466,8 @@ spec:
                                   type: string
                                 requested_source:
                                   properties:
+                                    repository:
+                                      type: string
                                     sha:
                                       type: string
                                     tag:

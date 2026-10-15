@@ -18,6 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             source: Some(CandidateInput::Commit {
                 sha: Some("a".repeat(40)),
                 url: None,
+                repository: None,
             }),
             pull_request_url: String::new(),
             base_version: None,
