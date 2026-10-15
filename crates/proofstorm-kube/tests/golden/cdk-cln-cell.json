@@ -347,6 +347,7 @@
       ],
       "effective_config": {
         "config": {
+          "allow_mint_quote_payment_override": false,
           "auth_max_blind_tokens": 50,
           "contact_email": "",
           "contact_nostr_public_key": "",
@@ -494,7 +495,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:d67ad65589a97c5000b8421c7427d7bbdf96be98df1d3ebd14e2fdebd9e329f5",
+      "rollout_digest": "sha256:f4715305298deb1c79442581a624ef724f6d14424222e99ecdc546bf91136284",
       "storage": [
         {
           "claim_name": "mint-data"
@@ -769,7 +770,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:d67ad65589a97c5000b8421c7427d7bbdf96be98df1d3ebd14e2fdebd9e329f5"
+                "proofstorm.dev/rollout-digest": "sha256:f4715305298deb1c79442581a624ef724f6d14424222e99ecdc546bf91136284"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

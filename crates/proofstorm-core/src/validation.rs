@@ -74,6 +74,7 @@ pub fn validate_cell(cell: &CellSpec) -> ValidationReport {
     processor::validate_topology(cell, &mut issues);
     bark::validate_topology(cell, &mut issues);
     cdk::validate_topology(cell, &mut issues);
+    cdk::validate_payment_override(cell, &mut issues);
 
     ValidationReport::from_issues(issues)
 }

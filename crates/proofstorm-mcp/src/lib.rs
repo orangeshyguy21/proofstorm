@@ -4196,10 +4196,24 @@ mod tests {
             expected.len(),
             wire.len()
         );
+        // Name the heaviest tools so an overrun points at its cause.
+        let mut largest = service
+            .tool_router
+            .list_all()
+            .iter()
+            .map(|tool| {
+                (
+                    serde_json::to_vec(tool).unwrap().len(),
+                    tool.name.to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        largest.sort_unstable_by(|a, b| b.cmp(a));
         assert!(
             wire.len() <= 128 * 1024,
-            "discovery envelope exceeds 128 KiB: {}",
-            wire.len()
+            "discovery envelope exceeds 128 KiB: {} bytes; largest tools: {:?}",
+            wire.len(),
+            &largest[..5]
         );
         let offline = service
             .offline()

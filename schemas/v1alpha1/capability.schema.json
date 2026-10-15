@@ -53,7 +53,8 @@
     "policy.read",
     "policy.edit",
     "snapshot.create",
-    "snapshot.restore"
+    "snapshot.restore",
+    "mint.quote_payment_override"
   ],
   "title": "Capability",
   "type": "string"

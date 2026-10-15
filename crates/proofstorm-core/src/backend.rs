@@ -436,6 +436,9 @@ pub struct CdkMintConfig {
     pub onchain_max_melt_sat: u64,
     /// Upstream `mint_max_bat`; its code default of 0 refuses every BAT mint.
     pub auth_max_blind_tokens: u64,
+    /// Upstream `[mint_management_rpc] allow_mint_quote_payment_override`.
+    /// Enabling it requires `mint.quote_payment_override` in the cell policy.
+    pub allow_mint_quote_payment_override: bool,
 }
 
 /// Lightning backend compiled into the CDK daemon itself. External Lightning
@@ -952,6 +955,14 @@ impl EffectiveComponentConfig {
                 onchain_min_melt_sat: integer("onchain_min_melt_sat")?,
                 onchain_max_melt_sat: integer("onchain_max_melt_sat")?,
                 auth_max_blind_tokens: integer("auth_max_blind_tokens")?,
+                allow_mint_quote_payment_override: required_config_value(
+                    component,
+                    "allow_mint_quote_payment_override",
+                )?
+                .as_bool()
+                .ok_or_else(|| {
+                    typed_config_error(component, "allow_mint_quote_payment_override")
+                })?,
             })
         };
         let nutshell = || -> Result<NutshellMintConfig, String> {
@@ -2026,6 +2037,14 @@ fn cdk_config_fields() -> BTreeMap<String, ConfigFieldContract> {
         .with_numeric_bounds(f64::from(minimum), f64::from(maximum))
     };
     fields.extend(BTreeMap::from([
+        (
+            "allow_mint_quote_payment_override".into(),
+            config_field(
+                "Let management RPC callers override mint quote state, including recording a payment that no payment backend confirmed. true requires mint.quote_payment_override in the cell's policy.allow",
+                ConfigValueKind::Boolean,
+                ConfigDefault::Literal(json!(false)),
+            ),
+        ),
         (
             "http_cache_tti_seconds".into(),
             integer("In-memory HTTP response-cache idle lifetime", 60, 1, 86_400),

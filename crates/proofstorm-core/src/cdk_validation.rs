@@ -32,6 +32,35 @@ pub(crate) fn embedded_payment_tuples(
     tuples
 }
 
+/// The override lets management RPC callers credit ecash that no payment
+/// backend confirmed, so the cell must declare it in its own policy, where it
+/// is part of the published revision and its evidence.
+pub(super) fn validate_payment_override(cell: &CellSpec, issues: &mut Vec<ValidationIssue>) {
+    if cell
+        .policy
+        .allow
+        .contains(&crate::Capability::MintQuotePaymentOverride)
+    {
+        return;
+    }
+    for (index, component) in cell.components.iter().enumerate() {
+        if component.implementation == "cdk"
+            && component
+                .config
+                .get("allow_mint_quote_payment_override")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        {
+            issue(
+                issues,
+                "mint_quote_payment_override_not_allowed",
+                format!("/components/{index}/config/allow_mint_quote_payment_override"),
+                "lets management RPC callers record payments no backend confirmed; add \"mint.quote_payment_override\" to policy.allow to enable it",
+            );
+        }
+    }
+}
+
 pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssue>) {
     for (index, component) in cell.components.iter().enumerate() {
         if component.implementation != "cdk" {
@@ -214,6 +243,42 @@ mod tests {
                 &json!([lnd(), chain()])
             )),
             ["cdk_payment_method_conflict"]
+        );
+    }
+
+    #[test]
+    fn payment_override_requires_the_cell_policy_opt_in() {
+        let override_codes = |config: Value, allow: Value| {
+            let mut cell = cell(&config, &json!([lnd()]));
+            cell.policy.allow = serde_json::from_value(allow).unwrap();
+            validate_cell(&cell)
+                .issues
+                .into_iter()
+                .filter(|issue| issue.code == "mint_quote_payment_override_not_allowed")
+                .map(|issue| issue.path)
+                .collect::<Vec<_>>()
+        };
+        assert!(override_codes(json!({}), json!([])).is_empty());
+        assert!(
+            override_codes(
+                json!({"allow_mint_quote_payment_override": false}),
+                json!([])
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            override_codes(
+                json!({"allow_mint_quote_payment_override": true}),
+                json!(["component.exec_live"])
+            ),
+            ["/components/2/config/allow_mint_quote_payment_override"]
+        );
+        assert!(
+            override_codes(
+                json!({"allow_mint_quote_payment_override": true}),
+                json!(["mint.quote_payment_override"])
+            )
+            .is_empty()
         );
     }
 
