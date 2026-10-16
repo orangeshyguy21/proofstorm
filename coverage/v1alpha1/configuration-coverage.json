@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:5305949d86546f84534a08178dc2be874eba0f6df75c17d8ac60af48b48f2647",
+  "catalog_digest": "sha256:bf19db3654cb5d202db7fedbd57628a917c07bc1314f61f3048061456bf05479",
   "entries": [
     {
       "implementation": "bark-server",
@@ -679,7 +679,9 @@
           "sqlite"
         ],
         "payment_methods": [
-          "bolt11"
+          "bolt11",
+          "bolt12",
+          "onchain"
         ],
         "payment_backends": [],
         "units": [
@@ -730,7 +732,9 @@
           "sqlite"
         ],
         "payment_methods": [
-          "bolt11"
+          "bolt11",
+          "bolt12",
+          "onchain"
         ],
         "payment_backends": [],
         "units": [

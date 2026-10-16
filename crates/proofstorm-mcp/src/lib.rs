@@ -1976,19 +1976,6 @@ fn topology_summary(cell: &CellSpec) -> TopologySummary {
             direct_backend_peers.iter().take(16).copied().collect::<Vec<_>>().join(",")
         ));
     }
-    let mint_count = components
-        .iter()
-        .filter(|component| component.kind == ComponentKind::Mint)
-        .count();
-    let wallet_count = components
-        .iter()
-        .filter(|component| component.kind == ComponentKind::Wallet)
-        .count();
-    if mint_count >= 2 && wallet_count < 2 {
-        warnings.push(format!(
-            "distinct_payment_wallets_required: {mint_count} mints but only {wallet_count} wallet component(s); bidirectional cross-mint payments require distinct payer and recipient wallet components"
-        ));
-    }
 
     TopologySummary {
         component_count: u32::try_from(components.len()).unwrap_or(u32::MAX),
@@ -4002,27 +3989,6 @@ mod tests {
                 .iter()
                 .any(|warning| warning.starts_with("direct_mint_backend_peer:"))
         );
-    }
-
-    #[test]
-    fn topology_receipt_warns_when_cross_mint_work_has_only_one_wallet() {
-        let authored = serde_json::from_value::<CellSpec>(serde_json::json!({
-            "api_version": API_VERSION,
-            "name": "wallet-hazard",
-            "components": [
-                {"id":"mint-a","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
-                {"id":"mint-b","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
-                {"id":"wallet","kind":"wallet","implementation":"nutshell-wallet","version":"0.20.3","config_version":"nutshell-wallet/0.20/v1","control":"cell","config":{}}
-            ],
-            "links": [],
-            "policy": {}
-        }))
-        .expect("typed cell");
-        let summary = topology_summary(&authored);
-        assert!(summary.warnings.iter().any(|warning| {
-            warning.starts_with("distinct_payment_wallets_required:")
-                && warning.contains("bidirectional cross-mint payments")
-        }));
     }
 
     fn assert_optional_tracking(service: &ProofstormMcp) {
