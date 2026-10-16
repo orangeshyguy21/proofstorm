@@ -171,6 +171,9 @@ async fn run() -> Result<()> {
             );
             return Ok(());
         }
+        [command, path, sql] if command == "sqlite" => {
+            proofstorm_driver::inspect::sqlite_rows(Path::new(path), sql)?
+        }
         [command, path] if command == "cdk-melt-receipt" => {
             proofstorm_driver::inspect::cdk_melt_receipt(Path::new(path))?
         }
@@ -245,12 +248,17 @@ async fn main() {
                 "quote",
                 error
                     .downcast_ref::<proofstorm_driver::quote::Failure>()
-                    .map_or("quote_driver_failed", |failure| failure.0.as_str()),
+                    .map_or("quote_driver_failed", |failure| failure.0.as_str())
+                    .to_owned(),
             ),
-            Some("holdings" | "observe") => {
-                ("observation", "database_missing_busy_or_incompatible")
-            }
-            _ => ("driver", "unexpected_driver_error"),
+            Some("holdings" | "observe") => (
+                "observation",
+                "database_missing_busy_or_incompatible".to_owned(),
+            ),
+            // The caller wrote the statement and chose the path; SQLite's errors
+            // name only those, tables and columns, never row values.
+            Some("sqlite") => ("sqlite", format!("{error:#}")),
+            _ => ("driver", "unexpected_driver_error".to_owned()),
         };
         println!("{}", json!({"code":code,"stage":stage,"reason":reason}));
         std::process::exit(1);

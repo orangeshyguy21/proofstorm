@@ -1444,6 +1444,9 @@ fn runtime_endpoint(
 fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRuntimeEndpoint> {
     const OBSERVE: &[&str] = &["component_logs", "reachability_oracle"];
     const CDK_MANAGEMENT: &str = "Management RPC is always enabled on pod loopback with per-mint mutual TLS. Native entrypoint: cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info; use --help for native commands. Client certificates are mounted in /management-client/tls; never copy their contents into arguments or public output. Invoke through component_exec_live, not forensics. Durable RPC changes survive ordinary restarts; a changed authored cell configuration is applied on the next rollout. allow_mint_quote_payment_override defaults to false like upstream; true lets RPC callers record payments no backend confirmed, so it requires mint.quote_payment_override in policy.allow. CLI success is not proof of the intended state: verify the result independently. Management images support Linux amd64 and arm64.";
+    // Passive state reads: forensics never calls the mint's payment backend.
+    const CDK_DATABASE: &str = "Read mint state without calling the payment backend: component_forensics with script /opt/proofstorm/driver sqlite /app/data/cdk-mintd.sqlite \"SELECT ...\" runs one statement on a read-only connection and returns at most 1000 JSON rows. With a primary database_backend link, run PGOPTIONS='-c default_transaction_read_only=on' psql -d <mint id with _ for ->_primary -c 'SELECT ...' through component_exec_live on the postgresql component (or the database the link names).";
+    const NUTSHELL_DATABASE: &str = "Read mint state without calling the payment backend: component_forensics with script /opt/proofstorm/driver sqlite /app/data/mint.sqlite3 \"SELECT ...\" runs one statement on a read-only connection and returns at most 1000 JSON rows. With a primary database_backend link, run PGOPTIONS='-c default_transaction_read_only=on' psql -d <mint id with _ for ->_primary -c 'SELECT ...' through component_exec_live on the postgresql component (or the database the link names).";
     const NUTSHELL_MANAGEMENT: &str = "Management RPC is always enabled on pod loopback with per-mint mutual TLS. Native entrypoint: mint-cli --host 127.0.0.1 --port 8086 --ca-cert-path /management-client/tls/ca.pem --client-cert-path /management-client/tls/client.pem --client-key-path /management-client/tls/client.key get-info; use --help for native commands. Invoke through component_exec_live, not forensics. Never copy credentials into arguments or public output. Nutshell 0.20.3 can print RPC errors while exiting zero: verify state independently. Metadata/settings mutations can be process-local and reset from authored configuration on restart; persistent keyset/quote changes follow upstream database semantics. Management images support Linux amd64 and arm64.";
     if let Some(endpoints) = processor::endpoints(implementation) {
         return endpoints;
@@ -1483,14 +1486,14 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
             "component",
             "mint",
             &["component_logs", "reachability_oracle"],
-            &[NUTSHELL_MANAGEMENT],
+            &[NUTSHELL_MANAGEMENT, NUTSHELL_DATABASE],
         )],
         "cdk" => vec![
             runtime_endpoint(
                 "component",
                 "mint",
                 &["component_logs", "reachability_oracle"],
-                &[CDK_MANAGEMENT, "Enable NUT-21/22 with an authentication_backend link to Keycloak; auth_max_blind_tokens defaults to 50. SQLite primary storage uses local SQLite auth and forbids an auth database link. PostgreSQL primary storage requires a separate database_backend link with role authentication; both databases may share one PostgreSQL component. Endpoint protection follows upstream defaults. Use native cdk-cli authentication commands; typed wallet operations against protected mints are not supported."],
+                &[CDK_MANAGEMENT, CDK_DATABASE, "Enable NUT-21/22 with an authentication_backend link to Keycloak; auth_max_blind_tokens defaults to 50. SQLite primary storage uses local SQLite auth and forbids an auth database link. PostgreSQL primary storage requires a separate database_backend link with role authentication; both databases may share one PostgreSQL component. Endpoint protection follows upstream defaults. Use native cdk-cli authentication commands; typed wallet operations against protected mints are not supported."],
             ),
             runtime_endpoint(
                 "ldk-node",
