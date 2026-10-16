@@ -1,12 +1,12 @@
 use std::{fs, process::Command};
 
 const RECIPE: &str =
-    include_str!("../../proofstorm-core/src/candidate_profiles/cdk-mint-v1.Dockerfile");
+    include_str!("../../proofstorm-core/src/candidate_profiles/cdk-mint-v2.Dockerfile");
 
 #[test]
 fn candidate_mint_prepare_writes_the_exact_cargo_recipe() {
     let profile = proofstorm_core::candidate_build_profile("cdk").unwrap();
-    assert_eq!(profile.version, 10);
+    assert_eq!(profile.version, 11);
     assert_eq!(profile.id, "cdk-mint-source");
     assert_eq!(profile.dockerfile, "Proofstorm.candidate.Dockerfile");
     // Run the saved preparation against a scratch workspace: the quoted heredoc
@@ -31,7 +31,9 @@ fn candidate_mint_recipe_builds_both_binaries_like_cdk_releases() {
     // Complete frozen workspace, lockfile-pinned, both binaries in one Cargo
     // command with upstream's release-static profile and no Nix dev shell.
     assert!(RECIPE.contains("COPY . ."));
-    assert!(RECIPE.contains("cargo build --locked --profile release-static --jobs 1"));
+    assert!(RECIPE.contains("cargo build --locked --profile release-static --jobs 2"));
+    // The repository's pinned compiler, installed without its extra targets.
+    assert!(RECIPE.contains("export RUSTUP_TOOLCHAIN="));
     assert!(
         RECIPE.contains("--features cdk-mintd/ldk-node,cdk-mintd/postgres,cdk-mintd/prometheus")
     );

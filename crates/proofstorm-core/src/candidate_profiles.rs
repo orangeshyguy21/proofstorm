@@ -65,7 +65,7 @@ pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildPro
             (format!("cat > /workspace/{dockerfile} <<'PROOFSTORM_RECIPE_EOF'\n{recipe}\nPROOFSTORM_RECIPE_EOF\n"), vec!["Compiles the native wallet from the frozen source with its lockfile; checks command version and help. Build success does not establish runtime compatibility.".into()])
         }
         "nutshell" | "nutshell-wallet" => (format!("sed -i '/RUN poetry install --without dev --no-root/i RUN poetry remove breez-sdk-spark --lock && pip install --no-cache-dir breez-sdk-spark==0.17.0' /workspace/Dockerfile\ncat >> /workspace/Dockerfile <<'PROOFSTORM_MANAGEMENT_EOF'\n{}\nPROOFSTORM_MANAGEMENT_EOF\n", include_str!("candidate_profiles/nutshell-management-v1.Dockerfile")), vec!["Removes breez-sdk-spark from the Poetry lock and installs 0.17.0 separately for historical platform wheels. Installs source console commands and checks cashu/mint-cli help.".into()]),
-        _ => (format!("cat > /workspace/{dockerfile} <<'PROOFSTORM_RECIPE_EOF'\n{}\nPROOFSTORM_RECIPE_EOF\n", include_str!("candidate_profiles/cdk-mint-v1.Dockerfile")), vec!["Builds cdk-mintd and cdk-mint-cli in one Cargo command from the frozen workspace and lockfiles, as static musl binaries with the workspace's release-static profile like CDK's release binaries (LTO off and 16 codegen units to fit the 4 GiB build limit), on the Alpine runtime of its published image. Enables LDK, PostgreSQL and Prometheus alongside the default backends; cell links and configuration select linked and embedded backends. Uses Proofstorm's pinned Rust image, not CDK's Nix toolchain, and one Cargo job to bound memory. Checks both commands and wget before publishing.".into()]),
+        _ => (format!("cat > /workspace/{dockerfile} <<'PROOFSTORM_RECIPE_EOF'\n{}\nPROOFSTORM_RECIPE_EOF\n", include_str!("candidate_profiles/cdk-mint-v2.Dockerfile")), vec!["Builds cdk-mintd and cdk-mint-cli in one Cargo command from the frozen workspace and lockfiles, as static musl binaries with the workspace's release-static profile like CDK's release binaries (LTO off and 16 codegen units to fit the 4 GiB build limit), on the Alpine runtime of its published image. Enables LDK, PostgreSQL and Prometheus alongside the default backends; cell links and configuration select linked and embedded backends. Compiles with the Rust version pinned in CDK's rust-toolchain.toml, installed without its extra targets in Proofstorm's pinned Rust image instead of CDK's Nix toolchain, with two Cargo jobs within the 4 GiB build limit. Checks both commands and wget before publishing.".into()]),
     };
     // A cold ARM64 release build of the baseline CDK CLI exceeded the original
     // two-core, 30-minute budget. Keep that budget in saved v1 records; new Rust
@@ -94,7 +94,7 @@ pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildPro
             BTreeSet::new()
         },
         version: match implementation {
-            "cdk" => 10,
+            "cdk" => 11,
             "cdk-cli-wallet" => 3,
             "nutshell" | "nutshell-wallet" => 2,
             _ => 1,
