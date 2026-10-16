@@ -3,7 +3,13 @@ use crate::{GateContext, McpClient, process};
 use anyhow::{Context, Result, ensure};
 use proofstorm_core::Capability;
 use serde_json::json;
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::Path,
+    process::{Command, Output},
+    time::Duration,
+};
 
 fn verify_launch(value: &serde_json::Value, agent: &str, project: &Path) -> Result<()> {
     let args = if agent == "codex" {
@@ -48,23 +54,53 @@ fn private_user(command: &mut Command, user: &Path) {
         .env("OPENCODE_DISABLE_MODELS_FETCH", "true");
 }
 
-fn verify_client_edit(agent: &str, before: &[u8], after: &[u8]) -> Result<bool> {
-    if before == after {
-        return Ok(false);
+fn client(agent: &str, user: &Path, directory: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(agent);
+    command.args(args).current_dir(directory);
+    private_user(&mut command, user);
+    command
+}
+
+// OpenCode 2 lists MCP servers through a background service on one fixed
+// port. Give the private home its own port and stop that service afterwards.
+struct OpencodeService<'a>(&'a Path);
+impl<'a> OpencodeService<'a> {
+    fn start(user: &'a Path, directory: &Path) -> Result<Self> {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")?
+            .local_addr()?
+            .port()
+            .to_string();
+        let set = ["service", "set", "port", port.as_str()];
+        ensure!(
+            process::capture(client("opencode", user, directory, &set), 60)?
+                .status
+                .success(),
+            "could not give OpenCode a private service port"
+        );
+        Ok(Self(user))
     }
-    // OpenCode adds its schema annotation when it first reads an existing config.
-    // Admit only that annotation/JSON formatting, never a changed MCP command.
-    ensure!(
-        agent == "opencode",
-        "{agent} client changed its project configuration"
-    );
-    let mut expected: serde_json::Value = serde_json::from_slice(before)?;
-    expected["$schema"] = json!("https://opencode.ai/config.json");
-    ensure!(
-        serde_json::from_slice::<serde_json::Value>(after)? == expected,
-        "OpenCode changed more than its schema annotation/formatting"
-    );
-    Ok(true)
+}
+impl Drop for OpencodeService<'_> {
+    fn drop(&mut self) {
+        let stop = client("opencode", self.0, self.0, &["service", "stop"]);
+        let _ = process::capture(stop, 60);
+    }
+}
+
+// OpenCode 2 starts a folder's MCP servers after its first request, so poll
+// until nothing is still starting.
+fn list_mcp(agent: &str, user: &Path, directory: &Path) -> Result<Output> {
+    let mut attempts = if agent == "opencode" { 20 } else { 1 };
+    loop {
+        let output = process::capture(client(agent, user, directory, &["mcp", "list"]), 180)?;
+        let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
+        let starting = text.contains("no mcp servers configured") || text.contains("pending");
+        attempts -= 1;
+        if !starting || attempts == 0 || !output.status.success() {
+            return Ok(output);
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
 }
 
 fn discovery_status(agent: &str, text: &str, attached: bool) -> Result<&'static str> {
@@ -212,12 +248,12 @@ fn verify_replacement(
         format!("{expected}\n[mcp_servers.duplicate]\ncommand='/legacy/proofstorm-mcp'\n")
     } else {
         let mut value: serde_json::Value = serde_json::from_str(&expected)?;
-        let key = if agent == "opencode" {
-            "mcp"
+        let servers = if agent == "opencode" {
+            &mut value["mcp"]["servers"]
         } else {
-            "mcpServers"
+            &mut value["mcpServers"]
         };
-        value[key]["duplicate"] = value[key]["proofstorm"].clone();
+        servers["duplicate"] = servers["proofstorm"].clone();
         serde_json::to_string_pretty(&value)?
     };
     fs::write(path, &duplicate)?;
@@ -252,7 +288,11 @@ pub fn run(context: &GateContext, native_clients: bool) -> Result<()> {
     fs::create_dir(project.join(".codex"))?;
     for (name, version, help) in [
         ("codex", "codex-cli 0.154.0", "--cd PATH"),
-        ("opencode", "1.0.0", "opencode [project]"),
+        (
+            "opencode",
+            "opencode v2.0.29",
+            "opencode <subcommand> [flags] [<directory>]",
+        ),
         ("claude", "2.0.0 (Claude Code)", "Claude Code --mcp-config"),
     ] {
         fs::write(
@@ -319,7 +359,7 @@ pub fn run(context: &GateContext, native_clients: bool) -> Result<()> {
             fs::read_to_string(attached["backup"].as_str().context("backup missing")?)? == original,
             "backup differs"
         );
-        let mut configured = fs::read(&path)?;
+        let configured = fs::read(&path)?;
         let repeated = process::json(cli(context, &user, &project, fake, &arguments)?, 240)?;
         ensure!(
             repeated["configuration_changed"] == false
@@ -369,15 +409,16 @@ pub fn run(context: &GateContext, native_clients: bool) -> Result<()> {
             "ambient overrides changed managed routing"
         );
         drop(client);
-        let mut client_added_schema = false;
         let mut client_discovery = None;
         if native_clients && agent != "codex" {
             eprintln!("Checking actual {agent} client discovery (no model)...");
+            let _service = if agent == "opencode" {
+                Some(OpencodeService::start(&user, &project)?)
+            } else {
+                None
+            };
             for (directory, connected) in [(&project, true), (&other, false)] {
-                let mut command = Command::new(agent);
-                command.args(["mcp", "list"]).current_dir(directory);
-                private_user(&mut command, &user);
-                let output = process::capture(command, 180)?;
+                let output = list_mcp(agent, &user, directory)?;
                 context.record(&format!("agent-client-{agent}-{}.json", if connected { "attached" } else { "unrelated" }),
                     &json!({"exit_code":output.status.code(),"stdout":String::from_utf8_lossy(&output.stdout),"stderr":String::from_utf8_lossy(&output.stderr),"model_tool_call":false}))?;
                 let text = format!(
@@ -394,12 +435,10 @@ pub fn run(context: &GateContext, native_clients: bool) -> Result<()> {
                     client_discovery = Some(status);
                 }
             }
-        }
-        if native_clients && agent != "codex" {
-            let current = fs::read(&path)?;
-            client_added_schema = verify_client_edit(agent, &configured, &current)?;
-            // Revocation must preserve the bytes present immediately before it.
-            configured = current;
+            ensure!(
+                fs::read(&path)? == configured,
+                "{agent} client changed its project configuration"
+            );
         }
         let actor = attached["actor"].as_str().context("actor missing")?;
         eprintln!("Checking {agent} revocation and manual-edit refusal...");
@@ -452,12 +491,14 @@ pub fn run(context: &GateContext, native_clients: bool) -> Result<()> {
         );
         eprintln!("Checking {agent} explicit replacement, preview, and backup...");
         verify_replacement(context, &user, &project, fake, agent, &path)?;
-        report["agents"].as_array_mut().unwrap().push(json!({"name":agent,"version":launch["launch"]["version"],
-            "server_verified":true,"backup_and_repeat":true,"revocation_preserved":true,"client_added_schema":client_added_schema,
+        report["agents"].as_array_mut().unwrap().push(
+            json!({"name":agent,"version":launch["launch"]["version"],
+            "server_verified":true,"backup_and_repeat":true,"revocation_preserved":true,
             "replacement_preview_backup_and_repeat":true,"replacement_duplicates_refused":true,
             "replacement_adopts_unowned_connection":true,
             "client_discovery":client_discovery,
-            "client_mcp_connected":client_discovery.map(|status| status == "connected")}));
+            "client_mcp_connected":client_discovery.map(|status| status == "connected")}),
+        );
     }
     report["passed"] = json!(true);
     context.record(
@@ -500,21 +541,6 @@ mod tests {
         }
         assert!(discovery_status("opencode", "proofstorm: Pending approval", true).is_err());
         assert!(discovery_status("claude", "proofstorm: Pending approval; failed", true).is_err());
-    }
-    #[test]
-    fn client_schema_annotation_never_permits_a_changed_mcp_entry() {
-        let before = json!({"mcp":{"proofstorm":{"command":["proofstorm-mcp"]}}});
-        let mut after = before.clone();
-        after["$schema"] = json!("https://opencode.ai/config.json");
-        let before = serde_json::to_vec(&before).unwrap();
-        let valid = serde_json::to_vec(&after).unwrap();
-        assert!(verify_client_edit("opencode", &before, &valid).unwrap());
-        assert!(!verify_client_edit("claude", &before, &before).unwrap());
-        assert!(verify_client_edit("claude", &before, &valid).is_err());
-        after["mcp"]["proofstorm"]["command"] = json!(["foreign"]);
-        assert!(
-            verify_client_edit("opencode", &before, &serde_json::to_vec(&after).unwrap()).is_err()
-        );
     }
     #[test]
     fn launch_oracle_checks_each_clients_actual_project_arguments() {

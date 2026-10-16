@@ -10,18 +10,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-fn identity(harness: Harness) -> (&'static str, &'static str, &'static str, [u64; 3]) {
+fn identity(harness: Harness) -> (&'static str, &'static str, Option<&'static str>, [u64; 3]) {
     match harness {
-        Harness::Opencode => (
-            "OpenCode.app",
-            "ai.opencode.desktop",
-            "opencode",
-            [1, 18, 30],
-        ),
+        // OpenCode 2 desktop has no project link: it opens, and the user picks the folder.
+        Harness::Opencode => ("OpenCode.app", "ai.opencode.desktop", None, [2, 0, 0]),
         Harness::Claude => (
             "Claude.app",
             "com.anthropic.claudefordesktop",
-            "claude",
+            Some("claude://code/new?folder="),
             [2, 7032, 0],
         ),
         Harness::Codex => unreachable!("Codex uses its bundled project launcher"),
@@ -29,17 +25,18 @@ fn identity(harness: Harness) -> (&'static str, &'static str, &'static str, [u64
 }
 
 pub(super) fn validate(harness: Harness, info: &Value) -> Result<String> {
-    let (_, bundle, scheme, minimum) = identity(harness);
+    let (_, bundle, link, minimum) = identity(harness);
     ensure!(
         info["CFBundleIdentifier"] == bundle,
         "unexpected desktop application identity"
     );
     ensure!(
-        info["CFBundleURLTypes"]
-            .as_array()
-            .is_some_and(|types| types.iter().any(|t| t["CFBundleURLSchemes"]
+        link.and_then(|link| link.split("://").next())
+            .is_none_or(|scheme| info["CFBundleURLTypes"]
                 .as_array()
-                .is_some_and(|schemes| schemes.iter().any(|s| s == scheme)))),
+                .is_some_and(|types| types.iter().any(|t| t["CFBundleURLSchemes"]
+                    .as_array()
+                    .is_some_and(|schemes| schemes.iter().any(|s| s == scheme))))),
         "desktop app does not register its supported project link"
     );
     let version = info["CFBundleShortVersionString"]
@@ -51,20 +48,23 @@ pub(super) fn validate(harness: Harness, info: &Value) -> Result<String> {
         .collect::<std::result::Result<Vec<_>, _>>()?;
     ensure!(
         numbers.len() != 3 || numbers[0] <= minimum[0],
-        "{} desktop {version} is newer than this alpha's verified project-link version; update {} or run {} agent open without --desktop in a terminal",
+        "{} desktop {version} is newer than this alpha's verified desktop version; update {} or run {} agent open without --desktop in a terminal",
         harness.name(),
         crate::command_name(),
         crate::command_name()
     );
     ensure!(
         numbers.len() == 3 && numbers[0] == minimum[0] && numbers.as_slice() >= minimum.as_slice(),
-        "update {} desktop before opening a project; this alpha requires a verified project-link version",
+        "update {} desktop before opening a project; this alpha requires a verified desktop version",
         harness.name()
     );
     Ok(version.into())
 }
 
-pub(super) fn project_url(harness: Harness, project: &Path) -> Result<String> {
+pub(super) fn project_url(harness: Harness, project: &Path) -> Result<Option<String>> {
+    let Some(prefix) = identity(harness).2 else {
+        return Ok(None);
+    };
     let path = project.to_str().context("non-UTF-8 project folder")?;
     ensure!(project.is_absolute(), "project folder must be absolute");
     // Encode every non-unreserved byte, including URL syntax and UTF-8. This
@@ -77,14 +77,7 @@ pub(super) fn project_url(harness: Harness, project: &Path) -> Result<String> {
             write!(&mut encoded, "%{byte:02X}")?;
         }
     }
-    Ok(format!(
-        "{}{encoded}",
-        match harness {
-            Harness::Opencode => "opencode://open-project?directory=",
-            Harness::Claude => "claude://code/new?folder=",
-            Harness::Codex => unreachable!("Codex uses its bundled project launcher"),
-        }
-    ))
+    Ok(Some(format!("{prefix}{encoded}")))
 }
 
 pub(super) fn detect(harness: Harness, project: &Path) -> Result<LaunchPlan> {
@@ -131,15 +124,16 @@ pub(super) fn detect(harness: Harness, project: &Path) -> Result<LaunchPlan> {
         })();
         match inspected {
             Ok(version) => {
+                let mut arguments = vec![
+                    "-a".into(),
+                    app.to_str().context("non-UTF-8 app path")?.into(),
+                ];
+                arguments.extend(project_url(harness, project)?);
                 return Ok(LaunchPlan {
                     executable: "/usr/bin/open".into(),
                     version,
                     interface: "desktop",
-                    arguments: vec![
-                        "-a".into(),
-                        app.to_str().context("non-UTF-8 app path")?.into(),
-                        project_url(harness, project)?,
-                    ],
+                    arguments,
                     project: project.into(),
                     desktop: Some(app),
                 });

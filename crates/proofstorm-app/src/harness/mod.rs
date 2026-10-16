@@ -48,7 +48,7 @@ impl Harness {
         match self {
             Self::Codex => RECONNECT,
             Self::Opencode => {
-                "Start OpenCode in this project, then check its MCP status. Existing sessions may need a restart. Project configuration is inherited by subdirectories; it is not a filesystem sandbox. Keep this machine-specific configuration out of shared commits. Model, provider and permission settings were not changed. Server verification does not prove the agent loaded it."
+                "Start OpenCode in this project (in the desktop app, open this folder as a project), then check its MCP status. Existing sessions may need a restart. Project configuration is inherited by subdirectories; it is not a filesystem sandbox. Keep this machine-specific configuration out of shared commits. Model, provider and permission settings were not changed. Server verification does not prove the agent loaded it."
             }
             Self::Claude => {
                 "Start Claude Code in this project and review its project trust and MCP approval prompts. Check /mcp in a new session. Project configuration is inherited by subdirectories; it is not a filesystem sandbox. Keep this machine-specific .mcp.json entry out of shared commits. Model, provider and permission settings were not changed. Server verification does not prove the agent loaded it."

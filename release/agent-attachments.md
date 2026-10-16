@@ -1,6 +1,6 @@
 # OpenCode and Claude Code alpha adapters
 
-Generated project attachments support Codex, OpenCode 1.x and Claude Code 2.x. No global agent configuration, model, provider, login,
+Generated project attachments support Codex, OpenCode 2.x and Claude Code 2.x. No global agent configuration, model, provider, login,
 permission mode, or project trust choice is changed.
 
 Proofstorm is optional for agent startup. Codex attachments explicitly set
@@ -59,13 +59,21 @@ Multiple duplicates and inherited/global connections still require manual review
 | Agent | Project configuration | Launch |
 | --- | --- | --- |
 | Codex | `.codex/config.toml` | Terminal by default; `--desktop` for native app |
-| OpenCode 1.x | Existing `opencode.jsonc`, otherwise `opencode.json` | Terminal by default; `--desktop` for native OpenCode 1.18.30+ (1.x), with limitation below |
+| OpenCode 2.x | `mcp.servers` in existing `opencode.jsonc`, otherwise `opencode.json` | Terminal by default; `--desktop` opens native OpenCode 2.x, with limitation below |
 | Claude Code 2.x | `.mcp.json` | Terminal by default; `--desktop` for native Claude 2.7032.0+ (2.x) |
 
 GUI launch buttons always request the native app, independently of the CLI default.
-OpenCode 1.18.30's new layout ignores project links: the app opens, but the folder
-must be selected inside OpenCode. The default terminal launch avoids this upstream
-bug ([#35225](https://github.com/anomalyco/opencode/issues/35225)).
+OpenCode 2 desktop has no project link, so the app opens and the folder must be
+opened inside OpenCode. The CLI and desktop app share one OpenCode background
+service, which reads the same project configuration either way.
+
+OpenCode 2 moved MCP servers to `mcp.servers` and splits timeouts into startup
+and per-tool-call limits; the entry uses 60 seconds and 30 minutes, like Codex.
+OpenCode 2 still starts 1.x entries kept directly under `mcp`, but turns their
+single timeout into a tool-call limit, so reconnecting moves this installation's
+own 1.x entry to `mcp.servers`. A manual 1.x entry is refused, not moved.
+OpenCode 2 exposes MCP tools through its Code Mode by default; the entry leaves
+that choice to OpenCode.
 
 Configuration applies through each agent's normal project/directory lookup,
 including subdirectories. This is not a filesystem access sandbox. The generated
@@ -88,7 +96,7 @@ configuration, especially Claude's normally team-shared `.mcp.json`.
   OpenCode custom configuration overrides are refused, not unset or overwritten.
   Remote organization settings, plugins, managed policies, and tool permissions
   may still prevent loading; inspect the agent's MCP status after connecting.
-- OpenCode v2 has a different MCP schema and is deliberately rejected. Claude's
+- OpenCode 1.x is no longer supported: it cannot read `mcp.servers`. Claude's
   standard project MCP approval and trust prompts remain the user's decision.
 - Nothing installs or upgrades an agent, changes permission settings, or starts
   a billable model session as part of attachment.
@@ -99,9 +107,9 @@ Official references checked September 9, 2026:
 [OpenCode v2 MCP changes](https://opencode.ai/v2/docs/mcp-servers), and
 [Claude Code MCP scopes and approval](https://code.claude.com/docs/en/mcp).
 
-Native project links: [Claude Desktop Code links](https://support.claude.com/en/articles/14729294-open-claude-desktop-with-a-link)
-and [OpenCode desktop protocol handler](https://github.com/anomalyco/opencode/blob/dev/packages/desktop/src/main/index.ts).
-OpenCode's `open-project?directory=` parser was also inspected in installed 1.18.30.
+Native project links: [Claude Desktop Code links](https://support.claude.com/en/articles/14729294-open-claude-desktop-with-a-link).
+Installed OpenCode desktop 2.0.29 was inspected on October 15, 2026: it accepts
+`opencode://` links but only acts on its own sign-in link, so none is sent.
 Only an encoded absolute folder is passed—no prompt, model choice or auto-submit.
 Claude always asks the user to confirm the folder. A successful OS handoff does
 not prove that an agent has loaded MCP: approve prompts and check its MCP status.
@@ -131,7 +139,10 @@ just e2e-bundle /absolute/path/to/unpacked/bundle agent-config
 
 `agent-config` uses supported client-version fixtures and real MCP connections.
 `agent-clients` requires already installed OpenCode and Claude Code CLIs and checks
-their actual MCP discovery in private test homes and unrelated projects. Add
+their actual MCP discovery in private test homes and unrelated projects. OpenCode
+gets its own background service port in the private home, stopped afterwards,
+and its listing is polled because OpenCode 2 starts a folder's MCP servers after
+the first request. Add
 `--allow-development` only for a selected development bundle.
 Claude's first-use `pending_approval` status is recorded separately from a
 connection; the check does not grant project trust on the user's behalf.
