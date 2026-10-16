@@ -168,6 +168,9 @@
         "requested_source": {
           "additionalProperties": false,
           "properties": {
+            "repository": {
+              "type": "string"
+            },
             "sha": {
               "type": "string"
             },
@@ -301,7 +304,8 @@
         "policy.read",
         "policy.edit",
         "snapshot.create",
-        "snapshot.restore"
+        "snapshot.restore",
+        "mint.quote_payment_override"
       ],
       "type": "string"
     },

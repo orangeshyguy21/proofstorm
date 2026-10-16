@@ -58,6 +58,10 @@
     "CdkMintConfig": {
       "additionalProperties": false,
       "properties": {
+        "allow_mint_quote_payment_override": {
+          "description": "Upstream `[mint_management_rpc] allow_mint_quote_payment_override`.\nEnabling it requires `mint.quote_payment_override` in the cell policy.",
+          "type": "boolean"
+        },
         "auth_max_blind_tokens": {
           "description": "Upstream `mint_max_bat`; its code default of 0 refuses every BAT mint.",
           "format": "uint64",
@@ -210,7 +214,8 @@
         "onchain_max_mint_sat",
         "onchain_min_melt_sat",
         "onchain_max_melt_sat",
-        "auth_max_blind_tokens"
+        "auth_max_blind_tokens",
+        "allow_mint_quote_payment_override"
       ],
       "type": "object"
     },

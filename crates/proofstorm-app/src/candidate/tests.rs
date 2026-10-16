@@ -49,6 +49,8 @@ async fn candidate_source_forms_preserve_admission_and_legacy_null() {
         json!({"source":{"type":"commit","sha":sha}}),
         json!({"source":{"type":"commit","url":format!("https://github.com/cashubtc/cdk/commit/{sha}")}}),
         json!({"source":{"type":"commit","sha":sha,"url":null}}),
+        json!({"source":{"type":"commit","sha":sha,"repository":"contributor/cdk"}}),
+        json!({"source":{"type":"commit","url":format!("https://github.com/contributor/cdk/commit/{sha}")}}),
         json!({"source":{"type":"tag","tag":"v0.18.1"}}),
         json!({"pull_request_url":"https://github.com/cashubtc/cdk/pull/123"}),
         json!({"source":null,"pull_request_url":"https://github.com/cashubtc/cdk/pull/123"}),
@@ -62,6 +64,111 @@ async fn candidate_source_forms_preserve_admission_and_legacy_null() {
         }).await.unwrap();
         assert_eq!(candidate.phase, CandidateBuildPhase::Pending);
         assert!(candidate.provenance.is_some());
+    }
+}
+
+#[tokio::test]
+async fn candidate_fork_commits_record_the_fork_in_provenance_and_catalog() {
+    let store = store();
+    let sha = "f".repeat(40);
+    let request = serde_json::from_value(json!({"candidate_id":"fork","implementation":"cdk","request_id":"fork",
+        "source":{"type":"commit","url":format!("https://github.com/Contributor/CDK/commit/{sha}")}})).unwrap();
+    let candidate = admit_with_resolver(
+        &store,
+        "workspace",
+        "agent",
+        &request,
+        |source, repository| async move {
+            assert_eq!(repository, "cashubtc/cdk");
+            assert_eq!(
+                source,
+                CandidateInput::Commit {
+                    sha: Some("f".repeat(40)),
+                    url: None,
+                    repository: Some("contributor/cdk".into()),
+                }
+            );
+            Ok((
+                "https://github.com/Contributor/cdk.git".into(),
+                "f".repeat(40),
+            ))
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(candidate.phase, CandidateBuildPhase::Pending);
+    assert_eq!(
+        candidate.repository.as_deref(),
+        Some("https://github.com/Contributor/cdk.git")
+    );
+    assert!(candidate.pull_request_url.is_empty());
+    succeed(&store, candidate);
+    let catalog = store.effective_catalog("workspace", "agent").unwrap();
+    let entry = catalog
+        .entries
+        .iter()
+        .find(|e| e.id == "cdk" && e.source.as_ref().is_some_and(|s| s.candidate_id == "fork"))
+        .unwrap();
+    assert!(
+        entry
+            .description
+            .ends_with(&format!("candidate from contributor/cdk@{sha}"))
+    );
+    let page = crate::catalog::list(
+        &catalog,
+        &serde_json::from_value::<CatalogListRequest>(
+            json!({"query":"contributor/cdk","origins":["candidate"]}),
+        )
+        .unwrap(),
+        "linux/arm64",
+        32 * 1024,
+    )
+    .unwrap();
+    assert_eq!(page.matched_count, 1);
+}
+
+#[tokio::test]
+async fn candidate_fork_commits_admit_for_every_build_profile() {
+    let store = store();
+    let profiled = default_catalog()
+        .entries
+        .iter()
+        .filter(|e| matches!(e.kind, ComponentKind::Mint | ComponentKind::Wallet))
+        .filter_map(|e| {
+            proofstorm_core::candidate_build_profile(&e.id)
+                .filter(|profile| profile.baseline == e.version)
+                .map(|profile| (e.id.clone(), profile.repository))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(profiled.len(), 5);
+    let sha = "e".repeat(40);
+    for (implementation, canonical) in profiled {
+        let fork = format!("contributor/{}", canonical.split_once('/').unwrap().1);
+        let id = format!("{implementation}-fork");
+        let request = serde_json::from_value(
+            json!({"implementation":implementation,"candidate_id":id,"request_id":id,
+            "source":{"type":"commit","url":format!("https://github.com/{fork}/commit/{sha}")}}),
+        )
+        .unwrap();
+        let (expected_canonical, expected_fork) = (canonical.clone(), fork.clone());
+        let candidate = admit_with_resolver(&store, "workspace", "agent", &request, |source, repository| async move {
+            assert_eq!(repository, expected_canonical);
+            assert!(matches!(&source, CandidateInput::Commit { repository: Some(r), .. } if *r == expected_fork));
+            Ok((format!("https://github.com/{expected_fork}.git"), "e".repeat(40)))
+        }).await.unwrap();
+        assert_eq!(
+            candidate.phase,
+            CandidateBuildPhase::Pending,
+            "{implementation}"
+        );
+        assert_eq!(
+            candidate.repository,
+            Some(format!("https://github.com/{fork}.git"))
+        );
+        let provenance = candidate.provenance.unwrap();
+        // A fork changes where source comes from, never the registered recipe.
+        assert_eq!(provenance.profile.repository, canonical);
+        assert_eq!(provenance.requested_source.label(), format!("{fork}@{sha}"));
     }
 }
 
@@ -80,6 +187,8 @@ async fn candidate_source_validation_rejects_invalid_variants_before_resolution(
         json!({"type":"commit"}),
         json!({"type":"commit","sha":"a".repeat(40),"url":format!("https://github.com/cashubtc/cdk/commit/{}", "a".repeat(40))}),
         json!({"type":"commit","sha":"abc123"}),
+        json!({"type":"commit","sha":"a".repeat(40),"repository":"contributor"}),
+        json!({"type":"commit","url":format!("https://gitlab.com/contributor/cdk/commit/{}", "a".repeat(40))}),
         json!({"type":"pull_request","url":"https://github.com/other/repo/pull/123"}),
         json!({"type":"tag","tag":"bad tag"}),
     ] {
@@ -238,6 +347,7 @@ async fn candidate_profiles_admit_every_current_baseline_and_preserve_replays() 
         duplicate.source = Some(CandidateInput::Commit {
             sha: Some("c".repeat(40)),
             url: None,
+            repository: None,
         });
         assert!(
             admit(&store, "workspace", "agent", &duplicate)

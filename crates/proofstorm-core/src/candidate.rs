@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use crate::{CatalogEntry, CatalogResponse, ReleaseChannel, SupportLifecycle, digest_json};
@@ -17,6 +18,9 @@ pub enum CandidateInput {
         sha: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         url: Option<String>,
+        /// Public fork as owner/name; omit for the canonical repository.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repository: Option<String>,
     },
     Tag {
         tag: String,
@@ -26,8 +30,13 @@ pub enum CandidateInput {
 impl CandidateInput {
     /// Normalize author input before checking immutable request identity or resolving GitHub.
     ///
+    /// Commits may name a public fork by `repository` or URL; resolution verifies
+    /// the fork against GitHub. A fork naming the canonical repository normalizes
+    /// to the canonical form, so both spellings share one request identity.
+    ///
     /// # Errors
-    /// Rejects ambiguous commit inputs, abbreviated SHAs, invalid tags and URLs outside the canonical repository.
+    /// Rejects ambiguous commit inputs, abbreviated SHAs, invalid tags, invalid
+    /// repository names, and PR URLs outside the canonical repository.
     pub fn normalized(&self, repository: &str) -> Result<Self, String> {
         let prefix = format!("https://github.com/{repository}/");
         match self {
@@ -38,26 +47,46 @@ impl CandidateInput {
                     url: format!("{prefix}pull/{number}"),
                 })
             }
-            Self::Commit { sha, url } => {
-                let value =
-                    match (sha, url) {
-                        (Some(sha), None) => sha.as_str(),
-                        (None, Some(url)) => url
-                            .strip_prefix(&format!("{prefix}commit/"))
-                            .ok_or("candidate_repository_mismatch")?,
-                        _ => return Err(
-                            "candidate_source_invalid: commit requires exactly one of sha or url"
-                                .into(),
-                        ),
-                    };
+            Self::Commit {
+                sha,
+                url,
+                repository: source,
+            } => {
+                let (value, source) = match (sha, url, source) {
+                    (Some(sha), None, source) => (sha.as_str(), source.as_deref()),
+                    (None, Some(url), None) => {
+                        let (source, sha) = url
+                            .strip_prefix("https://github.com/")
+                            .and_then(|path| path.rsplit_once("/commit/"))
+                            .ok_or("candidate_commit_url_invalid: expected https://github.com/<owner>/<repository>/commit/<sha>")?;
+                        (sha, Some(source))
+                    }
+                    _ => return Err(
+                        "candidate_source_invalid: commit requires exactly one of sha or url, and repository only with sha"
+                            .into(),
+                    ),
+                };
                 if value.len() != 40 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
                     return Err(
                         "candidate_sha_invalid: full 40-character commit SHA required".into(),
                     );
                 }
+                let fork = match source {
+                    Some(source) if !is_github_repository(source) => {
+                        return Err(
+                            "candidate_repository_invalid: expected a GitHub owner/repository"
+                                .into(),
+                        );
+                    }
+                    Some(source) if !source.eq_ignore_ascii_case(repository) => {
+                        Some(source.to_ascii_lowercase())
+                    }
+                    _ => None,
+                };
                 Ok(Self::Commit {
                     sha: Some(value.to_ascii_lowercase()),
                     url: None,
+                    repository: fork,
                 })
             }
             Self::Tag { tag } => {
@@ -74,14 +103,40 @@ impl CandidateInput {
         }
     }
 
+    /// Human-readable source; fork commits name their repository.
     #[must_use]
-    pub fn label(&self) -> &str {
+    pub fn label(&self) -> Cow<'_, str> {
         match self {
-            Self::PullRequest { url } => url,
-            Self::Commit { sha, url } => sha.as_deref().or(url.as_deref()).unwrap_or_default(),
-            Self::Tag { tag } => tag,
+            Self::PullRequest { url } => url.into(),
+            Self::Commit {
+                sha,
+                url,
+                repository,
+            } => {
+                let commit = sha.as_deref().or(url.as_deref()).unwrap_or_default();
+                repository
+                    .as_ref()
+                    .map_or(commit.into(), |fork| format!("{fork}@{commit}").into())
+            }
+            Self::Tag { tag } => tag.into(),
         }
     }
+}
+
+/// Whether `name` is a well-formed GitHub `owner/repository` path. Network
+/// checks such as visibility and fork ancestry happen at resolution.
+#[must_use]
+pub fn is_github_repository(name: &str) -> bool {
+    name.split_once('/').is_some_and(|(owner, repository)| {
+        [(owner, 39), (repository, 100)].iter().all(|&(part, max)| {
+            (1..=max).contains(&part.len())
+                && part != "."
+                && part != ".."
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        })
+    })
 }
 
 impl CandidateProvenance {
@@ -146,7 +201,8 @@ fn candidate_input_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema
         "type":"object", "additionalProperties":false, "required":["type"],
         "properties": {
             "type":{"type":"string","enum":["pull_request","commit","tag"]},
-            "url":{"type":"string"},"sha":{"type":"string"},"tag":{"type":"string"}
+            "url":{"type":"string"},"sha":{"type":"string"},"tag":{"type":"string"},
+            "repository":{"type":"string"}
         }
     })
 }
@@ -324,7 +380,7 @@ pub fn candidate_catalog_entry(
         source
             .provenance
             .as_ref()
-            .map_or(source.pull_request_url.as_str(), |p| p
+            .map_or(Cow::from(source.pull_request_url.as_str()), |p| p
                 .requested_source
                 .label())
     );
@@ -443,35 +499,85 @@ mod tests {
     #[test]
     fn candidate_source_forms_are_exact_and_canonical() {
         let sha = "a".repeat(40);
-        let raw = CandidateInput::Commit {
-            sha: Some(sha.clone()),
-            url: None,
+        let commit = |sha: Option<&str>, url: Option<String>, repository: Option<&str>| {
+            CandidateInput::Commit {
+                sha: sha.map(Into::into),
+                url,
+                repository: repository.map(Into::into),
+            }
         };
-        let url = CandidateInput::Commit {
-            sha: None,
-            url: Some(format!("https://github.com/cashubtc/cdk/commit/{sha}")),
-        };
+        let raw = commit(Some(&sha), None, None);
+        let url = commit(
+            None,
+            Some(format!("https://github.com/cashubtc/cdk/commit/{sha}")),
+            None,
+        );
         assert_eq!(
             raw.normalized("cashubtc/cdk").unwrap(),
             url.normalized("cashubtc/cdk").unwrap()
         );
-        assert!(url.normalized("cashubtc/nutshell").is_err());
-        assert!(
-            CandidateInput::Commit {
-                sha: Some("abc123".into()),
-                url: None
-            }
-            .normalized("cashubtc/cdk")
-            .is_err()
+        // Naming the canonical repository explicitly is the canonical form.
+        assert_eq!(
+            commit(Some(&sha), None, Some("CashuBTC/cdk"))
+                .normalized("cashubtc/cdk")
+                .unwrap(),
+            raw
         );
-        assert!(
-            CandidateInput::Commit {
-                sha: Some(sha),
-                url: Some("https://github.com/cashubtc/cdk/commit/main".into())
-            }
-            .normalized("cashubtc/cdk")
-            .is_err()
+        // Any other repository is a fork claim that resolution must verify.
+        let fork = commit(Some(&sha), None, Some("contributor/cdk"));
+        assert_eq!(fork.normalized("cashubtc/cdk").unwrap(), fork);
+        assert_eq!(fork.label(), format!("contributor/cdk@{sha}"));
+        for spelling in [
+            commit(
+                Some(&sha.to_ascii_uppercase()),
+                None,
+                Some("Contributor/CDK"),
+            ),
+            commit(
+                None,
+                Some(format!("https://github.com/Contributor/CDK/commit/{sha}")),
+                None,
+            ),
+        ] {
+            let normalized = spelling.normalized("cashubtc/cdk").unwrap();
+            assert_eq!(normalized, fork);
+            assert_eq!(normalized.normalized("cashubtc/cdk").unwrap(), normalized);
+        }
+        assert_eq!(
+            url.normalized("cashubtc/nutshell").unwrap(),
+            commit(Some(&sha), None, Some("cashubtc/cdk"))
         );
+        for invalid in [
+            commit(Some("abc123"), None, None),
+            commit(
+                Some(&sha),
+                Some("https://github.com/cashubtc/cdk/commit/main".into()),
+                None,
+            ),
+            commit(
+                None,
+                Some(format!("https://github.com/cashubtc/cdk/commit/{sha}")),
+                Some("contributor/cdk"),
+            ),
+            commit(
+                None,
+                Some(format!("https://gitlab.com/a/cdk/commit/{sha}")),
+                None,
+            ),
+            commit(
+                None,
+                Some(format!("https://github.com/cdk/commit/{sha}")),
+                None,
+            ),
+            commit(Some(&sha), None, Some("contributor")),
+            commit(Some(&sha), None, Some("contributor/cdk/extra")),
+            commit(Some(&sha), None, Some("../cdk")),
+            commit(Some(&sha), None, Some("contributor/..")),
+            commit(Some(&sha), None, Some("contributor/cdk?x=1")),
+            commit(Some(&sha), None, Some(&format!("{}/cdk", "a".repeat(40)))),
+        ] {
+            assert!(invalid.normalized("cashubtc/cdk").is_err(), "{invalid:?}");
+        }
         assert!(
             CandidateInput::PullRequest {
                 url: "https://github.com/cashubtc/cdk/pull/0".into()

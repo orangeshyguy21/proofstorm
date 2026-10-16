@@ -289,6 +289,7 @@ spec:
                 - policy.edit
                 - snapshot.create
                 - snapshot.restore
+                - mint.quote_payment_override
                 type: string
               cellName:
                 type: string

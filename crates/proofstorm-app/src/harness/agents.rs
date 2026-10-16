@@ -6,11 +6,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(super) fn key(harness: Harness) -> &'static str {
+// Where each client keeps its MCP servers. OpenCode 2 moved them to `mcp.servers`.
+pub(super) fn key(harness: Harness) -> &'static [&'static str] {
     match harness {
-        Harness::Codex => "mcp_servers",
-        Harness::Opencode => "mcp",
-        Harness::Claude => "mcpServers",
+        Harness::Codex => &["mcp_servers"],
+        Harness::Opencode => &["mcp", "servers"],
+        Harness::Claude => &["mcpServers"],
     }
 }
 pub(super) fn path(harness: Harness, project: &Path) -> Result<PathBuf> {
@@ -69,7 +70,15 @@ pub(super) fn entry(harness: Harness, normalized: &Value) -> Result<Value> {
                     .iter()
                     .cloned(),
             );
-            json!({"type":"local", "command":command, "enabled":true, "timeout":60000})
+            // OpenCode 2 limits startup and each tool call separately.
+            let ms = |key: &str| {
+                normalized[key]
+                    .as_u64()
+                    .map(|seconds| seconds * 1000)
+                    .context("MCP timeout")
+            };
+            json!({"type":"local", "command":command, "timeout":{
+                "startup":ms("startup_timeout_sec")?, "execution":ms("tool_timeout_sec")?}})
         }
     })
 }
@@ -78,7 +87,27 @@ pub(super) fn existing(harness: Harness, path: &Path, text: &str) -> Result<Opti
         Harness::Codex => config::value(&config::document(path, text)?)?,
         _ => json_config::value(text, harness == Harness::Opencode)?,
     };
-    Ok(value[key(harness)].get("proofstorm").cloned())
+    Ok(json_config::servers(&value, key(harness))
+        .get("proofstorm")
+        .cloned())
+}
+
+// OpenCode 2 still starts 1.x entries kept directly under `mcp`, but turns
+// their single timeout into a tool-call limit. Remove this installation's own
+// 1.x entry before writing `mcp.servers`; never move a manual one.
+fn without_opencode_v1(text: &str, owned: &[Value]) -> Result<String> {
+    let value = json_config::value(text, true)?;
+    for (name, server) in value["mcp"].as_object().into_iter().flatten() {
+        if name == "servers" || !json_config::is_proofstorm(name, server) {
+            continue;
+        }
+        ensure!(
+            name == "proofstorm" && owned.contains(server),
+            "found an OpenCode 1.x Proofstorm entry at mcp.{name}; OpenCode 2 reads mcp.servers. Remove the old entry, then retry"
+        );
+        return json_config::remove(text, &["mcp"], name, true);
+    }
+    Ok(text.into())
 }
 pub(super) fn merge(
     harness: Harness,
@@ -88,22 +117,20 @@ pub(super) fn merge(
     owned: &[Value],
 ) -> Result<String> {
     if harness == Harness::Codex {
-        config::merge(path, text, entry, owned)
-    } else {
-        json_config::merge(
-            text,
-            key(harness),
-            entry,
-            owned,
-            harness == Harness::Opencode,
-        )
-        .with_context(|| {
-            format!(
-                "cannot safely update {}; no configuration changed",
-                path.display()
-            )
-        })
+        return config::merge(path, text, entry, owned);
     }
+    let failed = || {
+        format!(
+            "cannot safely update {}; no configuration changed",
+            path.display()
+        )
+    };
+    let opencode = harness == Harness::Opencode;
+    let text = match text {
+        Some(text) if opencode => Some(without_opencode_v1(text, owned).with_context(failed)?),
+        text => text.map(Into::into),
+    };
+    json_config::merge(text.as_deref(), key(harness), entry, owned, opencode).with_context(failed)
 }
 
 fn home() -> Result<PathBuf> {
@@ -112,8 +139,13 @@ fn home() -> Result<PathBuf> {
     ))
 }
 fn check(value: &Value, path: &Path) -> Result<()> {
-    for name in ["mcp", "mcpServers"] {
-        if let Some(servers) = value[name].as_object() {
+    // OpenCode 2 reads `mcp.servers` and still starts 1.x entries under `mcp`.
+    for servers in [
+        &value["mcp"],
+        &value["mcp"]["servers"],
+        &value["mcpServers"],
+    ] {
+        if let Some(servers) = servers.as_object() {
             ensure!(
                 !servers
                     .iter()
@@ -143,6 +175,7 @@ pub(super) fn inherited(harness: Harness, project: &Path) -> Result<()> {
                 "OPENCODE_CONFIG",
                 "OPENCODE_CONFIG_CONTENT",
                 "OPENCODE_CONFIG_DIR",
+                "OPENCODE_CONFIG_PROJECT_DISABLE",
                 "OPENCODE_DISABLE_PROJECT_CONFIG",
                 "OPENCODE_MANAGED_CONFIG_DIR",
             ] {

@@ -267,6 +267,7 @@ mod tests {
                     requested_source: proofstorm_core::CandidateInput::Commit {
                         sha: Some("a".repeat(40)),
                         url: None,
+                        repository: None,
                     },
                     platform: platform.into(),
                     source_image: GIT_IMAGE.into(),

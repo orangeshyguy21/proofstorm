@@ -78,6 +78,9 @@ pub struct CellOperation {
     /// Monotonic across this cell, including operations from other actors and runs.
     pub sequence: u64,
     pub kind: OperationKind,
+    /// Permission that authorized the operation, e.g. `component.logs`.
+    // Published as a plain string so receipts don't repeat the whole capability enum.
+    #[schemars(with = "String")]
     pub capability: crate::Capability,
     pub resource_name: String,
     pub request_digest: String,

@@ -176,6 +176,9 @@
         "requested_source": {
           "additionalProperties": false,
           "properties": {
+            "repository": {
+              "type": "string"
+            },
             "sha": {
               "type": "string"
             },

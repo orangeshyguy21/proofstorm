@@ -1,91 +1,50 @@
-use std::{
-    fs,
-    io::Write,
-    process::{Command, Stdio},
-};
+use std::{fs, process::Command};
 
-const PREPARE: &str =
-    include_str!("../../proofstorm-core/src/candidate_profiles/cdk-mint-workspace-v6.sh");
+const RECIPE: &str =
+    include_str!("../../proofstorm-core/src/candidate_profiles/cdk-mint-v2.Dockerfile");
 
-fn prepare(input: &str) -> (std::process::Output, String) {
+#[test]
+fn candidate_mint_prepare_writes_the_exact_cargo_recipe() {
+    let profile = proofstorm_core::candidate_build_profile("cdk").unwrap();
+    assert_eq!(profile.version, 11);
+    assert_eq!(profile.id, "cdk-mint-source");
+    assert_eq!(profile.dockerfile, "Proofstorm.candidate.Dockerfile");
+    // Run the saved preparation against a scratch workspace: the quoted heredoc
+    // must reproduce the recipe byte for byte, including its line continuations.
     let directory = tempfile::tempdir().unwrap();
-    let recipe = directory.path().join("candidate Dockerfile");
-    fs::write(&recipe, input).unwrap();
-    let mut child = Command::new("sh")
-        .args(["-s", "--"])
-        .arg(&recipe)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    let workspace = format!("{}/", directory.path().display());
+    let output = Command::new("sh")
+        .args(["-c", &profile.prepare.replace("/workspace/", &workspace)])
+        .output()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(PREPARE.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    (output, fs::read_to_string(recipe).unwrap())
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let written = fs::read_to_string(directory.path().join(&profile.dockerfile)).unwrap();
+    assert_eq!(written.trim_end(), RECIPE.trim_end());
 }
 
 #[test]
-fn candidate_mint_builds_copy_complete_workspace_and_keep_upstream_features() {
-    // Reproduces the selective COPY instructions at the frozen CDK baseline,
-    // which omitted workspace bindings and both dependency lockfiles.
-    // Both upstream Dockerfile feature layouts patch into the one CDK recipe.
-    for features in [
-        "--features postgres --features prometheus",
-        "--features ldk-node --features prometheus --features postgres",
-    ] {
-        let original = format!(
-            "FROM nixos/nix:latest AS builder\nWORKDIR /usr/src/app\nCOPY flake.nix ./flake.nix\nCOPY Cargo.toml ./Cargo.toml\nCOPY crates ./crates\nRUN nix develop --extra-experimental-features flakes --command cargo build --release --bin cdk-mintd {features}\nFROM debian:trixie-slim\nCMD [\"cdk-mintd\"]\n"
-        );
-        let (output, patched) = prepare(&original);
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let compile = patched.find("RUN nix develop").unwrap();
-        assert!(patched[..compile].ends_with("COPY . .\nCOPY --from=proofstorm-management-client /src/target/release/cdk-mint-cli /tmp/proofstorm-cdk-mint-cli\n"));
-        assert!(patched.contains(&format!(
-            "cargo build --locked --release --jobs 1 --features ldk-node,postgres --bin cdk-mintd {features}"
-        )));
-        assert!(patched.ends_with("FROM debian:trixie-slim\nCMD [\"cdk-mintd\"]\n"));
-        let profile = proofstorm_core::candidate_build_profile("cdk").unwrap();
-        assert_eq!(profile.version, 9);
-        assert_eq!(profile.id, "cdk-mint-source");
-        assert_eq!(profile.dockerfile, "Dockerfile.ldk-node");
-        assert!(profile.prepare.contains(PREPARE));
-        assert!(
-            profile
-                .prepare
-                .contains("cargo build --locked --release --jobs 2 --bin cdk-mint-cli")
-        );
-        assert!(
-            profile
-                .prepare
-                .contains("apt-get install -y --no-install-recommends wget ca-certificates")
-        );
-        assert!(profile.prepare.contains(
-            "RUN cdk-mintd --version && cdk-mint-cli --version && wget --version >/dev/null"
-        ));
-    }
-}
-
-#[test]
-fn candidate_mint_unknown_build_shapes_fail_without_rewriting_source() {
-    for input in [
-        "FROM rust\nRUN cargo build\n",
-        "FROM nixos/nix\n",
-        "RUN nix develop --command cargo build --release --bin cdk-mintd --no-default-features\n",
-    ] {
-        let (output, after) = prepare(input);
-        assert!(!output.status.success());
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("Unsupported CDK mint Dockerfile")
-        );
-        assert_eq!(after, input);
-    }
+fn candidate_mint_recipe_builds_both_binaries_like_cdk_releases() {
+    // Complete frozen workspace, lockfile-pinned, both binaries in one Cargo
+    // command with upstream's release-static profile and no Nix dev shell.
+    assert!(RECIPE.contains("COPY . ."));
+    assert!(RECIPE.contains("cargo build --locked --profile release-static --jobs 2"));
+    // The repository's pinned compiler, installed without its extra targets.
+    assert!(RECIPE.contains("export RUSTUP_TOOLCHAIN="));
+    assert!(
+        RECIPE.contains("--features cdk-mintd/ldk-node,cdk-mintd/postgres,cdk-mintd/prometheus")
+    );
+    assert!(RECIPE.contains("--bin cdk-mintd --bin cdk-mint-cli"));
+    // Memory-bounded: LTO off and parallel codegen, other profile settings kept.
+    assert!(RECIPE.contains(
+        "ENV CARGO_PROFILE_RELEASE_STATIC_LTO=off CARGO_PROFILE_RELEASE_STATIC_CODEGEN_UNITS=16"
+    ));
+    assert!(!RECIPE.contains("nix"));
+    assert!(RECIPE.contains("FROM alpine:3.21@sha256:"));
+    assert!(RECIPE.contains(
+        "RUN cdk-mintd --version && cdk-mint-cli --version && command -v wget >/dev/null"
+    ));
 }

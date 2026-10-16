@@ -217,6 +217,7 @@ spec:
                           - policy.edit
                           - snapshot.create
                           - snapshot.restore
+                          - mint.quote_payment_override
                           type: string
                         type: array
                       limits:
@@ -466,6 +467,8 @@ spec:
                                   type: string
                                 requested_source:
                                   properties:
+                                    repository:
+                                      type: string
                                     sha:
                                       type: string
                                     tag:

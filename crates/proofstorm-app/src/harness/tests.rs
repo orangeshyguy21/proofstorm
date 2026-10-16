@@ -158,8 +158,13 @@ fn json_agents_have_native_config_shapes_and_distinct_actor_arguments() {
     let oc = agents::entry(Harness::Opencode, &normalized).unwrap();
     assert_eq!(oc["command"][0], normalized["command"]);
     assert_eq!(oc["command"][4], "codex-example");
-    assert_eq!(oc["enabled"], true);
-    assert_eq!(oc["timeout"], 60000);
+    assert_eq!(oc["type"], "local");
+    // OpenCode 2 timeouts mirror Codex: startup 60 s, each tool call 30 min.
+    assert_eq!(
+        oc["timeout"],
+        json!({"startup":60_000,"execution":1_800_000})
+    );
+    assert!(oc.get("enabled").is_none() && oc.get("disabled").is_none());
     assert!(oc.get("cwd").is_none());
     let claude = agents::entry(Harness::Claude, &normalized).unwrap();
     assert_eq!(
@@ -177,9 +182,10 @@ fn json_agents_have_native_config_shapes_and_distinct_actor_arguments() {
 
 #[test]
 fn jsonc_preserves_comments_order_other_servers_and_idempotency() {
-    let original = "// keep header\n{\n  \"model\": \"custom/model\", // keep model\n  \"mcp\": {\n    \"other\": {\"type\":\"local\", \"command\":[\"other\"],}, /* keep other */\n  },\n  \"permission\": {\"bash\": \"ask\",},\n}\n// keep footer\n";
+    let original = "// keep header\n{\n  \"model\": \"custom/model\", // keep model\n  \"mcp\": {\"servers\": {\n    \"other\": {\"type\":\"local\", \"command\":[\"other\"],}, /* keep other */\n  },},\n  \"permission\": {\"bash\": \"ask\",},\n}\n// keep footer\n";
     let entry = agents::entry(Harness::Opencode, &entry()).unwrap();
-    let out = json_config::merge(Some(original), "mcp", &entry, &[], true).unwrap();
+    let key = agents::key(Harness::Opencode);
+    let out = json_config::merge(Some(original), key, &entry, &[], true).unwrap();
     for part in [
         "// keep header",
         "// keep model",
@@ -191,14 +197,14 @@ fn jsonc_preserves_comments_order_other_servers_and_idempotency() {
     }
     assert_eq!(
         out,
-        json_config::merge(Some(&out), "mcp", &entry, &[entry.clone()], true).unwrap()
+        json_config::merge(Some(&out), key, &entry, &[entry.clone()], true).unwrap()
     );
     let mut upgraded = entry.clone();
-    upgraded["timeout"] = json!(90000);
-    let next = json_config::merge(Some(&out), "mcp", &upgraded, &[entry], true).unwrap();
+    upgraded["timeout"]["execution"] = json!(90000);
+    let next = json_config::merge(Some(&out), key, &upgraded, &[entry], true).unwrap();
     assert!(next.contains("/* keep other */"));
     assert_eq!(
-        json_config::value(&next, true).unwrap()["mcp"]["proofstorm"],
+        json_config::value(&next, true).unwrap()["mcp"]["servers"]["proofstorm"],
         upgraded
     );
 }
@@ -219,16 +225,16 @@ fn json_edits_reject_ambiguous_manual_modified_and_duplicate_entries() {
         "{\"a\":01}",
     ] {
         assert!(
-            json_config::merge(Some(text), "mcpServers", &entry, &[], false).is_err(),
+            json_config::merge(Some(text), &["mcpServers"], &entry, &[], false).is_err(),
             "accepted {text}"
         );
     }
-    let out = json_config::merge(None, "mcpServers", &entry, &[], false).unwrap();
-    assert!(json_config::merge(Some(&out), "mcpServers", &entry, &[], false).is_err());
+    let out = json_config::merge(None, &["mcpServers"], &entry, &[], false).unwrap();
+    assert!(json_config::merge(Some(&out), &["mcpServers"], &entry, &[], false).is_err());
     assert!(
         json_config::merge(
             Some(&out.replace("stdio", "http")),
-            "mcpServers",
+            &["mcpServers"],
             &entry,
             &[entry.clone()],
             false
@@ -237,27 +243,33 @@ fn json_edits_reject_ambiguous_manual_modified_and_duplicate_entries() {
     );
     assert_eq!(
         out,
-        json_config::merge(Some(&out), "mcpServers", &entry, &[entry.clone()], false).unwrap()
+        json_config::merge(Some(&out), &["mcpServers"], &entry, &[entry.clone()], false).unwrap()
     );
 }
 
 #[test]
 fn jsonc_insertion_handles_empty_trailing_commas_escaped_keys_and_arrays() {
     let entry = json!({"command":["/a path/it's/proofstorm-mcp","--home","/home"]});
+    let key = agents::key(Harness::Opencode);
     for text in [
         "{}",
         "{/*hi*/}",
         "{\"mcp\":{}}",
-        "{\"mcp\":{\"other\":{},}}",
-        "{\"mcp\":{\"other\":{} /*hi*/}}",
+        "{\"mcp\":{\"timeout\":{\"startup\":1},}}",
+        "{\"mcp\":{\"servers\":{}}}",
+        "{\"mcp\":{\"servers\":{\"other\":{},}}}",
+        "{\"mcp\":{\"servers\":{\"other\":{} /*hi*/}}}",
         "{\"a\":[1,{\"b\":[true,null,\"é\\\"\",],},],}",
-        "{\"m\\u0063p\":{}}",
+        "{\"m\\u0063p\":{\"servers\":{}}}",
     ] {
-        let out = json_config::merge(Some(text), "mcp", &entry, &[], true).unwrap();
+        let out = json_config::merge(Some(text), key, &entry, &[], true).unwrap();
         assert_eq!(
-            json_config::value(&out, true).unwrap()["mcp"]["proofstorm"],
+            json_config::value(&out, true).unwrap()["mcp"]["servers"]["proofstorm"],
             entry
         );
+    }
+    for text in ["{\"mcp\":[]}", "{\"mcp\":{\"servers\":true}}"] {
+        assert!(json_config::merge(Some(text), key, &entry, &[], true).is_err());
     }
     for text in [
         "{\"mcp\":{\"proofstorm\":1,\"proof\\u0073torm\":2}}",
@@ -309,8 +321,16 @@ fn literal_paths_versions_and_terminal_quoting_fail_safe() {
         entry["cwd"] = json!(format!("/tmp/{marker}"));
         assert!(agents::entry(harness, &entry).is_err());
     }
-    assert!(launch::supported_version(Harness::Opencode, "1.18.30\n").is_ok());
-    for bad in ["2.0.0", "1.beta", "", "opencode 1.2.3"] {
+    assert!(launch::supported_version(Harness::Opencode, "opencode v2.0.29\n").is_ok());
+    for bad in [
+        "1.18.30",
+        "2.0.29",
+        "opencode v1.18.30",
+        "opencode v3.0.0",
+        "opencode v2.beta",
+        "opencode 2.0.29",
+        "",
+    ] {
         assert!(launch::supported_version(Harness::Opencode, bad).is_err());
     }
     assert!(launch::supported_version(Harness::Claude, "2.1.69 (Claude Code)").is_ok());
@@ -346,6 +366,11 @@ fn json_inherited_global_local_and_aliased_servers_are_read_only_conflicts() {
         ),
         (
             Harness::Opencode,
+            json!({"mcp":{"servers":{"alias":{"command":["/path/proofstorm-mcp"]}}}}),
+        ),
+        // OpenCode 2 still starts 1.x-style entries directly under `mcp`.
+        (
+            Harness::Opencode,
             json!({"mcp":{"alias":{"command":["/path/proofstorm-mcp"]}}}),
         ),
     ] {
@@ -364,70 +389,72 @@ fn json_inherited_global_local_and_aliased_servers_are_read_only_conflicts() {
 }
 
 #[test]
-fn successful_help_on_stderr_is_inspected_without_exposing_launch_diagnostics() {
-    let output = launch::capture(
-        Path::new("/bin/sh"),
-        &["-c", "printf 'opencode [project]' >&2", "--help"],
-    )
-    .unwrap();
-    assert_eq!(output, "opencode [project]");
-    let output = launch::capture(
-        Path::new("/bin/sh"),
-        &[
-            "-c",
-            "printf '1.18.30'; printf 'private diagnostic' >&2",
-            "--version",
-        ],
-    )
-    .unwrap();
-    assert_eq!(output, "1.18.30");
+fn launch_diagnostics_on_stderr_are_not_exposed() {
+    for flag in ["--help", "--version"] {
+        let output = launch::capture(
+            Path::new("/bin/sh"),
+            &[
+                "-c",
+                "printf 'opencode v2.0.29'; printf 'private diagnostic' >&2",
+                flag,
+            ],
+        )
+        .unwrap();
+        assert_eq!(output, "opencode v2.0.29");
+    }
 }
 
 #[test]
 fn desktop_project_links_encode_paths_without_prompts_or_shells() {
     let project = Path::new("/project/it's &q=run# now/☃");
     let encoded = "%2Fproject%2Fit%27s%20%26q%3Drun%23%20now%2F%E2%98%83";
+    // OpenCode 2 desktop has no project link; never guess one.
     assert_eq!(
         desktop::project_url(Harness::Opencode, project).unwrap(),
-        format!("opencode://open-project?directory={encoded}")
+        None
     );
     assert_eq!(
         desktop::project_url(Harness::Claude, project).unwrap(),
-        format!("claude://code/new?folder={encoded}")
+        Some(format!("claude://code/new?folder={encoded}"))
     );
     assert!(desktop::project_url(Harness::Claude, Path::new("relative")).is_err());
 }
 
 #[test]
 fn desktop_detection_requires_identity_scheme_and_tested_version() {
-    for (agent, bundle, scheme, version) in [
+    for (agent, bundle, version, old) in [
         (
             Harness::Opencode,
             "ai.opencode.desktop",
-            "opencode",
+            "2.0.29",
             "1.18.30",
         ),
         (
             Harness::Claude,
             "com.anthropic.claudefordesktop",
-            "claude",
             "2.7032.0",
+            "2.0.0",
         ),
     ] {
-        let info = json!({"CFBundleIdentifier":bundle,"CFBundleURLTypes":[{"CFBundleURLSchemes":[scheme]}],"CFBundleShortVersionString":version});
+        let info = json!({"CFBundleIdentifier":bundle,"CFBundleURLTypes":[{"CFBundleURLSchemes":[agent.name()]}],"CFBundleShortVersionString":version});
         assert_eq!(desktop::validate(agent, &info).unwrap(), version);
         for (key, value) in [
             ("CFBundleIdentifier", json!("imposter")),
-            ("CFBundleURLTypes", json!([])),
-            ("CFBundleShortVersionString", json!("1.0.0")),
-            ("CFBundleShortVersionString", json!("2.0.0")),
+            ("CFBundleShortVersionString", json!(old)),
             ("CFBundleShortVersionString", json!("3.0.0")),
-            ("CFBundleShortVersionString", json!("1.beta.0")),
+            ("CFBundleShortVersionString", json!("2.beta.0")),
         ] {
             let mut bad = info.clone();
             bad[key] = value;
             assert!(desktop::validate(agent, &bad).is_err());
         }
+        // Only an app that receives a project link must register its scheme.
+        let mut unlinked = info.clone();
+        unlinked["CFBundleURLTypes"] = json!([]);
+        assert_eq!(
+            desktop::validate(agent, &unlinked).is_ok(),
+            agent == Harness::Opencode
+        );
     }
 }
 
@@ -495,8 +522,14 @@ fn replacement_requires_exact_consent_and_preserves_other_toml_settings() {
 fn confirmed_json_alias_rename_is_lossless_for_unrelated_content() {
     for harness in [Harness::Opencode, Harness::Claude] {
         let key = agents::key(harness);
+        let open = key
+            .iter()
+            .map(|k| format!("\"{k}\": {{"))
+            .collect::<Vec<_>>()
+            .concat();
+        let close = "}".repeat(key.len());
         let original = format!(
-            "{{\n  \"model\" : \"keep\",\n  \"{key}\": {{\n    \"other\" : {{\"command\":\"keep\"}},\n    \"p\\u0073t\" : {{\"command\": \"/old/proofstorm-mcp\"}}\n  }}\n}}\n"
+            "{{\n  \"model\" : \"keep\",\n  {open}\n    \"other\" : {{\"command\":\"keep\"}},\n    \"p\\u0073t\" : {{\"command\": \"/old/proofstorm-mcp\"}}\n  {close}\n}}\n"
         );
         let original = if harness == Harness::Opencode {
             original
@@ -524,8 +557,9 @@ fn confirmed_json_alias_rename_is_lossless_for_unrelated_content() {
         .unwrap();
         assert!(output.contains("\"other\" : {\"command\":\"keep\"}"));
         let value = json_config::value(&output, harness == Harness::Opencode).unwrap();
-        assert_eq!(value[key]["proofstorm"], entry);
-        assert!(value[key].get("pst").is_none());
+        let servers = json_config::servers(&value, key);
+        assert_eq!(servers["proofstorm"], entry);
+        assert!(servers.get("pst").is_none());
         if harness == Harness::Opencode {
             assert!(output.contains("/* my model */"));
             assert!(output.contains("// trailing comment"));
@@ -567,4 +601,75 @@ fn manual_named_entry_still_needs_approval_even_if_identical() {
         .unwrap(),
         original
     );
+}
+
+#[test]
+fn owned_opencode_v1_entry_moves_to_v2_servers_and_manual_ones_stay() {
+    // OpenCode 2 would still start this entry, with a 60 s tool-call limit.
+    let v1 = json!({"type":"local","command":["/old/proofstorm-mcp","--home","/h"],
+        "enabled":true,"timeout":60000});
+    let original = format!(
+        "{{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  // keep note\n  \"mcp\": {{\n    \"other\": {{\"type\": \"local\", \"command\": [\"other\"]}},\n    \"proofstorm\": {}\n  }}\n}}\n",
+        serde_json::to_string(&v1).unwrap()
+    );
+    let entry = agents::entry(Harness::Opencode, &entry()).unwrap();
+    let path = Path::new("/project/opencode.json");
+    let merge = |text: &str, owned: &[Value]| {
+        replacement::merge(Harness::Opencode, path, Some(text), &entry, owned, None)
+    };
+    let output = merge(&original, &[v1.clone()]).unwrap();
+    let value = json_config::value(&output, true).unwrap();
+    assert_eq!(value["mcp"]["servers"]["proofstorm"], entry);
+    assert!(value["mcp"].get("proofstorm").is_none());
+    assert_eq!(value["mcp"]["other"]["command"], json!(["other"]));
+    assert!(output.contains("// keep note"));
+    assert_eq!(merge(&output, &[entry.clone()]).unwrap(), output);
+    // Manual, changed or renamed 1.x entries are never moved.
+    for (text, owned) in [
+        (original.clone(), vec![]),
+        (original.clone(), vec![entry.clone()]),
+        (
+            original.replace("\"proofstorm\": {", "\"pst\": {"),
+            vec![v1],
+        ),
+    ] {
+        let error = format!("{:#}", merge(&text, &owned).unwrap_err());
+        assert!(error.contains("OpenCode 1.x"), "{error}");
+    }
+}
+
+#[test]
+fn removing_a_member_keeps_its_neighbours_comments_and_layout() {
+    let path = ["mcp"];
+    for (text, expected) in [
+        ("{\"mcp\":{\"proofstorm\":1}}", "{\"mcp\":{}}"),
+        (
+            "{\"mcp\":{\"a\":1,\"proofstorm\":2}}",
+            "{\"mcp\":{\"a\":1}}",
+        ),
+        (
+            "{\"mcp\":{\"proofstorm\":2, \"a\":1}}",
+            "{\"mcp\":{\"a\":1}}",
+        ),
+        (
+            "{\"mcp\":{\"a\":1,\"proofstorm\":2,}}",
+            "{\"mcp\":{\"a\":1,}}",
+        ),
+        ("{\"mcp\":{ // c\n\"proofstorm\":1}}", "{\"mcp\":{ // c\n}}"),
+        (
+            "{\n  \"mcp\": {\n    \"a\": 1, // keep a\n    \"proofstorm\": {\n      \"x\": [1]\n    }\n  }\n}\n",
+            "{\n  \"mcp\": {\n    \"a\": 1 // keep a\n  }\n}\n",
+        ),
+        (
+            "{\n  \"mcp\": {\n    \"proofstorm\": 2,\n    /* keep b */ \"b\": 1\n  }\n}\n",
+            "{\n  \"mcp\": {\n    /* keep b */ \"b\": 1\n  }\n}\n",
+        ),
+    ] {
+        assert_eq!(
+            json_config::remove(text, &path, "proofstorm", true).unwrap(),
+            expected
+        );
+    }
+    assert!(json_config::remove("{\"mcp\":{}}", &path, "proofstorm", true).is_err());
+    assert!(json_config::remove("{}", &path, "proofstorm", true).is_err());
 }

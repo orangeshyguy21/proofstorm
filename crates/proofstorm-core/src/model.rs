@@ -121,6 +121,11 @@ pub enum Capability {
     SnapshotCreate,
     #[serde(rename = "snapshot.restore")]
     SnapshotRestore,
+    // Cell policy opt-in for a mint whose management RPC may record payments
+    // that no payment backend confirmed. Never part of a default grant. A doc
+    // comment would turn the enum schema into a described oneOf in every tool.
+    #[serde(rename = "mint.quote_payment_override")]
+    MintQuotePaymentOverride,
 }
 
 #[derive(

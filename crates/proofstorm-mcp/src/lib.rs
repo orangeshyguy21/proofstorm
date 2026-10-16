@@ -1104,7 +1104,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "candidate_build",
-        description = "Build a durable candidate mint or wallet from a public GitHub PR, full commit SHA or release tag; then wait. Uses container toolchains and inherits an unverified baseline contract. One CDK mint build serves cdk, cdk-ldk and cdk-bdk. On success, copy a returned catalog_entries selector into a cell_plan component; catalog_entry is the requested preset"
+        description = "Build a durable candidate mint or wallet from a public GitHub PR, release tag or full commit SHA (a commit may be in a public fork: set source.repository); then wait. Uses container toolchains and inherits an unverified baseline contract. On success, copy a returned catalog_entries selector into a cell_plan component; catalog_entry is the requested preset"
     )]
     async fn proofstorm_candidate_build(
         &self,
@@ -1974,19 +1974,6 @@ fn topology_summary(cell: &CellSpec) -> TopologySummary {
         warnings.push(format!(
             "direct_mint_backend_peer: link(s) {} bypass the available forwarding node; routing-fee experiments need backend <-> router <-> backend with no direct backend peer",
             direct_backend_peers.iter().take(16).copied().collect::<Vec<_>>().join(",")
-        ));
-    }
-    let mint_count = components
-        .iter()
-        .filter(|component| component.kind == ComponentKind::Mint)
-        .count();
-    let wallet_count = components
-        .iter()
-        .filter(|component| component.kind == ComponentKind::Wallet)
-        .count();
-    if mint_count >= 2 && wallet_count < 2 {
-        warnings.push(format!(
-            "distinct_payment_wallets_required: {mint_count} mints but only {wallet_count} wallet component(s); bidirectional cross-mint payments require distinct payer and recipient wallet components"
         ));
     }
 
@@ -4004,27 +3991,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn topology_receipt_warns_when_cross_mint_work_has_only_one_wallet() {
-        let authored = serde_json::from_value::<CellSpec>(serde_json::json!({
-            "api_version": API_VERSION,
-            "name": "wallet-hazard",
-            "components": [
-                {"id":"mint-a","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
-                {"id":"mint-b","kind":"mint","implementation":"nutshell","version":"0.20.3","config_version":"nutshell-mint/0.20/v1","control":"target","config":{}},
-                {"id":"wallet","kind":"wallet","implementation":"nutshell-wallet","version":"0.20.3","config_version":"nutshell-wallet/0.20/v1","control":"cell","config":{}}
-            ],
-            "links": [],
-            "policy": {}
-        }))
-        .expect("typed cell");
-        let summary = topology_summary(&authored);
-        assert!(summary.warnings.iter().any(|warning| {
-            warning.starts_with("distinct_payment_wallets_required:")
-                && warning.contains("bidirectional cross-mint payments")
-        }));
-    }
-
     fn assert_optional_tracking(service: &ProofstormMcp) {
         assert!(
             service
@@ -4196,10 +4162,24 @@ mod tests {
             expected.len(),
             wire.len()
         );
+        // Name the heaviest tools so an overrun points at its cause.
+        let mut largest = service
+            .tool_router
+            .list_all()
+            .iter()
+            .map(|tool| {
+                (
+                    serde_json::to_vec(tool).unwrap().len(),
+                    tool.name.to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        largest.sort_unstable_by(|a, b| b.cmp(a));
         assert!(
             wire.len() <= 128 * 1024,
-            "discovery envelope exceeds 128 KiB: {}",
-            wire.len()
+            "discovery envelope exceeds 128 KiB: {} bytes; largest tools: {:?}",
+            wire.len(),
+            &largest[..5]
         );
         let offline = service
             .offline()

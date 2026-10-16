@@ -3603,7 +3603,12 @@ fn mint_common_config(component: &str, http_port: u16, config: &CdkMintConfig) -
         config.max_inputs, config.max_outputs
     )
     .expect("writing native configuration to a String cannot fail");
-    rendered.push_str("[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n");
+    write!(
+        &mut rendered,
+        "[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = {}\n\n",
+        config.allow_mint_quote_payment_override
+    )
+    .expect("writing native configuration to a String cannot fail");
     rendered
 }
 

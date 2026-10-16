@@ -3,6 +3,7 @@ use crate::{Error, query};
 use proofstorm_core::{CatalogEntry, CatalogResponse, ControlClass, digest_json};
 use proofstorm_view::{CatalogListRequest, CatalogPage};
 use serde_json::{Value, json};
+use std::borrow::Cow;
 
 /// Read only the catalog versions visible to this actor. This never contacts the runtime.
 pub fn read(
@@ -221,13 +222,14 @@ fn matches(entry: &CatalogEntry, query: &CatalogListRequest) -> bool {
         })
 }
 
-fn searchable(entry: &CatalogEntry) -> Vec<&str> {
+fn searchable(entry: &CatalogEntry) -> Vec<Cow<'_, str>> {
     let mut fields = vec![
         entry.id.as_str(),
         &entry.description,
         &entry.version,
         &entry.image,
     ];
+    let mut label = None;
     if let Some(source) = &entry.source {
         fields.extend([
             source.candidate_id.as_str(),
@@ -235,13 +237,14 @@ fn searchable(entry: &CatalogEntry) -> Vec<&str> {
             &source.repository,
             &source.commit_sha,
         ]);
-        if let Some(provenance) = &source.provenance {
-            fields.push(provenance.requested_source.label());
-        }
+        label = source
+            .provenance
+            .as_ref()
+            .map(|provenance| provenance.requested_source.label());
     } else if let Some(provenance) = &entry.build_provenance {
         fields.extend([provenance.repository.as_str(), &provenance.commit_sha]);
     }
-    fields
+    fields.into_iter().map(Cow::from).chain(label).collect()
 }
 
 #[must_use]

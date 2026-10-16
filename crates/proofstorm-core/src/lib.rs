@@ -49,7 +49,7 @@ pub use backend::{
 pub use candidate::{
     CANDIDATE_BUILD_API_VERSION, CandidateBuild, CandidateBuildPhase, CandidateDiagnostics,
     CandidateInput, CandidateLog, CandidateProvenance, CandidateSource, candidate_catalog_entry,
-    effective_catalog,
+    effective_catalog, is_github_repository,
 };
 pub use catalog::{
     AuthenticationMode, BuildProvenance, CDK_MINT_IMAGE, CatalogDependencySupport,

@@ -435,10 +435,13 @@ fn AgentLauncher() -> impl IntoView {
                             Some("claude" | "claude-code") => "Claude Code",
                             _ => "your agent",
                         };
-                        let message = if opened {
-                            format!("Opened in {agent}.")
-                        } else {
+                        let message = if !opened {
                             format!("Couldn’t open {agent}. Your Proofstorm setup is saved.")
+                        } else if value["harness"] == "opencode" {
+                            // OpenCode 2 desktop cannot be pointed at a folder from outside.
+                            format!("Opened OpenCode. Open this folder there: {}", value["project"].as_str().unwrap_or_default())
+                        } else {
+                            format!("Opened in {agent}.")
                         };
                         view!{
                             <p class=if opened {"gui-success"} else {"gui-error"}>{message}</p>

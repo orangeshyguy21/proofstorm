@@ -40,8 +40,7 @@ impl CandidateBuildProfile {
 #[must_use]
 pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildProfile> {
     let (repository, baseline, dockerfile) = match implementation {
-        "cdk" => ("cashubtc/cdk", "0.18.1", "Dockerfile.ldk-node"),
-        "cdk-cli-wallet" => ("cashubtc/cdk", "0.18.1", "Proofstorm.candidate.Dockerfile"),
+        "cdk" | "cdk-cli-wallet" => ("cashubtc/cdk", "0.18.1", "Proofstorm.candidate.Dockerfile"),
         "nutshell" | "nutshell-wallet" => ("cashubtc/nutshell", "0.21.0", "Dockerfile"),
         "cocod-wallet" => (
             "cashubtc/coco",
@@ -66,7 +65,7 @@ pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildPro
             (format!("cat > /workspace/{dockerfile} <<'PROOFSTORM_RECIPE_EOF'\n{recipe}\nPROOFSTORM_RECIPE_EOF\n"), vec!["Compiles the native wallet from the frozen source with its lockfile; checks command version and help. Build success does not establish runtime compatibility.".into()])
         }
         "nutshell" | "nutshell-wallet" => (format!("sed -i '/RUN poetry install --without dev --no-root/i RUN poetry remove breez-sdk-spark --lock && pip install --no-cache-dir breez-sdk-spark==0.17.0' /workspace/Dockerfile\ncat >> /workspace/Dockerfile <<'PROOFSTORM_MANAGEMENT_EOF'\n{}\nPROOFSTORM_MANAGEMENT_EOF\n", include_str!("candidate_profiles/nutshell-management-v1.Dockerfile")), vec!["Removes breez-sdk-spark from the Poetry lock and installs 0.17.0 separately for historical platform wheels. Installs source console commands and checks cashu/mint-cli help.".into()]),
-        _ => (format!("sh -s -- /workspace/{dockerfile} <<'PROOFSTORM_WORKSPACE_EOF'\n{}\nPROOFSTORM_WORKSPACE_EOF\ncat > /tmp/management-prefix <<'PROOFSTORM_MANAGEMENT_EOF'\n{}\nPROOFSTORM_MANAGEMENT_EOF\ncat /tmp/management-prefix /workspace/{dockerfile} > /tmp/management-dockerfile\ncat >> /tmp/management-dockerfile <<'PROOFSTORM_MANAGEMENT_EOF'\n{}\nPROOFSTORM_MANAGEMENT_EOF\nmv /tmp/management-dockerfile /workspace/{dockerfile}", include_str!("candidate_profiles/cdk-mint-workspace-v6.sh"), include_str!("candidate_profiles/cdk-management-v4.Dockerfile"), include_str!("candidate_profiles/cdk-mint-runtime-v7.Dockerfile")), vec!["Builds the CDK mint image using upstream Dockerfile.ldk-node with LDK and PostgreSQL enabled alongside the default backends. Cell links and configuration select linked and embedded backends; PostgreSQL servers stay separate. Uses the full frozen workspace, bindings and lockfiles; requires locked Cargo dependencies. Builds cdk-mint-cli before the daemon with two management-client Cargo jobs and one daemon Cargo job to bound memory, then adds wget and CA certificates required by readiness and Bitcoin dependency checks. Checks daemon, management client and wget commands before publishing.".into()]),
+        _ => (format!("cat > /workspace/{dockerfile} <<'PROOFSTORM_RECIPE_EOF'\n{}\nPROOFSTORM_RECIPE_EOF\n", include_str!("candidate_profiles/cdk-mint-v2.Dockerfile")), vec!["Builds cdk-mintd and cdk-mint-cli in one Cargo command from the frozen workspace and lockfiles, as static musl binaries with the workspace's release-static profile like CDK's release binaries (LTO off and 16 codegen units to fit the 4 GiB build limit), on the Alpine runtime of its published image. Enables LDK, PostgreSQL and Prometheus alongside the default backends; cell links and configuration select linked and embedded backends. Compiles with the Rust version pinned in CDK's rust-toolchain.toml, installed without its extra targets in Proofstorm's pinned Rust image instead of CDK's Nix toolchain, with two Cargo jobs within the 4 GiB build limit. Checks both commands and wget before publishing.".into()]),
     };
     // A cold ARM64 release build of the baseline CDK CLI exceeded the original
     // two-core, 30-minute budget. Keep that budget in saved v1 records; new Rust
@@ -95,7 +94,7 @@ pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildPro
             BTreeSet::new()
         },
         version: match implementation {
-            "cdk" => 9,
+            "cdk" => 11,
             "cdk-cli-wallet" => 3,
             "nutshell" | "nutshell-wallet" => 2,
             _ => 1,

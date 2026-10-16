@@ -24,13 +24,8 @@ pub(crate) fn capture(executable: &Path, args: &[&str]) -> Result<String> {
         .args(args)
         .stdin(Stdio::null())
         .stdout(output.try_clone()?)
-        // OpenCode's successful --help uses stderr (yargs). Inspect both streams
-        // for help only; do not turn ordinary launch diagnostics into output.
-        .stderr(if args.last() == Some(&"--help") {
-            Stdio::from(output.try_clone()?)
-        } else {
-            Stdio::null()
-        })
+        // Do not turn launch diagnostics into output.
+        .stderr(Stdio::null())
         .spawn()?;
     let start = Instant::now();
     loop {
@@ -218,7 +213,7 @@ pub fn detect_for(harness: super::Harness, project: &Path, cli: bool) -> Result<
     let help = capture(&executable, &["--help"])?;
     ensure!(
         match harness {
-            super::Harness::Opencode => help.contains("opencode [project]"),
+            super::Harness::Opencode => help.contains("[<directory>]"),
             super::Harness::Claude => help.contains("Claude Code") && help.contains("--mcp-config"),
             super::Harness::Codex => unreachable!(),
         },
@@ -237,18 +232,18 @@ pub fn detect_for(harness: super::Harness, project: &Path, cli: bool) -> Result<
 pub(super) fn supported_version(harness: super::Harness, version: &str) -> Result<()> {
     let version = version.trim();
     let valid = match harness {
-        super::Harness::Opencode => {
-            version.starts_with("1.")
+        super::Harness::Opencode => version.strip_prefix("opencode v").is_some_and(|version| {
+            version.starts_with("2.")
                 && version
                     .split('.')
                     .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
-        }
+        }),
         super::Harness::Claude => version.starts_with("2.") && version.ends_with(" (Claude Code)"),
         super::Harness::Codex => version.starts_with("codex-cli "),
     };
     ensure!(
         valid,
-        "unsupported {} version; this alpha supports OpenCode 1.x and Claude Code 2.x only",
+        "unsupported {} version; this alpha supports OpenCode 2.x and Claude Code 2.x only",
         harness.name()
     );
     Ok(())

@@ -2177,3 +2177,40 @@ fn cdk_postgres_auth_requires_a_separate_database_on_the_same_server() {
         && entry["value"]
             == "postgresql://proofstorm:$(CDK_MINTD_AUTH_POSTGRES_URL_PASSWORD)@database:5432/mint_authentication"));
 }
+
+#[test]
+fn cdk_quote_payment_override_renders_the_authored_policy_choice() {
+    let render = |enabled: bool| {
+        let (mut spec, _) = backend_cell("cdk");
+        let mint = spec
+            .components
+            .iter_mut()
+            .find(|component| component.id == "mint")
+            .unwrap();
+        mint.config
+            .insert("allow_mint_quote_payment_override".into(), json!(enabled));
+        if enabled {
+            spec.policy
+                .allow
+                .insert(Capability::MintQuotePaymentOverride);
+        }
+        let lock = resolve_lock(&spec, default_catalog()).unwrap();
+        let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+        let mint = plans
+            .iter()
+            .find(|plan| plan.component_id == "mint")
+            .unwrap();
+        let rendered = render_cdk_component(mint).unwrap();
+        rendered.config_maps[0].data.as_ref().unwrap()["config.toml"].clone()
+    };
+    let disabled = render(false);
+    let enabled = render(true);
+    assert!(disabled.contains("allow_mint_quote_payment_override = false\n"));
+    assert!(enabled.contains("allow_mint_quote_payment_override = true\n"));
+    // A changed document changes the digest the initializer applies on rollout.
+    assert_ne!(disabled, enabled);
+    assert_eq!(
+        disabled.replace("allow_mint_quote_payment_override = false", ""),
+        enabled.replace("allow_mint_quote_payment_override = true", "")
+    );
+}

@@ -1,63 +1,5 @@
 {
   "$defs": {
-    "Capability": {
-      "enum": [
-        "catalog.read",
-        "candidate.build",
-        "candidate.read",
-        "candidate.cancel",
-        "cell.read",
-        "cell.create",
-        "cell.edit",
-        "cell.clone",
-        "cell.validate",
-        "cell.publish",
-        "cell.materialize",
-        "cell.status",
-        "cell.close",
-        "cell.connect",
-        "experiment.create",
-        "experiment.read",
-        "experiment.close",
-        "cell.operate",
-        "action.cancel",
-        "topology.inspect",
-        "topology.mutate",
-        "node.add",
-        "node.remove",
-        "node.control",
-        "component.control",
-        "peer.connect",
-        "peer.disconnect",
-        "wallet.create",
-        "wallet.control",
-        "wallet.fund",
-        "channel.open",
-        "channel.close",
-        "channel.force_close",
-        "channel.rebalance",
-        "chain.mine",
-        "chain.fee",
-        "chain.reorg",
-        "network.delay",
-        "network.drop",
-        "network.partition",
-        "network.heal",
-        "component.logs",
-        "component.exec_live",
-        "component.forensics",
-        "authentication.test",
-        "traffic.capture",
-        "oracle.list",
-        "oracle.run",
-        "artifact.read",
-        "policy.read",
-        "policy.edit",
-        "snapshot.create",
-        "snapshot.restore"
-      ],
-      "type": "string"
-    },
     "OperationArtifact": {
       "additionalProperties": false,
       "properties": {
@@ -151,7 +93,8 @@
       ]
     },
     "capability": {
-      "$ref": "#/$defs/Capability"
+      "description": "Permission that authorized the operation, e.g. `component.logs`.",
+      "type": "string"
     },
     "completed_at_unix": {
       "format": "int64",

@@ -608,6 +608,7 @@ mod tests {
             .find(|entry| entry.component_id == "mint")
             .expect("baseline mint lock");
         let cases = BTreeMap::from([
+            ("allow_mint_quote_payment_override", serde_json::json!(true)),
             (
                 "contact_email",
                 serde_json::json!("operator@example.invalid"),
@@ -648,6 +649,12 @@ mod tests {
         for (field, value) in cases {
             let mut configured = cell.clone();
             configured.components[0].config.insert(field.into(), value);
+            if field == "allow_mint_quote_payment_override" {
+                configured
+                    .policy
+                    .allow
+                    .insert(crate::Capability::MintQuotePaymentOverride);
+            }
             let lock = resolve_lock(&configured, catalog)
                 .unwrap_or_else(|error| panic!("field {field:?} must publish: {error}"));
             let mint = lock

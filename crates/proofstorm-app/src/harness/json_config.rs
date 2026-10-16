@@ -168,18 +168,39 @@ pub(super) fn value(text: &str, comments: bool) -> Result<Value> {
     Ok(parse(text, comments)?.value)
 }
 
+/// The MCP servers object at `path`, or null when it is absent.
+pub(super) fn servers<'v>(value: &'v Value, path: &[&str]) -> &'v Value {
+    path.iter().fold(value, |value, key| &value[*key])
+}
+
+/// Follow `path` as far as it exists; every existing level must be an object.
+fn descend<'n>(root: &'n Node, path: &[&str]) -> Result<(&'n Node, usize)> {
+    let mut node = root;
+    for (depth, key) in path.iter().enumerate() {
+        let Some(child) = node.members.get(*key) else {
+            return Ok((node, depth));
+        };
+        ensure!(child.value.is_object(), "MCP servers must be a JSON object");
+        node = child;
+    }
+    Ok((node, path.len()))
+}
+
+fn existing<'n>(root: &'n Node, path: &[&str]) -> Result<&'n Node> {
+    let (servers, depth) = descend(root, path)?;
+    ensure!(depth == path.len(), "missing MCP object");
+    Ok(servers)
+}
+
 pub(super) fn rename(
     text: &str,
-    key: &str,
+    path: &[&str],
     from: &str,
     to: &str,
     comments: bool,
 ) -> Result<String> {
     let root = parse(text, comments)?;
-    let servers = root
-        .members
-        .get(key)
-        .ok_or_else(|| anyhow::anyhow!("missing MCP object"))?;
+    let servers = existing(&root, path)?;
     ensure!(
         !servers.members.contains_key(to),
         "target MCP name already exists"
@@ -195,6 +216,72 @@ pub(super) fn rename(
         serde_json::to_string(to)?,
         &text[span.end..]
     ))
+}
+
+/// Delete one member and the comma that separated it. Other bytes, including
+/// comments, stay; the result must equal the original minus that member.
+pub(super) fn remove(text: &str, path: &[&str], name: &str, comments: bool) -> Result<String> {
+    let root = parse(text, comments)?;
+    let object = existing(&root, path)?;
+    let member = object
+        .members
+        .get(name)
+        .ok_or_else(|| anyhow::anyhow!("missing MCP key"))?;
+    let key = member
+        .key_span
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("missing MCP key"))?;
+    let bytes = text.as_bytes();
+    let comma_after = |pos| -> Result<Option<usize>> {
+        let mut parser = Parser {
+            text,
+            pos,
+            comments,
+        };
+        parser.skip()?;
+        Ok((bytes.get(parser.pos) == Some(&b',')).then_some(parser.pos))
+    };
+    // Members are stored by name, so neighbours are found by position.
+    let mut previous_comma = None;
+    let mut end = member.span.end;
+    if let Some(comma) = comma_after(end)? {
+        end = comma + 1;
+    } else if let Some(previous) = object
+        .members
+        .values()
+        .map(|node| node.span.end)
+        .filter(|&end| end < key.start)
+        .max()
+    {
+        previous_comma =
+            Some(comma_after(previous)?.ok_or_else(|| anyhow::anyhow!("expected JSON comma"))?);
+    }
+    // Drop the member's own line when nothing else shares it.
+    let mut start = key.start;
+    while start > 0 && matches!(bytes[start - 1], b' ' | b'\t') {
+        start -= 1;
+    }
+    while matches!(bytes.get(end), Some(b' ' | b'\t')) {
+        end += 1;
+    }
+    if bytes.get(end) == Some(&b'\n') && (start == 0 || bytes[start - 1] == b'\n') {
+        end += 1;
+    }
+    let mut output = text.to_owned();
+    output.replace_range(start..end, "");
+    if let Some(comma) = previous_comma {
+        output.remove(comma);
+    }
+    let mut expected = parse(text, comments)?.value;
+    path.iter()
+        .try_fold(&mut expected, |value, key| value.get_mut(*key))
+        .and_then(Value::as_object_mut)
+        .and_then(|servers| servers.remove(name));
+    ensure!(
+        value(&output, comments)? == expected,
+        "removing the MCP entry did not round-trip"
+    );
+    Ok(output)
 }
 
 fn insert(text: &str, object: &Node, key: &str, value: &Value) -> Result<String> {
@@ -232,25 +319,22 @@ pub(super) fn is_proofstorm(name: &str, value: &Value) -> bool {
 
 pub(super) fn merge(
     text: Option<&str>,
-    key: &str,
+    path: &[&str],
     entry: &Value,
     owned: &[Value],
     comments: bool,
 ) -> Result<String> {
     let text = text.unwrap_or("{\n}\n");
     let root = parse(text, comments)?;
-    let output = if let Some(servers) = root.members.get(key) {
-        ensure!(
-            servers.value.is_object(),
-            "MCP servers must be a JSON object"
-        );
-        for (name, node) in &servers.members {
+    let (object, depth) = descend(&root, path)?;
+    let output = if depth == path.len() {
+        for (name, node) in &object.members {
             ensure!(
                 name == "proofstorm" || !is_proofstorm(name, &node.value),
                 "another project MCP entry already starts Proofstorm; resolve it explicitly"
             );
         }
-        if let Some(existing) = servers.members.get("proofstorm") {
+        if let Some(existing) = object.members.get("proofstorm") {
             ensure!(
                 owned.contains(&existing.value),
                 "the project Proofstorm entry is manual or was changed; refusing to overwrite it"
@@ -265,18 +349,18 @@ pub(super) fn merge(
                 &text[existing.span.end..]
             )
         } else {
-            insert(text, servers, "proofstorm", entry)?
+            insert(text, object, "proofstorm", entry)?
         }
     } else {
-        insert(
-            text,
-            &root,
-            key,
-            &Value::Object(Map::from_iter([("proofstorm".into(), entry.clone())])),
-        )?
+        // Create the missing levels, e.g. `servers` inside an existing `mcp`.
+        let missing = path[depth + 1..].iter().rev().fold(
+            Value::Object(Map::from_iter([("proofstorm".into(), entry.clone())])),
+            |inner, key| Value::Object(Map::from_iter([((*key).into(), inner)])),
+        );
+        insert(text, object, path[depth], &missing)?
     };
     ensure!(
-        value(&output, comments)?[key]["proofstorm"] == *entry,
+        servers(&value(&output, comments)?, path)["proofstorm"] == *entry,
         "generated configuration did not round-trip"
     );
     Ok(output)

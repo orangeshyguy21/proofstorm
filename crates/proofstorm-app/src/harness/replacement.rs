@@ -44,7 +44,7 @@ pub(super) fn merge(
     } else {
         json_config::value(text, harness == Harness::Opencode)?
     };
-    let servers = data[agents::key(harness)].as_object();
+    let servers = json_config::servers(&data, agents::key(harness)).as_object();
     let conflicts = servers
         .into_iter()
         .flat_map(|s| s.iter())
