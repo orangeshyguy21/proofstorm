@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:1575027ff709e31d017b1627549a91eb308271a0628cbdad754b5c20b1c0e85f",
+  "catalog_digest": "sha256:ba4c5fd9412ecd200b3f308b2c02273aba72304267a7b5c30fd40bd02786e844",
   "entries": [
     {
       "implementation": "bark-server",
