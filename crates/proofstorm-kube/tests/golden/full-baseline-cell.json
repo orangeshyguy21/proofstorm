@@ -3810,8 +3810,6 @@
       },
       "spec": {
         "hard": {
-          "limits.cpu": "8",
-          "limits.memory": "8Gi",
           "persistentvolumeclaims": "12",
           "pods": "40",
           "requests.cpu": "2",

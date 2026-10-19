@@ -90,6 +90,8 @@ pub fn render_security_spine(instance_key: &str) -> RenderedSecuritySpine {
 
 /// Grow the namespace allowance with the cell instead of silently stopping at twelve volumes.
 /// This is a namespace ceiling, not a claim that the cluster can schedule the demand.
+/// It bounds reservations (requests), pods and volumes only: each container's own limit
+/// caps its usage, and a sum of idle limits would refuse cells the plan accepted.
 #[must_use]
 pub fn render_cell_security_spine(
     instance_key: &str,
@@ -105,8 +107,6 @@ pub fn render_cell_security_spine(
         for (name, amount, suffix) in [
             ("requests.cpu", 2, ""),
             ("requests.memory", 4, "Gi"),
-            ("limits.cpu", 8, ""),
-            ("limits.memory", 8, "Gi"),
             ("pods", 40, ""),
             ("persistentvolumeclaims", 12, ""),
         ] {
@@ -156,8 +156,6 @@ fn instance_quota(metadata: ObjectMeta) -> ResourceQuota {
             hard: Some(BTreeMap::from([
                 ("requests.cpu".to_owned(), Quantity("2".to_owned())),
                 ("requests.memory".to_owned(), Quantity("4Gi".to_owned())),
-                ("limits.cpu".to_owned(), Quantity("8".to_owned())),
-                ("limits.memory".to_owned(), Quantity("8Gi".to_owned())),
                 ("pods".to_owned(), Quantity("40".to_owned())),
                 (
                     "persistentvolumeclaims".to_owned(),
@@ -217,5 +215,19 @@ mod tests {
         );
         assert_eq!(spec.ingress, Some(vec![]));
         assert_eq!(spec.egress, Some(vec![]));
+    }
+
+    #[test]
+    fn cell_quota_bounds_reservations_not_container_limits() {
+        let rendered = render_cell_security_spine("01abcxyz7890", 9, 0);
+        let hard = rendered
+            .quota
+            .spec
+            .expect("quota spec")
+            .hard
+            .expect("hard quota");
+        assert!(!hard.contains_key("limits.cpu"));
+        assert!(!hard.contains_key("limits.memory"));
+        assert_eq!(hard.get("requests.cpu"), Some(&Quantity("4".to_owned())));
     }
 }
