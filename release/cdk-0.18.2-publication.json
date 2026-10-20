@@ -1,0 +1,62 @@
+{
+  "format_version": 1,
+  "date": "2026-10-19",
+  "versions": {
+    "cdk": "0.18.2"
+  },
+  "source": {
+    "repository": "https://github.com/cashubtc/cdk",
+    "tag": "v0.18.2",
+    "commit_sha": "9f6d3a3734d7223d10b5553e3591d3f9d5c6c904"
+  },
+  "build_note": "Built from main plus this change's 0.18.2 recipes (recipe digests are in the provenance records); arm64 natively, amd64 under emulation on an arm64 host. Native AMD64 behavior is qualified by CI, not by this build.",
+  "images": [
+    {
+      "repository": "cdk-cli-wallet",
+      "platform": "linux/arm64",
+      "recipe": "docker/wallet/Dockerfile.cdk-0.18.2",
+      "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-cli-wallet@sha256:3d5c3052a16501aef67850491330156f48069350fac905ec247773404bfb166c",
+      "probe": "cdk-cli 0.18.2",
+      "publication": "verified",
+      "anonymous_verified": true
+    },
+    {
+      "repository": "cdk-cli-wallet",
+      "platform": "linux/amd64",
+      "recipe": "docker/wallet/Dockerfile.cdk-0.18.2",
+      "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-cli-wallet@sha256:a48b427d28f1291a88e280bc35ca1f45c1ad133f2afe713eff208ecc1ac56242",
+      "probe": "cdk-cli 0.18.2",
+      "publication": "verified",
+      "anonymous_verified": true
+    },
+    {
+      "repository": "cdk-mint",
+      "platform": "linux/arm64",
+      "recipe": "docker/mint/Dockerfile.cdk-0.18.2",
+      "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-mint@sha256:391467266aa1fc52e15a4812195f90456792ab431d3d7daf4520e0304d5db484",
+      "probe": "cdk-mint-rpc 0.18.2\ncdk-mintd 0.18.2",
+      "publication": "verified"
+    },
+    {
+      "repository": "cdk-mint",
+      "platform": "linux/amd64",
+      "recipe": "docker/mint/Dockerfile.cdk-0.18.2",
+      "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-mint@sha256:ba32d8254d41a69e916279ff43d30a2eb5540198f0cee24d6c822296ef591fa2",
+      "probe": "cdk-mint-rpc 0.18.2\ncdk-mintd 0.18.2",
+      "publication": "verified"
+    }
+  ],
+  "mint_index": {
+    "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
+    "media_type": "application/vnd.docker.distribution.manifest.list.v2+json",
+    "manifests": {
+      "linux/arm64": "sha256:391467266aa1fc52e15a4812195f90456792ab431d3d7daf4520e0304d5db484",
+      "linux/amd64": "sha256:ba32d8254d41a69e916279ff43d30a2eb5540198f0cee24d6c822296ef591fa2"
+    },
+    "anonymous_verified": {
+      "linux/arm64": true,
+      "linux/amd64": true
+    }
+  },
+  "release_ready": false
+}

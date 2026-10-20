@@ -2217,8 +2217,8 @@ fn validate_candidate_build(
             "candidate builds must derive from a built-in release".into(),
         ));
     }
-    if let Some(provenance) = &candidate.provenance {
-        if provenance.validate().is_err()
+    if let Some(provenance) = &candidate.provenance
+        && (provenance.validate().is_err()
             || provenance.baseline_digest != proofstorm_core::digest_json(base)
             || !provenance.profile.platforms.contains(&provenance.platform)
             || candidate.build_features != provenance.profile.features
@@ -2226,12 +2226,11 @@ fn validate_candidate_build(
                 .requested_source
                 .normalized(&provenance.profile.repository)
                 .as_ref()
-                != Ok(&provenance.requested_source)
-        {
-            return Err(StoreError::Validation(
-                "candidate provenance is inconsistent or unsupported".into(),
-            ));
-        }
+                != Ok(&provenance.requested_source))
+    {
+        return Err(StoreError::Validation(
+            "candidate provenance is inconsistent or unsupported".into(),
+        ));
     }
     Ok(())
 }

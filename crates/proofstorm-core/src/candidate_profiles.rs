@@ -40,7 +40,11 @@ impl CandidateBuildProfile {
 #[must_use]
 pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildProfile> {
     let (repository, baseline, dockerfile) = match implementation {
-        "cdk" | "cdk-cli-wallet" => ("cashubtc/cdk", "0.18.1", "Proofstorm.candidate.Dockerfile"),
+        "cdk" | "cdk-cli-wallet" => (
+            "cashubtc/cdk",
+            crate::CDK_VERSION,
+            "Proofstorm.candidate.Dockerfile",
+        ),
         "nutshell" | "nutshell-wallet" => ("cashubtc/nutshell", "0.21.0", "Dockerfile"),
         "cocod-wallet" => (
             "cashubtc/coco",

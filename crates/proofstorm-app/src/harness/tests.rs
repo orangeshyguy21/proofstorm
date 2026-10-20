@@ -197,7 +197,7 @@ fn jsonc_preserves_comments_order_other_servers_and_idempotency() {
     }
     assert_eq!(
         out,
-        json_config::merge(Some(&out), key, &entry, &[entry.clone()], true).unwrap()
+        json_config::merge(Some(&out), key, &entry, std::slice::from_ref(&entry), true).unwrap()
     );
     let mut upgraded = entry.clone();
     upgraded["timeout"]["execution"] = json!(90000);
@@ -236,14 +236,21 @@ fn json_edits_reject_ambiguous_manual_modified_and_duplicate_entries() {
             Some(&out.replace("stdio", "http")),
             &["mcpServers"],
             &entry,
-            &[entry.clone()],
+            std::slice::from_ref(&entry),
             false
         )
         .is_err()
     );
     assert_eq!(
         out,
-        json_config::merge(Some(&out), &["mcpServers"], &entry, &[entry.clone()], false).unwrap()
+        json_config::merge(
+            Some(&out),
+            &["mcpServers"],
+            &entry,
+            std::slice::from_ref(&entry),
+            false
+        )
+        .unwrap()
     );
 }
 
@@ -617,13 +624,16 @@ fn owned_opencode_v1_entry_moves_to_v2_servers_and_manual_ones_stay() {
     let merge = |text: &str, owned: &[Value]| {
         replacement::merge(Harness::Opencode, path, Some(text), &entry, owned, None)
     };
-    let output = merge(&original, &[v1.clone()]).unwrap();
+    let output = merge(&original, std::slice::from_ref(&v1)).unwrap();
     let value = json_config::value(&output, true).unwrap();
     assert_eq!(value["mcp"]["servers"]["proofstorm"], entry);
     assert!(value["mcp"].get("proofstorm").is_none());
     assert_eq!(value["mcp"]["other"]["command"], json!(["other"]));
     assert!(output.contains("// keep note"));
-    assert_eq!(merge(&output, &[entry.clone()]).unwrap(), output);
+    assert_eq!(
+        merge(&output, std::slice::from_ref(&entry)).unwrap(),
+        output
+    );
     // Manual, changed or renamed 1.x entries are never moved.
     for (text, owned) in [
         (original.clone(), vec![]),

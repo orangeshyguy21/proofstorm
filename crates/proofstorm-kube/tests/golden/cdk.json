@@ -129,7 +129,7 @@
         "CDK_MINTD_WORK_DIR": "/app/data",
         "HOME": "/app/data"
       },
-      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
       "mounts": [
         {
           "mount_path": "/config",
@@ -171,7 +171,7 @@
           "rest": 8080,
           "rpc": 10009
         },
-        "version": "0.21.3-beta"
+        "version": "0.21.4-beta"
       }
     },
     "operation_admission": [
@@ -239,7 +239,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:ae2025b3dad11f6dba2bd62dc0f340664e721835f1a6eb4f21e282b1132c4448",
+    "rollout_digest": "sha256:e30daa710ce56f8333382fd800437871ead4189b5682476ddf8a938c907fb0c4",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -252,7 +252,7 @@
       "ports": {
         "http": 3338
       },
-      "version": "0.18.1"
+      "version": "0.18.2"
     },
     "workload": {
       "desired_replicas": 1,
@@ -315,7 +315,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:ae2025b3dad11f6dba2bd62dc0f340664e721835f1a6eb4f21e282b1132c4448"
+                "proofstorm.dev/rollout-digest": "sha256:e30daa710ce56f8333382fd800437871ead4189b5682476ddf8a938c907fb0c4"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -355,7 +355,7 @@
                       "value": "sqlite"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -456,7 +456,7 @@
                       "value": "sqlite"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "initialize-config",
                   "securityContext": {

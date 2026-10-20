@@ -1,5 +1,10 @@
-// Shared 0.18.1 daemon with LDK, BDK and PostgreSQL support.
-pub const CDK_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df";
+// Current releases; acceptance gates and candidate baselines read these too.
+pub const CDK_VERSION: &str = "0.18.2";
+pub const LND_VERSION: &str = "0.21.4-beta";
+pub const CLN_VERSION: &str = "26.06.9";
+
+// Shared CDK daemon with LDK, BDK and PostgreSQL support.
+pub const CDK_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10";
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -392,6 +397,10 @@ pub fn distributed_catalog_for_platform(platform: CatalogPlatform) -> CatalogRes
     catalog_for_platform(platform)
 }
 
+// Mint backend support names only qualified releases.
+const LND_VERSIONS: &[&str] = &["0.20.5-beta", LND_VERSION];
+const CLN_VERSIONS: &[&str] = &[CLN_VERSION];
+
 #[allow(
     clippy::too_many_lines,
     reason = "the default catalog deliberately declares every support-contract field inline"
@@ -427,103 +436,60 @@ fn build_catalog(amd64: bool) -> CatalogResponse {
             ),
             vec![ControlClass::Cell, ControlClass::Workspace],
         ),
-        catalog_entry_with_lifecycle(
+        lightning_entry(
             amd64,
-            "lnd",
             backends,
-            ComponentKind::Lightning,
-            "LND regtest Lightning node",
             adapter_version,
-            "0.20.4-beta",
-            ReleaseChannel::Prerelease,
+            "lnd",
+            "0.20.5-beta",
             SupportLifecycle::Supported,
-            "docker.io/lightninglabs/lnd@sha256:4d6e02cb80ea48db2ef011823bcb2087d4379b70e2797fc7f6e857b32d5d7a09",
-            BTreeSet::from([
-                CatalogFeature::NativeCli,
-                CatalogFeature::Regtest,
-                CatalogFeature::PersistentState,
-                CatalogFeature::Bolt11,
-            ]),
-            vec![dependency(
-                LinkKind::ChainBackend,
-                "bitcoin-core",
-                &["31.1"],
-            )],
-            support_matrix(
-                &[StorageBackend::PersistentVolume],
-                &[PaymentMethod::Bolt11],
-                &[],
-                &["sat"],
-                &[],
-                &[],
-                vec![],
-            ),
-            vec![ControlClass::Cell, ControlClass::Workspace],
+            "docker.io/lightninglabs/lnd@sha256:2108a19d7569489a734f6b0862ddd1c07b1701fb2d65d554ec463706eeb68a98",
         ),
-        catalog_entry_with_lifecycle(
+        lightning_entry(
             amd64,
+            backends,
+            adapter_version,
             "lnd",
-            backends,
-            ComponentKind::Lightning,
-            "LND regtest Lightning node",
-            adapter_version,
-            "0.21.3-beta",
-            ReleaseChannel::Prerelease,
+            LND_VERSION,
             SupportLifecycle::Preferred,
-            "docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
-            BTreeSet::from([
-                CatalogFeature::NativeCli,
-                CatalogFeature::Regtest,
-                CatalogFeature::PersistentState,
-                CatalogFeature::Bolt11,
-            ]),
-            vec![dependency(
-                LinkKind::ChainBackend,
-                "bitcoin-core",
-                &["31.1"],
-            )],
-            support_matrix(
-                &[StorageBackend::PersistentVolume],
-                &[PaymentMethod::Bolt11],
-                &[],
-                &["sat"],
-                &[],
-                &[],
-                vec![],
-            ),
-            vec![ControlClass::Cell, ControlClass::Workspace],
+            "docker.io/lightninglabs/lnd@sha256:04d06edcc0f6e99a5e797ea34959f330add222226f840cd86afbc31f8f29627d",
         ),
-        catalog_entry(
+        lightning_entry(
             amd64,
-            "cln",
             backends,
-            ComponentKind::Lightning,
-            "Core Lightning regtest node",
             adapter_version,
+            "cln",
+            CLN_VERSION,
+            SupportLifecycle::Preferred,
+            "docker.io/elementsproject/lightningd@sha256:de74289ddcccb68cd60543b08b2b8594002d819125d200492e17a95166d56577",
+        ),
+        // Superseded patches stay resolvable for existing cell locks; new cells are refused them.
+        lightning_entry(
+            amd64,
+            backends,
+            adapter_version,
+            "lnd",
+            "0.20.4-beta",
+            SupportLifecycle::Deprecated,
+            "docker.io/lightninglabs/lnd@sha256:4d6e02cb80ea48db2ef011823bcb2087d4379b70e2797fc7f6e857b32d5d7a09",
+        ),
+        lightning_entry(
+            amd64,
+            backends,
+            adapter_version,
+            "lnd",
+            "0.21.3-beta",
+            SupportLifecycle::Deprecated,
+            "docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
+        ),
+        lightning_entry(
+            amd64,
+            backends,
+            adapter_version,
+            "cln",
             "26.06.7",
-            ReleaseChannel::Stable,
+            SupportLifecycle::Deprecated,
             "docker.io/elementsproject/lightningd@sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4",
-            BTreeSet::from([
-                CatalogFeature::NativeCli,
-                CatalogFeature::Regtest,
-                CatalogFeature::PersistentState,
-                CatalogFeature::Bolt11,
-            ]),
-            vec![dependency(
-                LinkKind::ChainBackend,
-                "bitcoin-core",
-                &["31.1"],
-            )],
-            support_matrix(
-                &[StorageBackend::PersistentVolume],
-                &[PaymentMethod::Bolt11],
-                &[],
-                &["sat"],
-                &[],
-                &[],
-                vec![],
-            ),
-            vec![ControlClass::Cell, ControlClass::Workspace],
         ),
         catalog_entry(
             amd64,
@@ -532,7 +498,7 @@ fn build_catalog(amd64: bool) -> CatalogResponse {
             ComponentKind::Mint,
             "CDK Cashu mint: linked LND/CLN or embedded LDK Node Lightning, optional embedded BDK on-chain, optional NUT-21/22 auth",
             adapter_version,
-            "0.18.1",
+            CDK_VERSION,
             ReleaseChannel::Stable,
             CDK_MINT_IMAGE,
             BTreeSet::from([
@@ -548,12 +514,8 @@ fn build_catalog(amd64: bool) -> CatalogResponse {
                 CatalogFeature::BlindAuth,
             ]),
             vec![
-                dependency(
-                    LinkKind::PaymentBackend,
-                    "lnd",
-                    &["0.20.4-beta", "0.21.3-beta"],
-                ),
-                dependency(LinkKind::PaymentBackend, "cln", &["26.06.7"]),
+                dependency(LinkKind::PaymentBackend, "lnd", LND_VERSIONS),
+                dependency(LinkKind::PaymentBackend, "cln", CLN_VERSIONS),
                 dependency(LinkKind::ChainBackend, "bitcoin-core", &["31.1"]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
                 dependency(LinkKind::AuthenticationBackend, "keycloak", &["25.0.6"]),
@@ -569,13 +531,8 @@ fn build_catalog(amd64: bool) -> CatalogResponse {
                     &["bdk", "cln", "ldk-node", "lnd"],
                     &["sat"],
                     &[
-                        payment_binding(
-                            PaymentMethod::Bolt11,
-                            "sat",
-                            "lnd",
-                            &["0.20.4-beta", "0.21.3-beta"],
-                        ),
-                        payment_binding(PaymentMethod::Bolt11, "sat", "cln", &["26.06.7"]),
+                        payment_binding(PaymentMethod::Bolt11, "sat", "lnd", LND_VERSIONS),
+                        payment_binding(PaymentMethod::Bolt11, "sat", "cln", CLN_VERSIONS),
                     ],
                     &[
                         AuthenticationMode::Unauthenticated,
@@ -612,14 +569,10 @@ fn build_catalog(amd64: bool) -> CatalogResponse {
                 CatalogFeature::RedisCache,
             ]),
             vec![
-                dependency(
-                    LinkKind::PaymentBackend,
-                    "lnd",
-                    &["0.20.4-beta", "0.21.3-beta"],
-                ),
-                dependency(LinkKind::PaymentBackend, "cln", &["26.06.7"]),
+                dependency(LinkKind::PaymentBackend, "lnd", LND_VERSIONS),
+                dependency(LinkKind::PaymentBackend, "cln", CLN_VERSIONS),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
-                dependency(LinkKind::DatabaseBackend, "redis", &["8.10.1"]),
+                dependency(LinkKind::DatabaseBackend, "redis", &["8.10.2"]),
             ],
             support_matrix(
                 &[StorageBackend::Sqlite, StorageBackend::Postgres],
@@ -627,13 +580,8 @@ fn build_catalog(amd64: bool) -> CatalogResponse {
                 &["cln", "lnd"],
                 &["sat"],
                 &[
-                    payment_binding(PaymentMethod::Bolt11, "sat", "cln", &["26.06.7"]),
-                    payment_binding(
-                        PaymentMethod::Bolt11,
-                        "sat",
-                        "lnd",
-                        &["0.20.4-beta", "0.21.3-beta"],
-                    ),
+                    payment_binding(PaymentMethod::Bolt11, "sat", "cln", CLN_VERSIONS),
+                    payment_binding(PaymentMethod::Bolt11, "sat", "lnd", LND_VERSIONS),
                 ],
                 // The retained 0.20.3 release lacks working auth issuance.
                 // Auth is enabled only on the promoted, qualified 0.21 release.
@@ -661,28 +609,22 @@ fn build_catalog(amd64: bool) -> CatalogResponse {
             support_matrix(&[], &[], &[], &[], &[], &[], vec![]),
             vec![ControlClass::Cell],
         ),
-        catalog_entry(
+        redis_entry(
             amd64,
-            "redis",
             backends,
-            ComponentKind::Database,
-            "Redis cache service",
+            adapter_version,
+            "8.10.2",
+            SupportLifecycle::Preferred,
+            "docker.io/library/redis@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6",
+        ),
+        // Superseded patch stays resolvable for existing cell locks; new cells are refused it.
+        redis_entry(
+            amd64,
+            backends,
             adapter_version,
             "8.10.1",
-            ReleaseChannel::Stable,
+            SupportLifecycle::Deprecated,
             "docker.io/library/redis@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576",
-            BTreeSet::from([CatalogFeature::NativeCli, CatalogFeature::RedisCache]),
-            vec![],
-            support_matrix(
-                &[StorageBackend::Ephemeral],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                vec![],
-            ),
-            vec![ControlClass::Cell],
         ),
         catalog_entry(
             amd64,
@@ -774,7 +716,7 @@ fn build_catalog(amd64: bool) -> CatalogResponse {
         }
         let encoded = match entry.id.as_str() {
             "bitcoin-core" => include_str!("../../../docker/bitcoin/bitcoin-31.1-provenance.json"),
-            "cdk" => include_str!("../../../docker/mint/cdk-0.18.1-provenance.json"),
+            "cdk" => include_str!("../../../docker/mint/cdk-0.18.2-provenance.json"),
             _ => continue,
         };
         let provenance: BuildProvenance =
@@ -789,29 +731,56 @@ fn build_catalog(amd64: bool) -> CatalogResponse {
 }
 
 /// Keep the previous exact entries available for saved locks while new cells
-/// select the current patch and the newest Nutshell release family.
+/// select the current patch and the newest Nutshell release family. Steps run in
+/// order, so one implementation can advance through several patches.
 fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
+    let (cdk_0181, cdk_0181_provenance) = crate::wallet_builds::cdk_0181(amd64);
+    let (cdk_0182, cdk_0182_provenance) = crate::wallet_builds::cdk_0182(amd64);
+    let nutshell = crate::wallet_builds::nutshell_021(amd64);
+    let nutshell_provenance = include_str!("../../../docker/mint/nutshell-0.21.0-provenance.json");
+    // (implementation, new version, image, provenance, lifecycle of the replaced entry)
+    let steps = [
+        (
+            "cdk-cli-wallet",
+            "0.18.1",
+            cdk_0181,
+            cdk_0181_provenance,
+            SupportLifecycle::Deprecated,
+        ),
+        (
+            "cdk-cli-wallet",
+            CDK_VERSION,
+            cdk_0182,
+            cdk_0182_provenance,
+            SupportLifecycle::Deprecated,
+        ),
+        (
+            "nutshell",
+            "0.21.0",
+            nutshell,
+            nutshell_provenance,
+            SupportLifecycle::Supported,
+        ),
+        (
+            "nutshell-wallet",
+            "0.21.0",
+            nutshell,
+            nutshell_provenance,
+            SupportLifecycle::Supported,
+        ),
+    ];
     let mut previous = Vec::new();
-    for entry in entries.iter_mut() {
-        let (version, image, encoded, lifecycle) = match entry.id.as_str() {
-            "cdk-cli-wallet" => {
-                let (image, provenance) = crate::wallet_builds::cdk_0181(amd64);
-                ("0.18.1", image, provenance, SupportLifecycle::Deprecated)
-            }
-            "nutshell" | "nutshell-wallet" => (
-                "0.21.0",
-                crate::wallet_builds::nutshell_021(amd64),
-                include_str!("../../../docker/mint/nutshell-0.21.0-provenance.json"),
-                SupportLifecycle::Supported,
-            ),
-            _ => continue,
-        };
+    for (id, version, image, encoded, replaced_lifecycle) in steps {
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.id == id)
+            .expect("promoted implementation has a base entry");
         let mut old = entry.clone();
-        old.support_lifecycle = lifecycle;
-        previous.push(old);
+        old.support_lifecycle = replaced_lifecycle;
         entry.version = version.into();
-        entry.description = entry.description.replace("0.18.0", version);
+        entry.description = entry.description.replace(&old.version, version);
         entry.image = image.into();
+        previous.push(old);
         if entry.id == "nutshell" {
             entry.protocol_action_adapter_version = Some("nutshell-mint/0.21/v1".into());
             entry.runtime_endpoints[0].limitations.push("Enable NUT-21/22 with an authentication_backend link to Keycloak. Auth storage defaults to SQLite; an optional database_backend link with role authentication selects PostgreSQL independently of primary storage. Use auth_max_blind_tokens and auth_rate_limit_per_minute for issuance limits. Endpoint protection follows upstream defaults. Native wallet authentication is supported; typed wallet operations against protected mints are not.".into());
@@ -828,8 +797,6 @@ fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
                 "keycloak",
                 &["25.0.6"],
             ));
-        }
-        if entry.kind == ComponentKind::Mint {
             entry.support_matrix.compatible_wallet_adapters =
                 vec![version_support("nutshell-wallet", &["0.20.3", "0.21.0"])];
         }
@@ -1291,6 +1258,90 @@ fn catalog_entry_with_lifecycle(
         build_provenance: None,
         allowed_control,
     }
+}
+
+/// LND and CLN regtest nodes share one contract; only the release differs.
+fn lightning_entry(
+    amd64: bool,
+    backends: &BackendContractRegistry,
+    adapter_version: &str,
+    id: &str,
+    version: &str,
+    support_lifecycle: SupportLifecycle,
+    image: &str,
+) -> CatalogEntry {
+    let (description, release_channel) = match id {
+        "lnd" => ("LND regtest Lightning node", ReleaseChannel::Prerelease),
+        "cln" => ("Core Lightning regtest node", ReleaseChannel::Stable),
+        _ => unreachable!("lightning_entry covers LND and CLN only"),
+    };
+    catalog_entry_with_lifecycle(
+        amd64,
+        id,
+        backends,
+        ComponentKind::Lightning,
+        description,
+        adapter_version,
+        version,
+        release_channel,
+        support_lifecycle,
+        image,
+        BTreeSet::from([
+            CatalogFeature::NativeCli,
+            CatalogFeature::Regtest,
+            CatalogFeature::PersistentState,
+            CatalogFeature::Bolt11,
+        ]),
+        vec![dependency(
+            LinkKind::ChainBackend,
+            "bitcoin-core",
+            &["31.1"],
+        )],
+        support_matrix(
+            &[StorageBackend::PersistentVolume],
+            &[PaymentMethod::Bolt11],
+            &[],
+            &["sat"],
+            &[],
+            &[],
+            vec![],
+        ),
+        vec![ControlClass::Cell, ControlClass::Workspace],
+    )
+}
+
+fn redis_entry(
+    amd64: bool,
+    backends: &BackendContractRegistry,
+    adapter_version: &str,
+    version: &str,
+    support_lifecycle: SupportLifecycle,
+    image: &str,
+) -> CatalogEntry {
+    catalog_entry_with_lifecycle(
+        amd64,
+        "redis",
+        backends,
+        ComponentKind::Database,
+        "Redis cache service",
+        adapter_version,
+        version,
+        ReleaseChannel::Stable,
+        support_lifecycle,
+        image,
+        BTreeSet::from([CatalogFeature::NativeCli, CatalogFeature::RedisCache]),
+        vec![],
+        support_matrix(
+            &[StorageBackend::Ephemeral],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            vec![],
+        ),
+        vec![ControlClass::Cell],
+    )
 }
 
 /// Preserve the upstream repository and digest while serving published images
@@ -1811,10 +1862,10 @@ mod tests {
                 .iter()
                 .find(|entry| entry.implementation == implementation)
                 .unwrap();
-            assert_eq!(support.minimum_supported.as_deref(), Some("0.18.1"));
+            assert_eq!(support.minimum_supported.as_deref(), Some("0.18.2"));
             assert_eq!(
                 support.supported_versions,
-                BTreeSet::from(["0.18.1".into()])
+                BTreeSet::from(["0.18.2".into()])
             );
         }
     }
@@ -1962,7 +2013,7 @@ mod tests {
     #[test]
     fn management_clients_have_matching_build_provenance() {
         use sha2::{Digest, Sha256};
-        let recipe = include_bytes!("../../../docker/mint/Dockerfile.cdk-0.18.1");
+        let recipe = include_bytes!("../../../docker/mint/Dockerfile.cdk-0.18.2");
         {
             let entry = default_catalog()
                 .entries
@@ -1977,7 +2028,7 @@ mod tests {
             assert!(entry.features.contains(&CatalogFeature::MintManagementRpc));
             assert_eq!(
                 provenance.commit_sha,
-                "a056e0f0f69e94f431b1aeb90d883f18c61ea4c6"
+                "9f6d3a3734d7223d10b5553e3591d3f9d5c6c904"
             );
         }
     }
@@ -2016,14 +2067,14 @@ mod tests {
             .find(|entry| entry.id == "cdk-cli-wallet")
             .expect("CDK wallet");
         let provenance = entry.build_provenance.as_ref().expect("release provenance");
-        let recipe = include_bytes!("../../../docker/wallet/Dockerfile.cdk-0.18.1");
+        let recipe = include_bytes!("../../../docker/wallet/Dockerfile.cdk-0.18.2");
         assert_eq!(
             provenance.recipe_digest,
             format!("sha256:{:x}", Sha256::digest(recipe))
         );
         assert_eq!(
             provenance.commit_sha,
-            "a056e0f0f69e94f431b1aeb90d883f18c61ea4c6"
+            "9f6d3a3734d7223d10b5553e3591d3f9d5c6c904"
         );
         assert_eq!(
             provenance.platform,
@@ -2088,18 +2139,18 @@ mod tests {
     )]
     fn catalog_support_summary_is_exact_and_invariants_fail_closed() {
         let catalog = catalog_for_platform(CatalogPlatform::LinuxArm64);
-        assert_eq!(catalog.entries.len(), 21);
+        assert_eq!(catalog.entries.len(), 26);
         assert_eq!(catalog.implementations.len(), 17);
         let lnd = catalog
             .implementations
             .iter()
             .find(|support| support.implementation == "lnd")
             .expect("LND support summary");
-        assert_eq!(lnd.minimum_supported.as_deref(), Some("0.20.4-beta"));
-        assert_eq!(lnd.preferred_version.as_deref(), Some("0.21.3-beta"));
+        assert_eq!(lnd.minimum_supported.as_deref(), Some("0.20.5-beta"));
+        assert_eq!(lnd.preferred_version.as_deref(), Some("0.21.4-beta"));
         assert_eq!(
             lnd.supported_versions,
-            BTreeSet::from(["0.20.4-beta".into(), "0.21.3-beta".into()])
+            BTreeSet::from(["0.20.5-beta".into(), "0.21.4-beta".into()])
         );
         assert!(catalog.implementations.iter().all(|support| {
             matches!(
@@ -2224,13 +2275,27 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(
                 cdk_versions,
-                ["0.18.1"],
+                ["0.18.2"],
                 "the CDK mint has one current entry"
+            );
+            let wallet_lifecycles = catalog
+                .entries
+                .iter()
+                .filter(|entry| entry.id == "cdk-cli-wallet")
+                .map(|entry| (entry.version.as_str(), entry.support_lifecycle))
+                .collect::<BTreeMap<_, _>>();
+            assert_eq!(
+                wallet_lifecycles,
+                BTreeMap::from([
+                    ("0.18.0", SupportLifecycle::Deprecated),
+                    ("0.18.1", SupportLifecycle::Deprecated),
+                    ("0.18.2", SupportLifecycle::Preferred),
+                ])
             );
             for id in ["cdk-cli-wallet", "nutshell", "nutshell-wallet"] {
                 let cdk = id.starts_with("cdk");
                 let old_version = if cdk { "0.18.0" } else { "0.20.3" };
-                let version = if cdk { "0.18.1" } else { "0.21.0" };
+                let version = if cdk { "0.18.2" } else { "0.21.0" };
                 let support = catalog
                     .implementations
                     .iter()
@@ -2262,7 +2327,7 @@ mod tests {
                 assert_eq!(
                     current.build_provenance.as_ref().unwrap().commit_sha,
                     if cdk {
-                        "a056e0f0f69e94f431b1aeb90d883f18c61ea4c6"
+                        "9f6d3a3734d7223d10b5553e3591d3f9d5c6c904"
                     } else {
                         "a9749146c6bd7f9ab75375a050e9ba795cee301c"
                     }

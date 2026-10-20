@@ -268,10 +268,10 @@ impl Receive {
         if text(&row[0])? != id {
             return Err(fail("mint_quote_identity_mismatch"));
         }
-        if let Some(mint) = mint {
-            if normalized_mint(text(&row[1])?) != normalized_mint(mint) {
-                return Err(fail("mint_quote_mint_mismatch"));
-            }
+        if let Some(mint) = mint
+            && normalized_mint(text(&row[1])?) != normalized_mint(mint)
+        {
+            return Err(fail("mint_quote_mint_mismatch"));
         }
         let amount = amount(&row[3])?;
         if !(1..=500_000).contains(&amount) {

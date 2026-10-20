@@ -10,7 +10,7 @@ preservation. Anonymous manifest/config/layer reads and Docker pulls verified al
 six published images. The processor's patched upstream library suite passed all
 37 tests during image builds.
 
-The distributed catalog includes these images and CDK 0.18.1's bolt11, onchain
+The distributed catalog includes these images and CDK 0.18.2's bolt11, onchain
 and arkoor sat bindings to the processor. Each processor component selects the
 rails it advertises with `payment_methods`; the default is all three, as upstream.
 Bark remains experimental, with no default version.
@@ -166,7 +166,7 @@ all three). Network, endpoints, storage paths and credentials are managed settin
   the processor boards the deposit into Ark and credits the original quote with
   the board fee deducted. `onchain` melts offboard from the processor's Ark balance.
 - `arkoor` is a CDK custom method for melts only. The request is an Ark address
-  on the same server, with zero fee. cdk-cli 0.18.1 cannot create custom-method
+  on the same server, with zero fee. cdk-cli 0.18.2 cannot create custom-method
   melts, and no catalog component provides a receiving Bark wallet yet.
 
 The processor runs as one StatefulSet with the complete `/data` directory on its

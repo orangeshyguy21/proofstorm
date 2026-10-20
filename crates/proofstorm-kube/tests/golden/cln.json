@@ -83,7 +83,7 @@
       "environment": {
         "HOME": "/home/cln"
       },
-      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:de74289ddcccb68cd60543b08b2b8594002d819125d200492e17a95166d56577",
       "mounts": [
         {
           "mount_path": "/home/cln/.lightning",
@@ -175,7 +175,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:bcc632802594c61e8e173bae1c764a4f344c52c22f625dd672ba93f51495f07a",
+    "rollout_digest": "sha256:39fcc959d4df20742b56495ff643ce1ce9562b3c9bcc3b0d73acecbc73931ee6",
     "storage": [
       {
         "claim_name": "data-lightning-0"
@@ -189,7 +189,7 @@
         "p2p": 9735,
         "rest": 3010
       },
-      "version": "26.06.7"
+      "version": "26.06.9"
     },
     "workload": {
       "desired_replicas": 1,
@@ -271,7 +271,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:bcc632802594c61e8e173bae1c764a4f344c52c22f625dd672ba93f51495f07a"
+                "proofstorm.dev/rollout-digest": "sha256:39fcc959d4df20742b56495ff643ce1ce9562b3c9bcc3b0d73acecbc73931ee6"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -320,7 +320,7 @@
                   "command": [
                     "lightningd"
                   ],
-                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:de74289ddcccb68cd60543b08b2b8594002d819125d200492e17a95166d56577",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {

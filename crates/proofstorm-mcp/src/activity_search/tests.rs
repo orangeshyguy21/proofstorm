@@ -126,7 +126,7 @@ fn pending_artifact_reads_offer_a_wait_without_polling_or_bypassing_digests() {
             let wait: crate::OperationWaitRequest =
                 serde_json::from_value(data["next_arguments"].clone()).unwrap();
             crate::validate_operation_wait_request(&wait).unwrap();
-            assert_eq!(wait.operation_ids, [id.clone()]);
+            assert_eq!(wait.operation_ids, std::slice::from_ref(&id));
         }
         assert_eq!(store.operation("test", "alice", &id).unwrap(), operation);
         assert_eq!(

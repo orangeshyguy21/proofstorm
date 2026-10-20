@@ -16,6 +16,20 @@ pub(crate) fn cdk(amd64: bool) -> (&'static str, &'static str) {
     }
 }
 
+pub(crate) fn cdk_0182(amd64: bool) -> (&'static str, &'static str) {
+    if amd64 {
+        (
+            "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:a48b427d28f1291a88e280bc35ca1f45c1ad133f2afe713eff208ecc1ac56242",
+            include_str!("../../../docker/wallet/cdk-cli-0.18.2-linux-amd64-provenance.json"),
+        )
+    } else {
+        (
+            "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:3d5c3052a16501aef67850491330156f48069350fac905ec247773404bfb166c",
+            include_str!("../../../docker/wallet/cdk-cli-0.18.2-provenance.json"),
+        )
+    }
+}
+
 pub(crate) fn cdk_0181(amd64: bool) -> (&'static str, &'static str) {
     if amd64 {
         (
@@ -67,7 +81,7 @@ mod tests {
     #[test]
     fn wallet_builds_have_distinct_pins_and_matching_provenance() {
         assert_ne!(nutshell(true), nutshell(false));
-        for builds in [cdk, cdk_0181, cocod] {
+        for builds in [cdk, cdk_0181, cdk_0182, cocod] {
             assert_ne!(builds(true).0, builds(false).0);
             for amd64 in [false, true] {
                 let (image, encoded) = builds(amd64);

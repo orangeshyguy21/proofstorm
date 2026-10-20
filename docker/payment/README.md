@@ -20,7 +20,7 @@ funding and receiving payments, and a CDK CLI wallet. No new MCP tools are neede
 
 | Component | Version | Upstream source |
 | --- | --- | --- |
-| CDK mint | `0.18.1` | [CDK](https://github.com/cashubtc/cdk/tree/v0.18.1) |
+| CDK mint | `0.18.2` | [CDK](https://github.com/cashubtc/cdk/tree/v0.18.2) |
 | Processor | `0.1.0-fe468ca` | [CDK payment processors](https://github.com/cashubtc/cdk-payment-processors/tree/fe468cad486157683eddbc0df4ff87ba71b6c0a3/crates/ldk-server) |
 | Node and CLI | `0.1.0-50fe752` | [LDK Server](https://github.com/lightningdevkit/ldk-server/tree/50fe7523be3529d86bfee0dfc35df9a52aca7310) |
 

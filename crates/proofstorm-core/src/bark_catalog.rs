@@ -163,10 +163,7 @@ pub(super) fn extend(
             crate::digest_json(&(&entry.source_digest, &entry.image, &provenance));
         entry.build_provenance = Some(provenance);
     }
-    for entry in entries
-        .iter_mut()
-        .filter(|entry| entry.id == "cdk" && entry.version == "0.18.1")
-    {
+    for entry in entries.iter_mut().filter(|entry| entry.id == "cdk") {
         entry
             .support_matrix
             .payment_backends
@@ -176,7 +173,7 @@ pub(super) fn extend(
             BARK_PROCESSOR,
             &[PROCESSOR_VERSION],
         ));
-        // CDK 0.18.1 registers every method a gRPC processor advertises,
+        // CDK 0.18 registers every method a gRPC processor advertises,
         // including on-chain and custom methods.
         for method in ProcessorProfile::Bark.supported_methods() {
             entry

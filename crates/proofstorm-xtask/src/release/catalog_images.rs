@@ -65,18 +65,57 @@ fn legacy_version(name: &str) -> Result<&'static str> {
     })
 }
 
+// Reviewed recipes for releases after each image's legacy version.
+const VERSIONED_RECIPES: &[(&str, &str, &str)] = &[
+    ("bitcoin-core", "29.4", "docker/bitcoin/Dockerfile.29.4"),
+    ("bitcoin-core", "30.3", "docker/bitcoin/Dockerfile.30.3"),
+    (
+        "nutshell-mint",
+        "0.21.0",
+        "docker/mint/Dockerfile.nutshell-0.21.0",
+    ),
+    ("cdk-mint", "0.18.1", "docker/mint/Dockerfile.cdk-0.18.1"),
+    (
+        "cdk-cli-wallet",
+        "0.18.1",
+        "docker/wallet/Dockerfile.cdk-0.18.1",
+    ),
+    ("cdk-mint", "0.18.2", "docker/mint/Dockerfile.cdk-0.18.2"),
+    (
+        "cdk-cli-wallet",
+        "0.18.2",
+        "docker/wallet/Dockerfile.cdk-0.18.2",
+    ),
+];
+
 fn versioned_recipe(name: &str, version: &str) -> Result<&'static str> {
     if version == legacy_version(name)? {
         return recipe(name);
     }
-    match (name, version) {
-        ("bitcoin-core", "29.4") => Ok("docker/bitcoin/Dockerfile.29.4"),
-        ("bitcoin-core", "30.3") => Ok("docker/bitcoin/Dockerfile.30.3"),
-        ("nutshell-mint", "0.21.0") => Ok("docker/mint/Dockerfile.nutshell-0.21.0"),
-        ("cdk-mint", "0.18.1") => Ok("docker/mint/Dockerfile.cdk-0.18.1"),
-        ("cdk-cli-wallet", "0.18.1") => Ok("docker/wallet/Dockerfile.cdk-0.18.1"),
-        _ => bail!("unreviewed catalog image version {name}@{version}; use catalog-image list"),
-    }
+    VERSIONED_RECIPES
+        .iter()
+        .find(|(recipe, reviewed, _)| *recipe == name && *reviewed == version)
+        .map(|(_, _, path)| *path)
+        .with_context(|| {
+            format!("unreviewed catalog image version {name}@{version}; use catalog-image list")
+        })
+}
+
+fn recipe_list() -> String {
+    let versions = RECIPES
+        .iter()
+        .map(|name| (*name, legacy_version(name).expect("reviewed recipe")))
+        .chain(
+            VERSIONED_RECIPES
+                .iter()
+                .map(|(name, version, _)| (*name, *version)),
+        )
+        .map(|(name, version)| format!("{name}@{version}"))
+        .collect::<Vec<_>>();
+    format!(
+        "Catalog recipes (linux/amd64 or linux/arm64; select RECIPE@VERSION):\n{}",
+        versions.join("\n")
+    )
 }
 
 fn selector(value: &str) -> Result<(&str, &str)> {
@@ -678,9 +717,11 @@ fn fields(work: &Path) -> Result<()> {
             "cdk-mint" | "cdk-ldk-mint-management"
         )
     {
-        let provenance = match receipt.version()? {
-            "0.18.1" => "source/docker/mint/cdk-0.18.1-provenance.json",
-            _ => "source/docker/mint/cdk-ldk-management-provenance.json",
+        let version = receipt.version()?;
+        let provenance = if version == legacy_version(&receipt.repository)? {
+            "source/docker/mint/cdk-ldk-management-provenance.json".to_owned()
+        } else {
+            format!("source/docker/mint/cdk-{version}-provenance.json")
         };
         let value = bundle::read_json(&work.join(provenance))?;
         text(&value, "runtime_image")?.clone_into(&mut mint_image);
@@ -778,17 +819,7 @@ pub(super) fn cli(args: impl Iterator<Item = OsString>) -> Result<()> {
         }
         ["audit"] => audit::run(),
         ["list"] => {
-            println!(
-                "Catalog recipes (linux/amd64 or linux/arm64; select RECIPE@VERSION):\n{}\nbitcoin-core@29.4\nbitcoin-core@30.3\nnutshell-mint@0.21.0\ncdk-mint@0.18.1\ncdk-cli-wallet@0.18.1",
-                RECIPES
-                    .iter()
-                    .map(|name| format!(
-                        "{name}@{}",
-                        legacy_version(name).expect("reviewed recipe")
-                    ))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            );
+            println!("{}", recipe_list());
             Ok(())
         }
         ["prepare", root, work, name, platform] => prepare(

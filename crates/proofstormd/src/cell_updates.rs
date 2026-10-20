@@ -29,22 +29,22 @@ pub async fn action_cell(
     );
     let map = maps.get(&format!("revision-{}", &digest[7..39])).await?;
     // Snapshot is generated from a typed spec by the materialization/update path.
-    if let Some(spec) = map.data.as_ref().and_then(|d| d.get("spec.json")) {
-        if let Ok(spec) = serde_json::from_str::<proofstorm_kube::ProofstormCellSpec>(spec) {
-            if spec.instance_key == cell.spec.instance_key && spec.revision_digest == *revision {
-                cell.spec = spec;
-                if let Some(status) = cell.status.as_mut() {
-                    for component in &mut status.components {
-                        if cell.spec.lock.entries.iter().any(|e| {
-                            e.component_id == component.id
-                                && e.rollout_digest == component.observed_rollout_digest
-                        }) {
-                            component.observed_revision_digest.clone_from(revision);
-                        }
-                    }
-                    status.observed_revision_digest.clone_from(revision);
+    if let Some(spec) = map.data.as_ref().and_then(|d| d.get("spec.json"))
+        && let Ok(spec) = serde_json::from_str::<proofstorm_kube::ProofstormCellSpec>(spec)
+        && spec.instance_key == cell.spec.instance_key
+        && spec.revision_digest == *revision
+    {
+        cell.spec = spec;
+        if let Some(status) = cell.status.as_mut() {
+            for component in &mut status.components {
+                if cell.spec.lock.entries.iter().any(|e| {
+                    e.component_id == component.id
+                        && e.rollout_digest == component.observed_rollout_digest
+                }) {
+                    component.observed_revision_digest.clone_from(revision);
                 }
             }
+            status.observed_revision_digest.clone_from(revision);
         }
     }
     if cell.spec.revision_digest != *revision {

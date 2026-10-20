@@ -12,7 +12,7 @@ const MINTS: &[&str] = &["cdk", "cdk-ldk", "cdk-bdk", "nutshell"];
 fn document() -> Value {
     let mut components = vec![
         json!({"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}),
-        json!({"id":"lightning","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}}),
+        json!({"id":"lightning","kind":"lightning","implementation":"lnd","version": proofstorm_core::LND_VERSION,"config_version":"lnd/0.20/v1","control":"cell","config":{}}),
     ];
     let mut links = vec![
         json!({"id":"lightning-chain","kind":"chain_backend","from":"lightning","to":"chain","binding":{"type":"chain","network":"regtest"}}),
@@ -22,7 +22,7 @@ fn document() -> Value {
         let (implementation, version, config_version) = if *id == "nutshell" {
             ("nutshell", "0.21.0", "nutshell-mint/0.20/v1")
         } else {
-            ("cdk", "0.18.1", "cdk-mintd/0.18/v1")
+            ("cdk", proofstorm_core::CDK_VERSION, "cdk-mintd/0.18/v1")
         };
         let config = match *id {
             "cdk-ldk" => json!({"motd":"authored-management-motd","embedded_lightning":"ldk-node"}),

@@ -27,29 +27,29 @@ pub(super) fn retain(next: &mut SystemView, previous: &SystemView) {
             }) else {
                 continue;
             };
-            if let Some(current) = &mut balance.bitcoin {
-                if current.error.is_some() || cell.error.is_some() {
-                    if let Some(old) = &old.bitcoin {
-                        *current = old.clone();
-                    }
-                    current.error = Some("Peer observation unavailable".into());
+            if let Some(current) = &mut balance.bitcoin
+                && (current.error.is_some() || cell.error.is_some())
+            {
+                if let Some(old) = &old.bitcoin {
+                    *current = old.clone();
                 }
+                current.error = Some("Peer observation unavailable".into());
             }
-            if let Some(current) = &mut balance.lightning {
-                if current.error.is_some() || cell.error.is_some() {
-                    if let Some(old) = &old.lightning {
-                        *current = old.clone();
-                    }
-                    current.error = Some("Channel observation unavailable".into());
+            if let Some(current) = &mut balance.lightning
+                && (current.error.is_some() || cell.error.is_some())
+            {
+                if let Some(old) = &old.lightning {
+                    *current = old.clone();
                 }
+                current.error = Some("Channel observation unavailable".into());
             }
-            if let Some(current) = &mut balance.holdings {
-                if current.error.is_some() || cell.error.is_some() {
-                    if let Some(old) = &old.holdings {
-                        *current = old.clone();
-                    }
-                    current.error = Some("Holdings observation unavailable".into());
+            if let Some(current) = &mut balance.holdings
+                && (current.error.is_some() || cell.error.is_some())
+            {
+                if let Some(old) = &old.holdings {
+                    *current = old.clone();
                 }
+                current.error = Some("Holdings observation unavailable".into());
             }
         }
     }

@@ -51,25 +51,25 @@ fn runtime_retirement_is_explicit_and_not_a_public_cell_command() {
 #[test]
 fn gui_has_explicit_lifecycle_and_project_scope() {
     assert!(
-        matches!(parse(&["gui"]).unwrap(), Action::Gui { project, no_open: false, .. } if project == PathBuf::from("."))
+        matches!(parse(&["gui"]).unwrap(), Action::Gui { project, no_open: false, .. } if project == *".")
     );
     for args in [
         vec!["gui", "open", "--project", "/a project"],
         vec!["gui", "--project", "/a project", "open"],
     ] {
         assert!(
-            matches!(parse(&args).unwrap(), Action::Gui { project, .. } if project == PathBuf::from("/a project"))
+            matches!(parse(&args).unwrap(), Action::Gui { project, .. } if project == *"/a project")
         );
     }
     assert!(
-        matches!(parse(&["gui", "link"]).unwrap(), Action::Gui { no_open: true, project, .. } if project == PathBuf::from("."))
+        matches!(parse(&["gui", "link"]).unwrap(), Action::Gui { no_open: true, project, .. } if project == *".")
     );
     for args in [
         vec!["gui", "link", "--project", "/a project"],
         vec!["gui", "--project", "/a project", "link"],
     ] {
         assert!(
-            matches!(parse(&args).unwrap(), Action::Gui { no_open: true, project, .. } if project == PathBuf::from("/a project"))
+            matches!(parse(&args).unwrap(), Action::Gui { no_open: true, project, .. } if project == *"/a project")
         );
     }
     assert!(parse(&["gui", "--project", "/one", "link", "--project", "/two"]).is_err());
@@ -126,7 +126,7 @@ fn agent_configuration_and_launch_are_distinct() {
             }
         ));
         assert!(
-            matches!(parse(&["agent", "open", agent, "--desktop", "--project", "/a project"]).unwrap(), Action::Open { gui: true, project, .. } if project == PathBuf::from("/a project"))
+            matches!(parse(&["agent", "open", agent, "--desktop", "--project", "/a project"]).unwrap(), Action::Open { gui: true, project, .. } if project == *"/a project")
         );
         assert!(parse(&["agent", "open", agent, "--gui"]).is_err());
     }

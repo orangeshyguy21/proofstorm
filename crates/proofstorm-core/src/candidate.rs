@@ -720,7 +720,7 @@ mod tests {
     #[test]
     fn successful_candidate_is_an_exact_non_preferred_catalog_version() {
         let candidate = succeeded_candidate();
-        let catalog = effective_catalog(default_catalog(), &[candidate.clone()])
+        let catalog = effective_catalog(default_catalog(), std::slice::from_ref(&candidate))
             .expect("merge candidate catalog");
         let support = catalog
             .implementations
@@ -748,7 +748,7 @@ mod tests {
         let mut candidate = succeeded_candidate();
         candidate.id = "lnd-pr-999".into();
         candidate.implementation = "lnd".into();
-        candidate.base_version = "0.21.3-beta".into();
+        candidate.base_version = "0.21.4-beta".into();
         candidate.version = Some("candidate-pr999-aabbccdd".into());
         candidate.pull_request_url = "https://github.com/lightningnetwork/lnd/pull/999".into();
         candidate.repository = Some("https://github.com/lightningnetwork/lnd.git".into());

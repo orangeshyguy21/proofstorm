@@ -63,10 +63,10 @@ fn peer_ids(
     for peer in response.as_array()? {
         let address = peer["addr"].as_str()?;
         // External peers (including onion addresses) are intentionally unmapped.
-        if let Ok(address) = address.parse::<SocketAddr>() {
-            if let Some(ids) = addresses.get(&address.ip()).filter(|ids| ids.len() == 1) {
-                peers.extend(ids.iter().cloned());
-            }
+        if let Ok(address) = address.parse::<SocketAddr>()
+            && let Some(ids) = addresses.get(&address.ip()).filter(|ids| ids.len() == 1)
+        {
+            peers.extend(ids.iter().cloned());
         }
     }
     Some(peers.into_iter().collect())

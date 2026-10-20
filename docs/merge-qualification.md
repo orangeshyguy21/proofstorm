@@ -125,10 +125,9 @@ Failed, missing, duplicate, skipped or stale evidence cannot qualify a merge.
   for released-image qualification. Keycloak also remains independently
   qualified for discovery, valid/invalid logins, generated credentials, signing
   keys and restart persistence.
-- CLN uses the corrected 26.06.7 digest published in the
-  [upstream release notes](https://github.com/ElementsProject/lightning/releases/tag/v26.06.7).
-  The previous image reported the same version without the release fixes.
-  Historical release receipts are not evidence for the corrected image.
+- CLN uses the 26.06.9 security point release
+  ([upstream release notes](https://github.com/ElementsProject/lightning/releases/tag/v26.06.9)).
+  Historical release receipts for 26.06.7 are not evidence for 26.06.9.
 
 ## Local use and diagnostics
 

@@ -1321,7 +1321,7 @@ pub(crate) fn service_observation(
     }
     let endpoints_ready = resources.endpoints.all(&plan.component_id).any(|slice| {
         endpoint_slice_ports_match(plan, slice)
-            && slice.endpoints.iter().any(|endpoint| {
+            && slice.endpoints.iter().flatten().any(|endpoint| {
                 !endpoint.addresses.is_empty()
                     && endpoint
                         .conditions
@@ -4127,7 +4127,11 @@ mod tests {
             .expect("StatefulSet status")
             .observed_generation = fixture.workload.metadata.generation;
         fixture.claim.status.as_mut().expect("PVC status").phase = Some("Bound".into());
-        fixture.endpoint_slice.endpoints[0]
+        fixture
+            .endpoint_slice
+            .endpoints
+            .as_mut()
+            .expect("endpoints")[0]
             .conditions
             .as_mut()
             .expect("endpoint conditions")
@@ -5690,7 +5694,11 @@ mod tests {
             .expect("StatefulSet status")
             .observed_generation = Some(2);
         fixture.claim.status.as_mut().expect("PVC status").phase = Some("Bound".into());
-        fixture.endpoint_slice.endpoints[0]
+        fixture
+            .endpoint_slice
+            .endpoints
+            .as_mut()
+            .expect("endpoints")[0]
             .conditions
             .as_mut()
             .expect("endpoint conditions")
@@ -5959,7 +5967,12 @@ mod tests {
             }))
             .unwrap(),
         ]);
-        fixture.endpoint_slice.endpoints[0].target_ref = Some(
+        fixture
+            .endpoint_slice
+            .endpoints
+            .as_mut()
+            .expect("endpoints")[0]
+            .target_ref = Some(
             serde_json::from_value(json!({
                 "kind": "Pod", "name": "chain-0", "uid": "workload-current"
             }))
@@ -6098,9 +6111,9 @@ mod tests {
             .ready
         );
         let mut mixed = fixture.endpoint_slice.clone();
-        let mut old = mixed.endpoints[0].clone();
+        let mut old = mixed.endpoints.as_ref().expect("endpoints")[0].clone();
         old.target_ref.as_mut().unwrap().uid = Some("old-workload".into());
-        mixed.endpoints.push(old);
+        mixed.endpoints.as_mut().expect("endpoints").push(old);
         assert!(
             !observe(
                 &ComponentObservationResources {
@@ -6375,7 +6388,7 @@ mod tests {
         );
         assert!(lock.entries.iter().any(|entry| {
             entry.catalog_id == "cln"
-                && entry.version == "26.06.7"
+                && entry.version == "26.06.9"
                 && entry.image.contains("@sha256:")
         }));
     }

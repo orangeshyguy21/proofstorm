@@ -140,21 +140,21 @@ fn run_command(
     };
     // Errors deliberately omit potentially sensitive subprocess output (kubeconfig/tokens).
     build_log(log, &out, &err)?;
-    if !status.success() {
-        if let Some(path) = log {
-            let operation = if path
-                .file_name()
-                .is_some_and(|name| name == "image-preparation.log")
-            {
-                "image preparation"
-            } else {
-                "controller build"
-            };
-            anyhow::bail!(
-                "{operation} failed; inspect private log {} and retry setup",
-                path.display()
-            );
-        }
+    if !status.success()
+        && let Some(path) = log
+    {
+        let operation = if path
+            .file_name()
+            .is_some_and(|name| name == "image-preparation.log")
+        {
+            "image preparation"
+        } else {
+            "controller build"
+        };
+        anyhow::bail!(
+            "{operation} failed; inspect private log {} and retry setup",
+            path.display()
+        );
     }
     ensure!(
         status.success(),

@@ -15,6 +15,10 @@ fn explicit_versions_bind_recipes_receipts_and_exact_probe_output() {
     assert!(!valid_probe_version("nutshell-mint", "0.20.3", output));
     for name in ["cdk-mint", "cdk-cli-wallet"] {
         assert_eq!(
+            selector(&format!("{name}@0.18.2")).unwrap(),
+            (name, "0.18.2")
+        );
+        assert_eq!(
             selector(&format!("{name}@0.18.1")).unwrap(),
             (name, "0.18.1")
         );
@@ -101,6 +105,18 @@ fn added_version_recipes_match_their_provenance_and_native_versions() {
             "0.18.1",
             "docker/wallet/cdk-cli-0.18.1-provenance.json",
             "cdk-cli 0.18.1\n",
+        ),
+        (
+            "cdk-mint",
+            "0.18.2",
+            "docker/mint/cdk-0.18.2-provenance.json",
+            "cdk-mint-rpc 0.18.2\ncdk-mintd 0.18.2\n",
+        ),
+        (
+            "cdk-cli-wallet",
+            "0.18.2",
+            "docker/wallet/cdk-cli-0.18.2-provenance.json",
+            "cdk-cli 0.18.2\n",
         ),
         (
             "bitcoin-core",

@@ -389,15 +389,15 @@ fn validate_binding(index: usize, link: &LinkSpec, issues: &mut Vec<ValidationIs
         ),
         (_, None) => {}
     }
-    if let Some(DependencyBinding::Payment { unit, .. }) = &link.binding {
-        if !is_cashu_unit(unit) {
-            issue(
-                issues,
-                "invalid_payment_unit",
-                format!("/links/{index}/binding/unit"),
-                "must be a lowercase Cashu unit of 1..=64 ASCII letters, digits, '-' or '_'",
-            );
-        }
+    if let Some(DependencyBinding::Payment { unit, .. }) = &link.binding
+        && !is_cashu_unit(unit)
+    {
+        issue(
+            issues,
+            "invalid_payment_unit",
+            format!("/links/{index}/binding/unit"),
+            "must be a lowercase Cashu unit of 1..=64 ASCII letters, digits, '-' or '_'",
+        );
     }
 }
 

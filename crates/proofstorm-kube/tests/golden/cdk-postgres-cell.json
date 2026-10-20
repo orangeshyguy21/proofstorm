@@ -420,7 +420,7 @@
         "environment": {
           "HOME": "/home/lnd"
         },
-        "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
+        "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:04d06edcc0f6e99a5e797ea34959f330add222226f840cd86afbc31f8f29627d",
         "mounts": [
           {
             "mount_path": "/home/lnd/.lnd",
@@ -512,7 +512,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:e9ea78f3dd7c24dba1140c367921e000a9ea6558e6f268c376a623b3f2683aee",
+      "rollout_digest": "sha256:45333e7954cae96e4f70473861c27a3967716e3fcaae88cf5fd7bd479ecc7b39",
       "storage": [
         {
           "claim_name": "data-lightning-0"
@@ -527,7 +527,7 @@
           "rest": 8080,
           "rpc": 10009
         },
-        "version": "0.21.3-beta"
+        "version": "0.21.4-beta"
       },
       "workload": {
         "desired_replicas": 1,
@@ -665,7 +665,7 @@
           "CDK_MINTD_WORK_DIR": "/app/data",
           "HOME": "/app/data"
         },
-        "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+        "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
         "mounts": [
           {
             "mount_path": "/config",
@@ -716,7 +716,7 @@
             "rest": 8080,
             "rpc": 10009
           },
-          "version": "0.21.3-beta"
+          "version": "0.21.4-beta"
         }
       },
       "operation_admission": [
@@ -794,7 +794,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:583899b9567033e386c6d013951a84729a265e5f9580a8e7cf78732e17f92227",
+      "rollout_digest": "sha256:7c2da1de9b4b5f1708fb1e99188155b5dc44f46aedfd5775247b0faddbe5ea67",
       "storage": [
         {
           "claim_name": "mint-data"
@@ -807,7 +807,7 @@
         "ports": {
           "http": 3338
         },
-        "version": "0.18.1"
+        "version": "0.18.2"
       },
       "workload": {
         "desired_replicas": 1,
@@ -871,7 +871,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:583899b9567033e386c6d013951a84729a265e5f9580a8e7cf78732e17f92227"
+                "proofstorm.dev/rollout-digest": "sha256:7c2da1de9b4b5f1708fb1e99188155b5dc44f46aedfd5775247b0faddbe5ea67"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -924,7 +924,7 @@
                       "value": "postgresql://proofstorm:$(CDK_MINTD_POSTGRES_URL_PASSWORD)@database:5432/mint_primary"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -1071,7 +1071,7 @@
                       "value": "postgresql://proofstorm:$(CDK_MINTD_POSTGRES_URL_PASSWORD)@database:5432/mint_primary"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "initialize-config",
                   "securityContext": {
@@ -2134,7 +2134,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:e9ea78f3dd7c24dba1140c367921e000a9ea6558e6f268c376a623b3f2683aee"
+                "proofstorm.dev/rollout-digest": "sha256:45333e7954cae96e4f70473861c27a3967716e3fcaae88cf5fd7bd479ecc7b39"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -2184,7 +2184,7 @@
                   "command": [
                     "lnd"
                   ],
-                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:04d06edcc0f6e99a5e797ea34959f330add222226f840cd86afbc31f8f29627d",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {

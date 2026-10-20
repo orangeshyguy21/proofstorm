@@ -68,7 +68,7 @@
       "execution_context": {
         "component_id": "cache",
         "environment": {},
-        "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/redis@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576",
+        "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/redis@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6",
         "mounts": [],
         "state_contract": "proofstorm/redis-cache-state/v1"
       },
@@ -127,7 +127,7 @@
       },
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:7e59aabf488f978824bc34b1704f76595375dcf85f5a12407675209123b8e2cc",
+      "rollout_digest": "sha256:a7841e99bd280823d8aa62f93c577af803ae6382273024d8f24c2a3aa413f892",
       "storage": [],
       "target_descriptor": {
         "backend_id": "redis",
@@ -136,7 +136,7 @@
         "ports": {
           "redis": 6379
         },
-        "version": "8.10.1"
+        "version": "8.10.2"
       },
       "workload": {
         "desired_replicas": 1,
@@ -564,7 +564,7 @@
         "environment": {
           "HOME": "/home/lnd"
         },
-        "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
+        "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:04d06edcc0f6e99a5e797ea34959f330add222226f840cd86afbc31f8f29627d",
         "mounts": [
           {
             "mount_path": "/home/lnd/.lnd",
@@ -656,7 +656,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:e9ea78f3dd7c24dba1140c367921e000a9ea6558e6f268c376a623b3f2683aee",
+      "rollout_digest": "sha256:45333e7954cae96e4f70473861c27a3967716e3fcaae88cf5fd7bd479ecc7b39",
       "storage": [
         {
           "claim_name": "data-lightning-0"
@@ -671,7 +671,7 @@
           "rest": 8080,
           "rpc": 10009
         },
-        "version": "0.21.3-beta"
+        "version": "0.21.4-beta"
       },
       "workload": {
         "desired_replicas": 1,
@@ -850,7 +850,7 @@
           "ports": {
             "redis": 6379
           },
-          "version": "8.10.1"
+          "version": "8.10.2"
         },
         "mint-database-database": {
           "backend_id": "postgresql",
@@ -870,7 +870,7 @@
             "rest": 8080,
             "rpc": 10009
           },
-          "version": "0.21.3-beta"
+          "version": "0.21.4-beta"
         }
       },
       "operation_admission": [
@@ -1088,7 +1088,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:7e59aabf488f978824bc34b1704f76595375dcf85f5a12407675209123b8e2cc"
+                "proofstorm.dev/rollout-digest": "sha256:a7841e99bd280823d8aa62f93c577af803ae6382273024d8f24c2a3aa413f892"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -1133,7 +1133,7 @@
                       }
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/redis@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/redis@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -2583,7 +2583,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:e9ea78f3dd7c24dba1140c367921e000a9ea6558e6f268c376a623b3f2683aee"
+                "proofstorm.dev/rollout-digest": "sha256:45333e7954cae96e4f70473861c27a3967716e3fcaae88cf5fd7bd479ecc7b39"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -2633,7 +2633,7 @@
                   "command": [
                     "lnd"
                   ],
-                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:04d06edcc0f6e99a5e797ea34959f330add222226f840cd86afbc31f8f29627d",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {

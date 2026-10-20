@@ -282,7 +282,7 @@ async fn candidate_legacy_replay_keeps_exact_record_without_fabricating_provenan
     let store = store();
     let mut legacy: CandidateBuild = serde_json::from_value(json!({
         "api_version":proofstorm_core::CANDIDATE_BUILD_API_VERSION,"id":"legacy","workspace_id":"workspace","principal_id":"agent",
-        "implementation":"cdk","base_version":"0.18.1","pull_request_url":"https://github.com/cashubtc/cdk/pull/123/",
+        "implementation":"cdk","base_version":"0.18.2","pull_request_url":"https://github.com/cashubtc/cdk/pull/123/",
         "resource_name":"candidate-legacy","request_digest":"legacy-fingerprint","phase":"pending","accepted_at_unix":1,
         "repository":"https://github.com/cashubtc/cdk.git","commit_sha":"a".repeat(40),"version":"candidate-pr123-aaaaaaaa"
     })).unwrap();

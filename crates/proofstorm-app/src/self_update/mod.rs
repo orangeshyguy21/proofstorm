@@ -98,13 +98,13 @@ pub async fn run(check: bool, home: Option<&Path>, progress: &dyn Fn(&str)) -> U
         .await
     }
     .await;
-    if let Err(error) = outcome {
-        if result.error.is_none() {
-            result.error = Some(Fault {
-                code: "update_unavailable".into(),
-                message: format!("{error:#}"),
-            });
-        }
+    if let Err(error) = outcome
+        && result.error.is_none()
+    {
+        result.error = Some(Fault {
+            code: "update_unavailable".into(),
+            message: format!("{error:#}"),
+        });
     }
     result
 }

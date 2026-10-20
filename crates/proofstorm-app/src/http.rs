@@ -73,13 +73,12 @@ async fn serve_inner(
                                     crate::gui::transport::secure(&mut response);
                                     return Ok::<_,Infallible>(response);
                                 }
-                                if request.method() == hyper::Method::GET && !request.uri().path().starts_with("/v1/") {
-                                    if let Some(root) = &session.web_dist {
+                                if request.method() == hyper::Method::GET && !request.uri().path().starts_with("/v1/")
+                                    && let Some(root) = &session.web_dist {
                                         let mut response = checkout_asset(root, request.uri().path()).await;
                                         crate::gui::transport::secure(&mut response);
                                         return Ok(response);
                                     }
-                                }
                             }
                             let mut response=handle(cells,status,events,telemetry,streams,request).await?;
                             if managed.is_some() { crate::gui::transport::secure(&mut response); }
@@ -110,7 +109,7 @@ async fn handle(
         .as_ref()
         .is_some_and(|h| matches!(h.host(), "127.0.0.1" | "localhost" | "[::1]"));
     let same_origin = request.headers().get("origin").is_none_or(|origin| {
-        origin.to_str().ok().is_some_and(|origin| {
+        origin.to_str().is_ok_and(|origin| {
             host.as_ref()
                 .is_some_and(|host| origin == format!("http://{host}"))
         })

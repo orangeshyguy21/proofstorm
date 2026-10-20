@@ -216,10 +216,9 @@ async fn main() -> Result<()> {
             | Command::Gui { .. }
             | Command::GuiStart { .. }
             | Command::GuiServe { .. }
-    ) {
-        if let Some(home) = &args.home {
-            proofstorm_app::artifacts::check_checkout(home)?;
-        }
+    ) && let Some(home) = &args.home
+    {
+        proofstorm_app::artifacts::check_checkout(home)?;
     }
     if matches!(
         command,
@@ -457,10 +456,10 @@ async fn main() -> Result<()> {
             &serde_json::json!({"database":environment.database,"workspace":args.workspace,"principal":args.principal,"context":environment.context,"installation":environment.installation,"kubeconfig":environment.kubeconfig,"capabilities":store.capabilities(&args.workspace,&args.principal)?}),
         );
     }
-    if matches!(command, Command::Result { .. }) {
-        if let Command::Result { id } = command {
-            return output.show(&store.operation(&args.workspace, &args.principal, &id)?);
-        }
+    if matches!(command, Command::Result { .. })
+        && let Command::Result { id } = command
+    {
+        return output.show(&store.operation(&args.workspace, &args.principal, &id)?);
     }
     if let Command::OpsList {
         name,

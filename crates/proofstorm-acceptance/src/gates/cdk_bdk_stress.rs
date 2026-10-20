@@ -26,7 +26,7 @@ fn cell_document(postgres_enabled: bool) -> Value {
         "components": [
             {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}},
             {
-                "id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.1",
+                "id": "mint", "kind": "mint", "implementation": "cdk", "version": proofstorm_core::CDK_VERSION,
                 "config_version": "cdk-mintd/0.18/v1", "control": "target",
                 "config": {
                     "embedded_onchain": "bdk",
@@ -119,9 +119,9 @@ pub fn run(context: &GateContext, postgres_enabled: bool, stress: bool) -> Resul
         client,
         postgres_enabled,
         stress,
-        context.selected_version("cdk", "0.18.1"),
+        context.selected_version("cdk", proofstorm_core::CDK_VERSION),
         context.selected_image("cdk", IMAGE),
-        context.selected_version("cdk", "0.18.1"),
+        context.selected_version("cdk", proofstorm_core::CDK_VERSION),
     )
 }
 
@@ -363,15 +363,14 @@ fn run_selected(
             .iter()
             .map(|quote| status_of(quote, &forward))
             .collect();
-        if let Ok(items) = persisted {
-            if items
+        if let Ok(items) = persisted
+            && items
                 .iter()
                 .all(|item| item.get("amount_paid").and_then(Value::as_u64).unwrap_or(0) >= 1200)
-            {
-                context.record("cdk-bdk-selected-after-restart.json", &json!(items))?;
-                survived = true;
-                break;
-            }
+        {
+            context.record("cdk-bdk-selected-after-restart.json", &json!(items))?;
+            survived = true;
+            break;
         }
         sleep(Duration::from_secs(1));
     }

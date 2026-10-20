@@ -2000,15 +2000,15 @@ fn cell_validation_result_with_catalog(
     issue_offset: usize,
 ) -> CellValidationResult {
     let mut validation = validate_cell(cell);
-    if validation.valid {
-        if let Err(message) = proofstorm_core::resolve_lock(cell, catalog) {
-            validation.valid = false;
-            validation.issues.push(ValidationIssue {
-                code: "publication_preflight_failed".into(),
-                path: "/".into(),
-                message,
-            });
-        }
+    if validation.valid
+        && let Err(message) = proofstorm_core::resolve_lock(cell, catalog)
+    {
+        validation.valid = false;
+        validation.issues.push(ValidationIssue {
+            code: "publication_preflight_failed".into(),
+            path: "/".into(),
+            message,
+        });
     }
     let summary = topology_summary(cell);
     let issue_count = validation.issues.len();
@@ -3290,7 +3290,7 @@ mod tests {
         assert!(backend.supports(NetworkFaultFeature::Partition));
         assert!(!backend.supports(NetworkFaultFeature::Delay));
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 21);
+        assert_eq!(catalog.entries.len(), 26);
         assert!(catalog.entries.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
@@ -3301,7 +3301,7 @@ mod tests {
         let cdk = catalog
             .entries
             .iter()
-            .find(|entry| entry.id == "cdk" && entry.version == "0.18.1")
+            .find(|entry| entry.id == "cdk" && entry.version == "0.18.2")
             .expect("CDK support contract");
         assert_eq!(cdk.config_version, "cdk-mintd/0.18/v1");
         assert_eq!(
@@ -3471,7 +3471,7 @@ mod tests {
                             | "cln-hold"
                     ) && entry.support_lifecycle == SupportLifecycle::Experimental
                     || entry.id == "lnd"
-                        && entry.version == "0.20.4-beta"
+                        && entry.version == "0.20.5-beta"
                         && entry.support_lifecycle == SupportLifecycle::Supported
                     || matches!(entry.id.as_str(), "nutshell" | "nutshell-wallet")
                         && entry.version == "0.20.3"
@@ -3515,14 +3515,14 @@ mod tests {
     #[test]
     fn missing_catalog_version_reports_exact_installed_alternatives() {
         let catalog = default_catalog();
-        let error = exact_catalog_entry(&catalog.entries, "lnd", "0.21.3-beta4")
+        let error = exact_catalog_entry(&catalog.entries, "lnd", "0.21.4-beta4")
             .expect_err("near-match must not silently select another version");
         let message = error.message.to_string();
         assert!(message.contains("[catalog_entry_not_found]"));
         assert!(message.contains("no changes were made"));
         assert!(message.contains("Recovery:"));
-        assert!(message.contains("0.20.4-beta"));
-        assert!(message.contains("0.21.3-beta"));
+        assert!(message.contains("0.20.5-beta"));
+        assert!(message.contains("0.21.4-beta"));
     }
 
     #[test]
@@ -4311,7 +4311,7 @@ mod tests {
         assert!(nutshell.compatible_dependencies.iter().any(|dependency| {
             dependency.link_kind == proofstorm_core::LinkKind::DatabaseBackend
                 && dependency.implementation == "redis"
-                && dependency.versions.contains("8.10.1")
+                && dependency.versions.contains("8.10.2")
         }));
     }
 

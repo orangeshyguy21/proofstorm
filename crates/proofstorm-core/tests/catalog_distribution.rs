@@ -51,7 +51,7 @@ fn both_catalogs_distribute_verified_bark_images_with_experimental_contracts() {
         let mint = distributed
             .entries
             .iter()
-            .find(|entry| entry.id == "cdk" && entry.version == "0.18.1")
+            .find(|entry| entry.id == "cdk" && entry.version == "0.18.2")
             .unwrap();
         let bindings: Vec<_> = mint
             .support_matrix

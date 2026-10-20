@@ -1,4 +1,4 @@
-//! CDK 0.18.1 + PostgreSQL: catalog-pinned image, secret-backed URL kept out of
+//! CDK + PostgreSQL: catalog-pinned image, secret-backed URL kept out of
 //! every public object, schema initialization, Secret stability across a
 //! controller restart, and persistence across a workload restart.
 //!
@@ -20,9 +20,9 @@ fn cell_document() -> Value {
         "name": "cdk-postgres-live-cell",
         "components": [
             {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
-            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-postgres-lnd"}},
+            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": proofstorm_core::LND_VERSION, "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-postgres-lnd"}},
             {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "cell", "config": {"storage_size": "2Gi"}},
-            {"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.1", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK PostgreSQL", "description": "Secret-backed PostgreSQL persistence acceptance", "mint_quote_ttl_seconds": 601, "melt_quote_ttl_seconds": 121}}
+            {"id": "mint", "kind": "mint", "implementation": "cdk", "version": proofstorm_core::CDK_VERSION, "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK PostgreSQL", "description": "Secret-backed PostgreSQL persistence acceptance", "mint_quote_ttl_seconds": 601, "melt_quote_ttl_seconds": 121}}
         ],
         "links": [
             {"id": "lnd-chain", "kind": "chain_backend", "from": "mint-lnd", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
@@ -222,7 +222,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     cell::wait_phase(&mut client, INSTANCE, "closed", 60, Duration::from_secs(3))?;
 
     println!(
-        "CDK 0.18.1 + PostgreSQL MCP materialization, database-backed configuration, Secret preservation, restart persistence, and teardown passed"
+        "CDK + PostgreSQL MCP materialization, database-backed configuration, Secret preservation, restart persistence, and teardown passed"
     );
     Ok(())
 }

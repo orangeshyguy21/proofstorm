@@ -20,11 +20,11 @@ pub(super) fn document(input_fee_ppk: u64) -> Value {
         "api_version":"proofstorm/v1alpha1", "name":"cdk-wallet-checkpoint",
         "components":[
             {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
-            {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
-            {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version":"0.21.3-beta","config_version":"lnd/0.20/v1","control":"cell","config":{}},
-            {"id":"mint","kind":"mint","implementation":"cdk","version":"0.18.1","config_version":"cdk-mintd/0.18/v1","control":"target","config":{"input_fee_ppk":input_fee_ppk}},
-            {"id":"wallet-a","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.1","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}},
-            {"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.1","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}
+            {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version": proofstorm_core::LND_VERSION,"config_version":"lnd/0.20/v1","control":"cell","config":{}},
+            {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version": proofstorm_core::LND_VERSION,"config_version":"lnd/0.20/v1","control":"cell","config":{}},
+            {"id":"mint","kind":"mint","implementation":"cdk","version": proofstorm_core::CDK_VERSION,"config_version":"cdk-mintd/0.18/v1","control":"target","config":{"input_fee_ppk":input_fee_ppk}},
+            {"id":"wallet-a","kind":"wallet","implementation":"cdk-cli-wallet","version": proofstorm_core::CDK_VERSION,"config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}},
+            {"id":"wallet-b","kind":"wallet","implementation":"cdk-cli-wallet","version": proofstorm_core::CDK_VERSION,"config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}
         ],
         "links":[
             {"id":"mint-chain","kind":"chain_backend","from":"mint-lnd","to":"chain","binding":{"type":"chain","network":"regtest"}},
@@ -542,9 +542,9 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
     save(&directory, "published", &published)?;
     let locked = cell::lock_entry(&published, "cdk-cli-wallet")?;
     if locked.pointer("/build_provenance/commit_sha")
-        != Some(&json!("a056e0f0f69e94f431b1aeb90d883f18c61ea4c6"))
+        != Some(&json!("9f6d3a3734d7223d10b5553e3591d3f9d5c6c904"))
     {
-        bail!("wallet lock does not contain the CDK 0.18.1 source provenance");
+        bail!("wallet lock does not contain the current CDK source provenance");
     }
     crate::cell::apply(&mut client, &preview)?;
     // Always attempt normal cleanup after materialization, including failed gates.

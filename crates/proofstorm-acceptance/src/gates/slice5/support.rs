@@ -31,10 +31,10 @@ impl<'a> ControllerPause<'a> {
 
 impl Drop for ControllerPause<'_> {
     fn drop(&mut self) {
-        if self.armed {
-            if let Err(error) = self.kubectl.start_controller() {
-                eprintln!("Controller restoration failed; manual recovery required: {error:#}");
-            }
+        if self.armed
+            && let Err(error) = self.kubectl.start_controller()
+        {
+            eprintln!("Controller restoration failed; manual recovery required: {error:#}");
         }
     }
 }
@@ -158,10 +158,10 @@ impl<'a> CellCleanup<'a> {
 
 impl Drop for CellCleanup<'_> {
     fn drop(&mut self) {
-        if self.armed {
-            if let Err(error) = self.finish() {
-                eprintln!("Disposable cell cleanup failed: {error:#}");
-            }
+        if self.armed
+            && let Err(error) = self.finish()
+        {
+            eprintln!("Disposable cell cleanup failed: {error:#}");
         }
     }
 }

@@ -165,10 +165,10 @@ impl State {
                 self.dirty.extend(self.cells.keys().cloned());
             }
             CacheChange::Namespace(namespace) => {
-                if let Some(key) = namespace.strip_prefix("proofstorm-") {
-                    if self.cells.contains_key(key) {
-                        self.dirty.insert(key.into());
-                    }
+                if let Some(key) = namespace.strip_prefix("proofstorm-")
+                    && self.cells.contains_key(key)
+                {
+                    self.dirty.insert(key.into());
                 }
             }
             CacheChange::None => {}

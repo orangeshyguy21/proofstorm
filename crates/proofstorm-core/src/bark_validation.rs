@@ -188,19 +188,18 @@ fn validate_chain(
         BARK_SERVER => Dependency::Lightning.resolve(cell, component),
         _ => None,
     };
-    if let Some(downstream) = downstream {
-        if let Some(other_chain) = Dependency::Chain.resolve(cell, downstream) {
-            if chain.id != other_chain.id {
-                issue(
-                    issues,
-                    "bark_shared_chain_required",
-                    path,
-                    format!(
-                        "{:?} and {:?} must use the same Bitcoin component; found {:?} and {:?}",
-                        component.id, downstream.id, chain.id, other_chain.id
-                    ),
-                );
-            }
-        }
+    if let Some(downstream) = downstream
+        && let Some(other_chain) = Dependency::Chain.resolve(cell, downstream)
+        && chain.id != other_chain.id
+    {
+        issue(
+            issues,
+            "bark_shared_chain_required",
+            path,
+            format!(
+                "{:?} and {:?} must use the same Bitcoin component; found {:?} and {:?}",
+                component.id, downstream.id, chain.id, other_chain.id
+            ),
+        );
     }
 }

@@ -121,11 +121,11 @@ impl Cells {
             ));
         }
         let effective = proofstorm_core::resolve_effective_cell(spec, &catalog)
-            .map_err(|e| Error::problem("cell_invalid", e.to_string()))?;
+            .map_err(|e| Error::problem("cell_invalid", e.clone()))?;
         proofstorm_core::validate_new_cell_versions(&effective, &catalog)
             .map_err(|e| Error::problem("cell_invalid", e))?;
         proofstorm_core::resolve_lock(&effective, &catalog)
-            .map_err(|e| Error::problem("cell_invalid", e.to_string()))?;
+            .map_err(|e| Error::problem("cell_invalid", e.clone()))?;
         let digest = proofstorm_core::digest_json(spec);
         let cell = self
             .store

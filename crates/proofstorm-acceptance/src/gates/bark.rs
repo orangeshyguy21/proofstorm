@@ -37,8 +37,8 @@ fn document() -> Result<Value> {
         .context("mint component")?;
     mint["config"]["input_fee_ppk"] = json!(0);
     document["components"].as_array_mut().context("components")?.extend([
-        json!({"id":"peer","kind":"lightning","implementation":"cln","version":"26.06.7","config_version":"cln/26.06/v1","control":"cell","config":{}}),
-        json!({"id":"wallet","kind":"wallet","implementation":"cdk-cli-wallet","version":"0.18.1","config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}),
+        json!({"id":"peer","kind":"lightning","implementation":"cln","version": proofstorm_core::CLN_VERSION,"config_version":"cln/26.06/v1","control":"cell","config":{}}),
+        json!({"id":"wallet","kind":"wallet","implementation":"cdk-cli-wallet","version": proofstorm_core::CDK_VERSION,"config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}),
     ]);
     document["links"].as_array_mut().context("links")?.extend([
         json!({"id":"peer-chain","kind":"chain_backend","from":"peer","to":"chain","binding":{"type":"chain","network":"regtest"}}),
