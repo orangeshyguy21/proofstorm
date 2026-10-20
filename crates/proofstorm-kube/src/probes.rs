@@ -145,7 +145,7 @@ fn eligible_target_indexed(
             // DNS traffic may still be routed to a previous workload.
             return None;
         }
-        for endpoint in slice.endpoints.iter().flatten() {
+        for endpoint in &slice.endpoints {
             if endpoint
                 .conditions
                 .as_ref()

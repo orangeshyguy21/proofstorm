@@ -12,10 +12,10 @@
     },
     {
       "name": "kubectl",
-      "version": "v1.36.5",
-      "url": "https://dl.k8s.io/release/v1.36.5/bin/darwin/arm64/kubectl",
-      "sha256": "c5850a4a6b9469b26cce47c1ab456285f58e308283dcdf72b4ddda3db49b0ec0",
-      "executable_sha256": "c5850a4a6b9469b26cce47c1ab456285f58e308283dcdf72b4ddda3db49b0ec0",
+      "version": "v1.34.12",
+      "url": "https://dl.k8s.io/release/v1.34.12/bin/darwin/arm64/kubectl",
+      "sha256": "0c37a655d8495312c90554b61b9ff8400077e743ae2dc07008a529667a750db9",
+      "executable_sha256": "0c37a655d8495312c90554b61b9ff8400077e743ae2dc07008a529667a750db9",
       "archive_member": null
     },
     {

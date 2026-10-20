@@ -2507,7 +2507,7 @@ fn endpoint_readiness(slices: &[EndpointSlice]) -> (usize, usize) {
     let mut ready = 0;
     let mut total = 0;
     for slice in slices {
-        for endpoint in slice.endpoints.iter().flatten() {
+        for endpoint in &slice.endpoints {
             let addresses = endpoint.addresses.len();
             total += addresses;
             if endpoint
