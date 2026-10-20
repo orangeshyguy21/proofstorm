@@ -1,6 +1,6 @@
 //! Durable identity and pure runtime configuration for an isolated installation.
 //! Creating an installation does not contact Docker or Kubernetes.
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -267,17 +267,34 @@ impl Installation {
     }
 
     fn write_runtime_config(&self) -> Result<()> {
-        let bytes = serde_json::to_vec_pretty(&self.cluster_config())?;
+        let config = self.cluster_config();
+        let bytes = serde_json::to_vec_pretty(&config)?;
         let path = self.cluster_config_path();
         if path.try_exists()? {
-            ensure!(
-                fs::read(&path)? == bytes,
+            let saved = fs::read(&path)?;
+            if saved == bytes {
+                return Ok(());
+            }
+            if let Some(image) = superseded_k3s(&saved, &config) {
+                bail!(
+                    "this installation's cluster runs {image}, but this release requires {}; Kubernetes cannot be upgraded in place. Reset the installation to upgrade, which deletes its cells (in a checkout: storm dev reset --yes)",
+                    config["image"].as_str().unwrap_or_default()
+                );
+            }
+            bail!(
                 "generated k3d configuration differs from saved installation; refusing to overwrite it"
             );
-            return Ok(());
         }
         write_new_private(&path, &bytes)
     }
+}
+
+/// The saved k3s image, when a release pin change is the only difference.
+fn superseded_k3s(saved: &[u8], generated: &Value) -> Option<String> {
+    let mut saved: Value = serde_json::from_slice(saved).ok()?;
+    let image = saved.get("image")?.as_str()?.to_owned();
+    saved["image"] = generated["image"].clone();
+    (saved == *generated).then_some(image)
 }
 
 fn available_port(requested: Option<u16>) -> Result<TcpListener> {
