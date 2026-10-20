@@ -1,4 +1,5 @@
-//! Explicit checkout-only retirement and fresh state. Build caches are never deleted.
+//! Explicit runtime retirement and fresh state for a checkout or an installed release.
+//! Build caches and installed release files are never deleted.
 use crate::installation::Installation;
 use anyhow::{Context, Result, ensure};
 use rusqlite::Connection;
@@ -17,6 +18,28 @@ const JOURNAL: &str = "reset-pending.json";
 fn checkout(home: &Path) -> Option<&Path> {
     (home.file_name()? == "state" && home.parent()?.file_name()? == ".proofstorm-dev")
         .then(|| home.parent().unwrap())
+}
+
+/// An installed release keeps its default home beside `install.json`.
+fn installed(home: &Path) -> Option<&Path> {
+    let root = home.parent()?;
+    (home.file_name()? == "state"
+        && checkout(home).is_none()
+        && root.join("install.json").is_file())
+    .then_some(root)
+}
+
+/// Where reset keeps its journal, lock and archives, outside the home it replaces.
+fn reset_root(home: &Path) -> Option<&Path> {
+    checkout(home).or_else(|| installed(home))
+}
+
+fn resume_command(home: &Path) -> &'static str {
+    if checkout(home).is_some() {
+        "storm dev reset --yes"
+    } else {
+        "storm setup --recreate --yes"
+    }
 }
 
 fn regular(path: &Path) -> Result<()> {
@@ -38,38 +61,52 @@ fn directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn target(home: &Path) -> Result<PathBuf> {
-    ensure!(
-        home.is_absolute(),
-        "dev reset requires an absolute checkout home"
-    );
-    let work =
-        checkout(home).context("dev reset only supports a checkout's .proofstorm-dev/state")?;
+/// The checkout source for a checkout home; `None` for an installed release.
+fn target(home: &Path) -> Result<Option<PathBuf>> {
+    ensure!(home.is_absolute(), "reset requires an absolute home");
+    let work = reset_root(home).context(
+        "reset only supports a checkout's .proofstorm-dev/state or an installed release's default home",
+    )?;
     directory(work)?;
     ensure!(
         work.canonicalize()? == work,
-        "dev reset refuses linked checkout paths"
+        "reset refuses linked installation paths"
     );
-    let source = work.parent().context("checkout source missing")?;
-    let owner = work.join("owner.json");
-    regular(&owner)?;
-    let owner: Value = serde_json::from_slice(&fs::read(owner)?)?;
-    ensure!(
-        owner["source"] == json!(source)
-            && source.join("crates/proofstorm-app/Cargo.toml").is_file(),
-        "checkout ownership does not match reset target"
-    );
+    let source = if checkout(home).is_some() {
+        let source = work.parent().context("checkout source missing")?;
+        let owner = work.join("owner.json");
+        regular(&owner)?;
+        let owner: Value = serde_json::from_slice(&fs::read(owner)?)?;
+        ensure!(
+            owner["source"] == json!(source)
+                && source.join("crates/proofstorm-app/Cargo.toml").is_file(),
+            "checkout ownership does not match reset target"
+        );
+        Some(source.to_owned())
+    } else {
+        let owner = work.join("install.json");
+        regular(&owner)?;
+        let owner: Value = serde_json::from_slice(&fs::read(owner)?)?;
+        let prefix = owner["prefix"].as_str().map(Path::new);
+        ensure!(
+            owner["format_version"] == 1
+                && prefix.is_some_and(|prefix| prefix.join("lib/proofstorm") == work),
+            "installed release ownership does not match reset target"
+        );
+        None
+    };
     if home.try_exists()? {
         directory(home)?;
     }
-    Ok(source.into())
+    Ok(source)
 }
 
 pub(crate) fn check_pending(home: &Path) -> Result<()> {
-    if let Some(work) = checkout(home) {
+    if let Some(work) = reset_root(home) {
         ensure!(
             !work.join(JOURNAL).try_exists()?,
-            "development reset is unfinished; rerun storm dev reset --yes before setup or rebuilding"
+            "reset is unfinished; rerun {} before setup or rebuilding",
+            resume_command(home)
         );
     }
     Ok(())
@@ -82,6 +119,14 @@ pub(crate) fn checkout_guard(home: &Path, resetting: bool) -> Result<Option<Conn
         return Ok(None);
     };
     target(home)?;
+    let db = operation_lock(work)?;
+    if !resetting {
+        check_pending(home)?;
+    }
+    Ok(Some(db))
+}
+
+fn operation_lock(work: &Path) -> Result<Connection> {
     let path = work.join("operation-lock.sqlite3");
     if !path.try_exists()? {
         use std::os::unix::fs::OpenOptionsExt;
@@ -100,11 +145,8 @@ pub(crate) fn checkout_guard(home: &Path, resetting: bool) -> Result<Option<Conn
     let db = Connection::open(&path)?;
     db.busy_timeout(Duration::ZERO)?;
     db.execute_batch("BEGIN IMMEDIATE")
-        .context("another checkout operation is running; retry after it finishes")?;
-    if !resetting {
-        check_pending(home)?;
-    }
-    Ok(Some(db))
+        .context("another installation operation is running; retry after it finishes")?;
+    Ok(db)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -128,7 +170,9 @@ fn save(path: &Path, value: &impl Serialize) -> Result<()> {
 }
 
 fn read_journal(home: &Path) -> Result<Option<Journal>> {
-    let path = checkout(home).context("not a checkout home")?.join(JOURNAL);
+    let path = reset_root(home)
+        .context("not a resettable home")?
+        .join(JOURNAL);
     if !path.try_exists()? {
         return Ok(None);
     }
@@ -165,24 +209,32 @@ pub fn describe(home: &Path) -> Result<Value> {
     let installation = if let Some(journal) = read_journal(home)? {
         journal.previous
     } else {
-        ensure!(
-            crate::artifacts::reset_source(home)? == source,
-            "registered source differs from this checkout"
-        );
+        if let Some(source) = &source {
+            ensure!(
+                crate::artifacts::reset_source(home)? == *source,
+                "registered source differs from this checkout"
+            );
+        }
         Installation::load(home)?
     };
-    Ok(json!({"home":home,"installation_id":installation.id,"cluster":installation.cluster_name()}))
+    Ok(
+        json!({"home":home,"installation_id":installation.id,"cluster":installation.cluster_name(),
+        "kind":if source.is_some() { "checkout" } else { "installed" }}),
+    )
 }
 
 /// The caller must obtain explicit confirmation before entering this operation.
 pub async fn run(home: &Path, expected_id: &str, progress: &dyn Fn(&str)) -> Result<Value> {
     let source = target(home)?;
-    let _checkout = checkout_guard(home, true)?.context("checkout lock missing")?;
+    let work = reset_root(home).context("reset root missing")?;
+    let _operation = match source {
+        Some(_) => checkout_guard(home, true)?.context("checkout lock missing")?,
+        None => operation_lock(work)?,
+    };
     ensure!(
         describe(home)?["installation_id"] == expected_id,
         "reset target changed since confirmation; retry"
     );
-    let work = checkout(home).context("checkout home missing")?;
     let pending = work.join(JOURNAL);
     let mut journal = match read_journal(home)? {
         Some(journal) => journal,
@@ -195,36 +247,43 @@ pub async fn run(home: &Path, expected_id: &str, progress: &dyn Fn(&str)) -> Res
     };
     save(&pending, &journal)?;
     if !journal.runtime_removed {
-        progress("Stopping development GUI");
+        progress("Stopping GUI");
         crate::gui::stop(home).await?;
         let _state = Installation::lock_state(home, None)?;
         ensure!(
             Installation::load(home)? == journal.previous,
             "installation changed during reset"
         );
-        progress("Verifying development runtime ownership");
+        progress("Verifying runtime ownership");
         crate::bootstrap::teardown::prepare_dev_reset(&journal.previous)?;
         crate::bootstrap::teardown::retire_locked(&journal.previous, progress)?;
         journal.runtime_removed = true;
         save(&pending, &journal)?;
     }
-    progress("Creating fresh development state");
-    let archive = finish(home, &source, &mut journal, &pending)?;
+    progress("Creating fresh installation state");
+    let archive = finish(home, source.as_deref(), &mut journal, &pending)?;
     let next = journal
         .replacement
         .as_ref()
         .context("replacement installation missing")?;
     Ok(json!({"reset":true,"home":home,"installation_id":next.id,
         "previous_installation_id":journal.previous.id,"diagnostics":archive,
-        "runtime_started":false,"build_cache_preserved":true,"next":"Run storm setup, then storm gui. Reconnect coding agents after setup."}))
+        "runtime_started":false,"build_cache_preserved":true,"next":"Run storm setup, then storm gui. Reconnect coding agents after setup with storm agent configure."}))
 }
 
-fn finish(home: &Path, source: &Path, journal: &mut Journal, pending: &Path) -> Result<PathBuf> {
+fn finish(
+    home: &Path,
+    source: Option<&Path>,
+    journal: &mut Journal,
+    pending: &Path,
+) -> Result<PathBuf> {
     ensure!(
         journal.runtime_removed,
         "runtime must be removed before resetting state"
     );
-    let history = checkout(home).unwrap().join("reset-history");
+    let history = reset_root(home)
+        .context("reset root missing")?
+        .join("reset-history");
     if !history.try_exists()? {
         use std::os::unix::fs::DirBuilderExt;
         fs::DirBuilder::new().mode(0o700).create(&history)?;
@@ -273,7 +332,9 @@ fn finish(home: &Path, source: &Path, journal: &mut Journal, pending: &Path) -> 
         );
         fs::rename(tools, home.join("tools"))?;
     }
-    crate::artifacts::restore_after_reset(&archive, next, source, &journal.previous.id)?;
+    if let Some(source) = source {
+        crate::artifacts::restore_after_reset(&archive, next, source, &journal.previous.id)?;
+    }
     save(&archive.join("reset-complete.json"), journal)?;
     fs::remove_file(pending)?;
     Ok(archive)

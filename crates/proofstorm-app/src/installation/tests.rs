@@ -140,7 +140,11 @@ fn k3s_pin_changes_explain_the_reset_and_keep_the_saved_configuration() {
         "{error}"
     );
     assert!(error.contains(installation.cluster_config()["image"].as_str().unwrap()));
-    assert!(error.contains("storm dev reset --yes"), "{error}");
+    assert!(error.contains("storm setup --recreate"), "{error}");
+    assert_eq!(
+        saved_k3s_image(&installation.home).as_deref(),
+        Some("docker.io/rancher/k3s:v1.0.0-k3s1")
+    );
     assert_eq!(fs::read(installation.cluster_config_path()).unwrap(), saved);
 }
 

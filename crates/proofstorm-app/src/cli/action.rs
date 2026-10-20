@@ -54,6 +54,8 @@ pub enum Action {
         allow_development: bool,
         prepare_only: bool,
         prefetch_all: bool,
+        recreate: bool,
+        yes: bool,
     },
     Doctor {},
     InstallBundle {

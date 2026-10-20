@@ -423,9 +423,19 @@ pub fn effective_catalog(
     candidates: &[CandidateBuild],
 ) -> Result<CatalogResponse, String> {
     let mut entries = built_in.entries.clone();
+    // A candidate whose base release was retired is no longer offered; it must not
+    // make the rest of the workspace catalog unavailable.
     let mut successful = candidates
         .iter()
         .filter(|c| c.phase == CandidateBuildPhase::Succeeded)
+        .filter(|c| {
+            c.catalog_implementations().iter().all(|implementation| {
+                built_in
+                    .entries
+                    .iter()
+                    .any(|entry| entry.id == *implementation && entry.version == c.base_version)
+            })
+        })
         .collect::<Vec<_>>();
     successful.sort_by(|a, b| {
         a.implementation
@@ -741,6 +751,29 @@ mod tests {
         assert_eq!(entry.support_lifecycle, SupportLifecycle::Experimental);
         assert_eq!(entry.source, candidate.source());
         assert_eq!(entry.image, candidate.image.unwrap_or_default());
+    }
+
+    #[test]
+    fn candidates_on_retired_bases_drop_out_without_breaking_the_catalog() {
+        let current = succeeded_candidate();
+        let mut stale = succeeded_candidate();
+        stale.id = "stale".into();
+        stale.base_version = "0.0.1".into();
+        stale.version = Some("candidate-stale".into());
+        let catalog = effective_catalog(default_catalog(), &[stale, current.clone()])
+            .expect("a retired base must not fail the catalog");
+        assert!(
+            catalog
+                .entries
+                .iter()
+                .any(|entry| entry.version == current.version.clone().unwrap())
+        );
+        assert!(
+            !catalog
+                .entries
+                .iter()
+                .any(|entry| entry.version == "candidate-stale")
+        );
     }
 
     #[test]

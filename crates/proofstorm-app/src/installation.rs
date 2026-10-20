@@ -44,6 +44,9 @@ impl Installation {
     /// Serialize all future setup/reset mutations using this same guard.
     pub fn lock(home: &Path) -> Result<InstallationGuard> {
         let checkout = crate::dev_reset::checkout_guard(home, false)?;
+        if checkout.is_none() {
+            crate::dev_reset::check_pending(home)?;
+        }
         Self::lock_state(home, checkout)
     }
 
@@ -223,7 +226,7 @@ impl Installation {
         json!({
             "apiVersion": "k3d.io/v1alpha5", "kind": "Simple",
             "metadata": {"name": self.cluster_name()},
-            "image": format!("docker.io/rancher/k3s:{}", pinned_k3s()),
+            "image": k3s_image(pinned_k3s()),
             "servers": 1, "agents": 1,
             "kubeAPI": {"host": "127.0.0.1", "hostIP": "127.0.0.1", "hostPort": self.api_port.to_string()},
             "registries": {
@@ -277,7 +280,7 @@ impl Installation {
             }
             if let Some(image) = superseded_k3s(&saved, &config) {
                 bail!(
-                    "this installation's cluster runs {image}, but this release requires {}; Kubernetes cannot be upgraded in place. Reset the installation to upgrade, which deletes its cells (in a checkout: storm dev reset --yes)",
+                    "this installation's cluster runs {image}, but this release requires {}; Kubernetes cannot be upgraded in place. Run storm setup --recreate to replace the runtime, which deletes all cells",
                     config["image"].as_str().unwrap_or_default()
                 );
             }
@@ -287,6 +290,16 @@ impl Installation {
         }
         write_new_private(&path, &bytes)
     }
+}
+
+pub(crate) fn k3s_image(version: &str) -> String {
+    format!("docker.io/rancher/k3s:{version}")
+}
+
+/// The k3s image recorded when this installation's cluster was configured.
+pub(crate) fn saved_k3s_image(home: &Path) -> Option<String> {
+    let saved: Value = serde_json::from_slice(&fs::read(home.join("k3d.yaml")).ok()?).ok()?;
+    saved.get("image")?.as_str().map(str::to_owned)
 }
 
 /// The saved k3s image, when a release pin change is the only difference.

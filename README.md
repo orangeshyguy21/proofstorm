@@ -130,6 +130,8 @@ storm update
 ```
 
 Follow the reported steps to refresh the runtime and reconnect agents; the command only installs files.
+A release that changes the bundled Kubernetes version asks you to run
+`storm setup --recreate`, which deletes all cells and starts a fresh runtime.
 
 ## Development
 
