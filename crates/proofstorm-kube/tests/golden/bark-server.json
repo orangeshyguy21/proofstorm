@@ -73,6 +73,10 @@
     },
     "credentials": [],
     "effective_config": {
+      "config": {
+        "lightning_receive_base_fee_sat": 100,
+        "lightning_receive_ppm": 2000
+      },
       "implementation": "bark-server"
     },
     "execution_context": {
@@ -404,6 +408,14 @@
                       "value": "[{\"client_cert_path\":\"/cln-tls/client.pem\",\"client_key_path\":\"/cln-tls/client-key.pem\",\"hold_invoice\":{\"client_cert_path\":\"/hold-tls/client.pem\",\"client_key_path\":\"/hold-tls/client-key.pem\",\"server_cert_path\":\"/hold-tls/ca.pem\",\"uri\":\"https://cln:9292\"},\"priority\":0,\"server_cert_path\":\"/cln-tls/ca.pem\",\"uri\":\"https://cln:9988\"}]"
                     },
                     {
+                      "name": "BARK_SERVER__FEES__LIGHTNING_RECEIVE__BASE_FEE_SAT",
+                      "value": "100"
+                    },
+                    {
+                      "name": "BARK_SERVER__FEES__LIGHTNING_RECEIVE__PPM",
+                      "value": "2000"
+                    },
+                    {
                       "name": "BARK_SERVER__POSTGRES__PASSWORD",
                       "valueFrom": {
                         "secretKeyRef": {
@@ -639,6 +651,14 @@
                     {
                       "name": "BARK_SERVER__CLN_ARRAY",
                       "value": "[{\"client_cert_path\":\"/cln-tls/client.pem\",\"client_key_path\":\"/cln-tls/client-key.pem\",\"hold_invoice\":{\"client_cert_path\":\"/hold-tls/client.pem\",\"client_key_path\":\"/hold-tls/client-key.pem\",\"server_cert_path\":\"/hold-tls/ca.pem\",\"uri\":\"https://cln:9292\"},\"priority\":0,\"server_cert_path\":\"/cln-tls/ca.pem\",\"uri\":\"https://cln:9988\"}]"
+                    },
+                    {
+                      "name": "BARK_SERVER__FEES__LIGHTNING_RECEIVE__BASE_FEE_SAT",
+                      "value": "100"
+                    },
+                    {
+                      "name": "BARK_SERVER__FEES__LIGHTNING_RECEIVE__PPM",
+                      "value": "2000"
                     },
                     {
                       "name": "BARK_SERVER__POSTGRES__PASSWORD",

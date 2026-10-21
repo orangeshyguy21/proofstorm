@@ -11,7 +11,7 @@ mod processor;
 pub use processor::LdkServerProcessorConfig;
 #[path = "bark_backend.rs"]
 mod bark;
-pub use bark::BarkProcessorConfig;
+pub use bark::{BarkProcessorConfig, BarkServerConfig};
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
@@ -567,7 +567,7 @@ pub enum EffectiveComponentConfig {
     #[serde(rename = "cdk-bark-processor")]
     BarkProcessor(BarkProcessorConfig),
     #[serde(rename = "bark-server")]
-    BarkServer,
+    BarkServer(BarkServerConfig),
     #[serde(rename = "cln-hold")]
     ClnHold,
     #[serde(rename = "cdk")]
@@ -1046,7 +1046,7 @@ impl EffectiveComponentConfig {
             })),
             "cdk-ldk-server-processor" => processor::effective_config(component),
             "cdk-bark-processor" => bark::effective_config(component),
-            "bark-server" => Ok(Self::BarkServer),
+            "bark-server" => bark::server_effective_config(component),
             "cln-hold" => Ok(Self::ClnHold),
             "cdk" => Ok(Self::Cdk(cdk()?)),
             "nutshell" => Ok(Self::Nutshell(nutshell()?)),

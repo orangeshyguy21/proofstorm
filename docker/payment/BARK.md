@@ -202,7 +202,13 @@ payment/restart results on both native Linux architectures.
 The reserved `bark-server` and `cln-hold` backends now render separate StatefulSets
 with complete owned `/data` volumes. This integration fixes native tuning to the
 pinned upstream defaults and managed regtest settings; it accepts no arbitrary
-native configuration. Endpoints come from validated typed dependencies. Both
+native configuration. The one exception is the Lightning receive fee:
+`lightning_receive_base_fee_sat` (default 100) and `lightning_receive_ppm`
+(default 2000) on `bark-server` render as captaind's
+`BARK_SERVER__FEES__LIGHTNING_RECEIVE__*` overrides, so clients that require free
+receives can set both to 0. Board, offboard, refresh and Lightning send fees use
+expiry tables that captaind cannot read from the environment, so they stay
+upstream. Endpoints come from validated typed dependencies. Both
 components wait for Bitcoin RPC readiness before initializing fresh state.
 
 Bark uses the image's pinned configuration template with explicit environment

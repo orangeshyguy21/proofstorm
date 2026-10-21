@@ -32,8 +32,8 @@ mod wallet_builds;
 pub use update::{CellChanges, CellUpdatePlan, CellUpdateTarget};
 
 pub use backend::{
-    BackendContractRegistry, BarkProcessorConfig, BitcoinCoreConfig, CdkEmbeddedLightning,
-    CdkEmbeddedOnchain, CdkMintConfig, ClnConfig, ComponentBackendContract,
+    BackendContractRegistry, BarkProcessorConfig, BarkServerConfig, BitcoinCoreConfig,
+    CdkEmbeddedLightning, CdkEmbeddedOnchain, CdkMintConfig, ClnConfig, ComponentBackendContract,
     ComponentConditionReason, ComponentConditionState, ComponentConditionType,
     ComponentPlanContract, ComponentPlanInput, ConditionAggregationContract, ConfigDefault,
     ConfigFieldContract, ConfigRule, ConfigSettingClass, ConfigValueKind,

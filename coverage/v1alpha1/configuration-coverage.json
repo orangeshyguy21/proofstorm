@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:d78cce773c1b21de7de2cda0b6692f0fb4812aa475b49a63a7859143fc4a8205",
+  "catalog_digest": "sha256:129795ca99d49a746969fc2cfd4d88f2d284745ce62c3426c01b35357fead342",
   "entries": [
     {
       "implementation": "bark-server",
@@ -9,7 +9,7 @@
       "release_channel": "prerelease",
       "support_lifecycle": "experimental",
       "config_version": "bark-server/0.7/v1",
-      "config_schema_digest": "sha256:6de9e8f2d5c65a91bec8300bc8b30b695285b9a3f651f71dde879bc34be00485",
+      "config_schema_digest": "sha256:263de697bee1e504451754ff42315db8354e3f28a157730fc6ec707920124c01",
       "image": "proofstorm-registry.localhost:5000/bark-server@sha256:28f4d77cf99c94f70ca82d3f4e7660ffed7e8156010216761cb6b60123ef5205",
       "fields": {
         "backend_endpoint": {
@@ -22,6 +22,14 @@
         },
         "data_dir": {
           "classification": "runtime_policy",
+          "required": true
+        },
+        "lightning_receive_base_fee_sat": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "lightning_receive_ppm": {
+          "classification": "agent_authorable",
           "required": true
         },
         "native_settings": {
@@ -1060,7 +1068,7 @@
       "release_channel": "prerelease",
       "support_lifecycle": "experimental",
       "config_version": "cln-hold/26.06/v1",
-      "config_schema_digest": "sha256:abe44dc1e0cdb1a8c381fd9f3cf9edcba222bb4ccbbdfb0d62662bd7f4691bea",
+      "config_schema_digest": "sha256:3a2a6f670b44f8affadcb68d12f1a58ff0fc838c3195d599dc2719d2d44c5d98",
       "image": "proofstorm-registry.localhost:5000/cln-hold@sha256:695257c9caf510a870a57be0f1d47097baf2ca69fa6e1c6849a6d09b35eb463f",
       "fields": {
         "backend_endpoint": {

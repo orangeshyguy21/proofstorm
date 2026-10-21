@@ -142,6 +142,42 @@ fn bark_server_scopes_credentials_and_never_exposes_privileged_rpc() {
 }
 
 #[test]
+fn bark_server_fees_default_upstream_and_follow_authored_config() {
+    let mut plan = bark::stack_plan("bark-server");
+    assert_eq!(
+        plan.effective_config,
+        EffectiveComponentConfig::BarkServer(proofstorm_core::BarkServerConfig {
+            lightning_receive_base_fee_sat: 100,
+            lightning_receive_ppm: 2000,
+        })
+    );
+    plan.effective_config =
+        EffectiveComponentConfig::BarkServer(proofstorm_core::BarkServerConfig {
+            lightning_receive_base_fee_sat: 0,
+            lightning_receive_ppm: 0,
+        });
+    let pod = pod(&render_bark_server_component(&plan).unwrap());
+    for container in ["containers", "initContainers"] {
+        for key in [
+            "BARK_SERVER__FEES__LIGHTNING_RECEIVE__BASE_FEE_SAT",
+            "BARK_SERVER__FEES__LIGHTNING_RECEIVE__PPM",
+        ] {
+            let values: Vec<_> = pod[container]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|c| c["env"].as_array())
+                .flatten()
+                .filter(|value| value["name"] == key)
+                .map(|value| value["value"].clone())
+                .collect();
+            assert!(!values.is_empty(), "{container} {key}");
+            assert!(values.iter().all(|value| value == "0"), "{container} {key}");
+        }
+    }
+}
+
+#[test]
 fn cln_hold_owns_full_native_state_and_separate_ca_keys() {
     let plan = bark::stack_plan("cln-hold");
     let rendered = render_cln_hold_component(&plan).unwrap();
