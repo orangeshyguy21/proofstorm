@@ -229,102 +229,101 @@ pub async fn reconcile(
             )
             .await
         };
-        if let Ok(bytes) = reply {
-            if let Ok(mut receipt) = serde_json::from_slice::<Value>(&bytes) {
-                if receipt.get("supervisor_version") == Some(&json!("proofstorm-exec/v1")) {
-                    if request.private_payload.is_some() {
-                        match super::private_transfer::complete(action, context, &receipt).await {
-                            Ok(Some(transfer)) => {
-                                receipt["transfer"] = json!(transfer);
-                                if transfer.capture == proofstorm_transfer::CapturePhase::Ready
-                                    || transfer.receiver.receipt.is_some()
-                                {
-                                    let retired = !same_pod
-                                        || exec(
-                                            &pods,
-                                            &reference.pod,
-                                            &reference.container,
-                                            helper_args(reference, "retire"),
-                                            None,
-                                        )
-                                        .await
-                                        .is_ok();
-                                    receipt["private_files_retired"] = json!(retired);
-                                }
-                            }
-                            Ok(None) => (),
-                            Err(_) => {
-                                receipt["transfer_error"] = json!(
-                                    "private_custody_incomplete; reconcile original operation without replay"
-                                );
+        if let Ok(bytes) = reply
+            && let Ok(mut receipt) = serde_json::from_slice::<Value>(&bytes)
+        {
+            if receipt.get("supervisor_version") == Some(&json!("proofstorm-exec/v1")) {
+                if request.private_payload.is_some() {
+                    match super::private_transfer::complete(action, context, &receipt).await {
+                        Ok(Some(transfer)) => {
+                            receipt["transfer"] = json!(transfer);
+                            if transfer.capture == proofstorm_transfer::CapturePhase::Ready
+                                || transfer.receiver.receipt.is_some()
+                            {
+                                let retired = !same_pod
+                                    || exec(
+                                        &pods,
+                                        &reference.pod,
+                                        &reference.container,
+                                        helper_args(reference, "retire"),
+                                        None,
+                                    )
+                                    .await
+                                    .is_ok();
+                                receipt["private_files_retired"] = json!(retired);
                             }
                         }
+                        Ok(None) => (),
+                        Err(_) => {
+                            receipt["transfer_error"] = json!(
+                                "private_custody_incomplete; reconcile original operation without replay"
+                            );
+                        }
                     }
-                    let custody_pending = receipt.get("transfer_error").is_some()
-                        || receipt.get("private_files_retired") == Some(&json!(false));
-                    let started = action
-                        .status
-                        .as_ref()
-                        .and_then(|status| status.started_at_unix)
-                        .unwrap_or(action.spec.accepted_at_unix);
-                    if custody_pending
-                        && now_unix() <= started + i64::from(request.timeout_seconds) + 60
-                    {
-                        patch_action_status(
-                            action,
-                            context,
-                            ProofstormCellActionStatus {
-                                phase: ActionPhase::Running,
-                                native_execution: Some(reference.clone()),
-                                started_at_unix: Some(started),
-                                artifact: Some(status_object(cap_public_streams(receipt))),
-                                ..ProofstormCellActionStatus::default()
-                            },
-                        )
-                        .await?;
-                        return Ok(Action::requeue(Duration::from_secs(1)));
-                    }
-                    receipt = cap_public_streams(receipt);
-                    receipt["component"] = json!(request.component);
-                    receipt["kind"] = json!(component.kind);
-                    receipt["pod"] = json!(reference.pod);
-                    receipt["container"] = json!(reference.container);
-                    receipt["execution_context"] = json!("live_component");
-                    receipt["runner_digest"] = json!(reference.runner_digest);
-                    receipt["private_output_ref"] = json!(action.spec.operation_id);
-                    let clean = receipt.get("cleanup_verified") == Some(&json!(true));
-                    let cancelled = receipt.get("cancelled") == Some(&json!(true));
+                }
+                let custody_pending = receipt.get("transfer_error").is_some()
+                    || receipt.get("private_files_retired") == Some(&json!(false));
+                let started = action
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.started_at_unix)
+                    .unwrap_or(action.spec.accepted_at_unix);
+                if custody_pending
+                    && now_unix() <= started + i64::from(request.timeout_seconds) + 60
+                {
                     patch_action_status(
                         action,
                         context,
                         ProofstormCellActionStatus {
-                            phase: if !clean || custody_pending {
-                                ActionPhase::Failed
-                            } else if cancelled {
-                                ActionPhase::Cancelled
-                            } else {
-                                ActionPhase::Succeeded
-                            },
-                            observed_generation: action.metadata.generation,
+                            phase: ActionPhase::Running,
                             native_execution: Some(reference.clone()),
-                            started_at_unix: action
-                                .status
-                                .as_ref()
-                                .and_then(|status| status.started_at_unix),
-                            completed_at_unix: Some(now_unix()),
-                            artifact: Some(status_object(receipt)),
-                            error: (!clean).then(|| {
-                                status_object(json!({"code":"native_cleanup_unverified"}))
-                            }),
+                            started_at_unix: Some(started),
+                            artifact: Some(status_object(cap_public_streams(receipt))),
                             ..ProofstormCellActionStatus::default()
                         },
                     )
                     .await?;
-                    return Ok(Action::await_change());
+                    return Ok(Action::requeue(Duration::from_secs(1)));
                 }
-                if receipt.get("runner_error").is_some() {
-                    return patch_action_failure(action, context, "native_runner_failed", "supervisor did not establish verified process cleanup; inspect the cell before retrying").await;
-                }
+                receipt = cap_public_streams(receipt);
+                receipt["component"] = json!(request.component);
+                receipt["kind"] = json!(component.kind);
+                receipt["pod"] = json!(reference.pod);
+                receipt["container"] = json!(reference.container);
+                receipt["execution_context"] = json!("live_component");
+                receipt["runner_digest"] = json!(reference.runner_digest);
+                receipt["private_output_ref"] = json!(action.spec.operation_id);
+                let clean = receipt.get("cleanup_verified") == Some(&json!(true));
+                let cancelled = receipt.get("cancelled") == Some(&json!(true));
+                patch_action_status(
+                    action,
+                    context,
+                    ProofstormCellActionStatus {
+                        phase: if !clean || custody_pending {
+                            ActionPhase::Failed
+                        } else if cancelled {
+                            ActionPhase::Cancelled
+                        } else {
+                            ActionPhase::Succeeded
+                        },
+                        observed_generation: action.metadata.generation,
+                        native_execution: Some(reference.clone()),
+                        started_at_unix: action
+                            .status
+                            .as_ref()
+                            .and_then(|status| status.started_at_unix),
+                        completed_at_unix: Some(now_unix()),
+                        artifact: Some(status_object(receipt)),
+                        error: (!clean)
+                            .then(|| status_object(json!({"code":"native_cleanup_unverified"}))),
+                        ..ProofstormCellActionStatus::default()
+                    },
+                )
+                .await?;
+                return Ok(Action::await_change());
+            }
+            if receipt.get("runner_error").is_some() {
+                return patch_action_failure(action, context, "native_runner_failed", "supervisor did not establish verified process cleanup; inspect the cell before retrying").await;
             }
         }
         let started = action

@@ -231,12 +231,11 @@ fn file_request(root: &Path, request: &FileRequest) -> Result<Value> {
             file.seek(SeekFrom::Start(*offset))?;
             let mut bytes = Vec::new();
             file.take(READ_BYTES).read_to_end(&mut bytes)?;
-            if let Err(error) = std::str::from_utf8(&bytes) {
-                if error.error_len().is_none()
-                    && offset.saturating_add(bytes.len() as u64) < metadata.len()
-                {
-                    bytes.truncate(error.valid_up_to());
-                }
+            if let Err(error) = std::str::from_utf8(&bytes)
+                && error.error_len().is_none()
+                && offset.saturating_add(bytes.len() as u64) < metadata.len()
+            {
+                bytes.truncate(error.valid_up_to());
             }
             let next = offset.saturating_add(bytes.len() as u64);
             Ok(

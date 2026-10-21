@@ -254,10 +254,9 @@ fn create_parents(path: &Path) -> Result<()> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
+        && !parent.try_exists()?
     {
-        if !parent.try_exists()? {
-            create_parents(parent)?;
-        }
+        create_parents(parent)?;
     }
     directory(path)
 }
@@ -303,22 +302,21 @@ fn install_short_command(
     for candidate in
         std::iter::once(path.clone()).chain(search.into_iter().map(|dir| dir.join("storm")))
     {
-        if let Ok(metadata) = fs::symlink_metadata(&candidate) {
-            if !metadata.is_file()
+        if let Ok(metadata) = fs::symlink_metadata(&candidate)
+            && (!metadata.is_file()
                 || metadata.len() != expected.len() as u64
-                || fs::read(&candidate).ok().as_deref() != Some(expected.as_bytes())
-            {
-                return Ok((None, Some(candidate)));
-            }
+                || fs::read(&candidate).ok().as_deref() != Some(expected.as_bytes()))
+        {
+            return Ok((None, Some(candidate)));
         }
     }
-    if fs::symlink_metadata(&path).is_err() {
-        if let Err(error) = write_new(&path, expected.as_bytes(), true) {
-            if fs::symlink_metadata(&path).is_ok() {
-                return Ok((None, Some(path)));
-            }
-            return Err(error);
+    if fs::symlink_metadata(&path).is_err()
+        && let Err(error) = write_new(&path, expected.as_bytes(), true)
+    {
+        if fs::symlink_metadata(&path).is_ok() {
+            return Ok((None, Some(path)));
         }
+        return Err(error);
     }
     Ok((Some(path), None))
 }

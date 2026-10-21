@@ -212,10 +212,9 @@ pub fn verify_with_exclusions(before: &Value, after: &Value, excluded: &Value) -
                 if let Some(container) = result["containers"]
                     .get_mut(id)
                     .and_then(Value::as_object_mut)
+                    && let Some(value) = container.get_mut(field)
                 {
-                    if let Some(value) = container.get_mut(field) {
-                        *value = Value::Null;
-                    }
+                    *value = Value::Null;
                 }
             }
         }

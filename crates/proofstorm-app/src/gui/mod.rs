@@ -162,17 +162,17 @@ async fn ensure_service(
     progress: &dyn Fn(&str),
 ) -> Result<(Record, bool)> {
     let home = &verified.installation.home;
-    if let Some(record) = state::record(home, &verified.installation.id)?.filter(|r| r.port != 0) {
-        if health(&record).await.unwrap_or(false) {
-            if record.executable == verified.executable
-                && record.build_sha256.as_deref() == Some(&verified.executable_sha256)
-            {
-                progress("Reusing running GUI");
-                return Ok((record, true));
-            }
-            progress("Restarting GUI with the current build");
-            stop_record(home, &record).await?;
+    if let Some(record) = state::record(home, &verified.installation.id)?.filter(|r| r.port != 0)
+        && health(&record).await.unwrap_or(false)
+    {
+        if record.executable == verified.executable
+            && record.build_sha256.as_deref() == Some(&verified.executable_sha256)
+        {
+            progress("Reusing running GUI");
+            return Ok((record, true));
         }
+        progress("Restarting GUI with the current build");
+        stop_record(home, &record).await?;
     }
     Ok((start(verified, progress).await?, false))
 }
@@ -229,11 +229,11 @@ async fn start(verified: &crate::artifacts::Verified, progress: &dyn Fn(&str)) -
         // allowlisted status lines are displayed; error details stay private until failure.
         let mut bytes = [0_u8; 8192];
         let count = startup_errors.read_at(&mut bytes, 0)?;
-        if let Some(label) = startup_progress(&bytes[..count]) {
-            if last_progress != Some(label) {
-                progress(label);
-                last_progress = Some(label);
-            }
+        if let Some(label) = startup_progress(&bytes[..count])
+            && last_progress != Some(label)
+        {
+            progress(label);
+            last_progress = Some(label);
         }
         if child.try_wait()?.is_some() {
             startup_errors.rewind()?;

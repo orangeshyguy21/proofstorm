@@ -122,14 +122,14 @@ mod tests {
     fn cdk_audit_does_not_backfill_the_window_below_eighteen() {
         let mut releases: Vec<Release> = serde_json::from_value(json!([
             {"tag_name":"v0.17.7","draft":false,"prerelease":false},
-            {"tag_name":"v0.18.1","draft":false,"prerelease":false}
+            {"tag_name":"v0.18.2","draft":false,"prerelease":false}
         ]))
         .unwrap();
         for implementation in ["cdk", "cdk-cli-wallet"] {
             let result = proposal(implementation, &releases, default_catalog());
             assert_eq!(result["minimum_release"], "0.18.0");
             assert_eq!(result["family_limit"], 2);
-            assert_eq!(result["proposed_versions"], json!(["0.18.1"]));
+            assert_eq!(result["proposed_versions"], json!(["0.18.2"]));
             assert_eq!(result["qualify"], json!([]));
             assert_eq!(result["retire_after_qualification"], json!([]));
         }
@@ -139,7 +139,7 @@ mod tests {
             prerelease: false,
         });
         let result = proposal("cdk", &releases, default_catalog());
-        assert_eq!(result["proposed_versions"], json!(["0.19.0", "0.18.1"]));
+        assert_eq!(result["proposed_versions"], json!(["0.19.0", "0.18.2"]));
         assert_eq!(result["qualify"], json!(["0.19.0"]));
         assert_eq!(result["retire_after_qualification"], json!([]));
     }
@@ -151,14 +151,14 @@ mod tests {
             {"tag_name":"v0.22.0-beta","draft":false,"prerelease":true},
             {"tag_name":"v0.23.0-beta.rc1","draft":false,"prerelease":false},
             {"tag_name":"v0.19.3-beta","draft":false,"prerelease":false},
-            {"tag_name":"v0.21.3-beta","draft":false,"prerelease":false},
-            {"tag_name":"v0.20.4-beta","draft":false,"prerelease":false}
+            {"tag_name":"v0.21.4-beta","draft":false,"prerelease":false},
+            {"tag_name":"v0.20.5-beta","draft":false,"prerelease":false}
         ]))
         .unwrap();
         let result = proposal("lnd", &releases, default_catalog());
         assert_eq!(
             result["proposed_versions"],
-            json!(["0.21.3-beta", "0.20.4-beta", "0.19.3-beta"])
+            json!(["0.21.4-beta", "0.20.5-beta", "0.19.3-beta"])
         );
         assert_eq!(result["qualify"], json!(["0.19.3-beta"]));
         assert_eq!(result["retire_after_qualification"], json!([]));

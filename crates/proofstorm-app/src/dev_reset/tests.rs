@@ -93,7 +93,7 @@ fn replacement_preserves_caches_archives_old_state_and_can_resume_after_rename()
     fs::rename(&fixture.home, history.join(&fixture.installation.id)).unwrap();
     assert!(describe(&fixture.home).is_ok());
     assert!(check_pending(&fixture.home).is_err());
-    let archive = finish(&fixture.home, &fixture.source, &mut journal, &pending).unwrap();
+    let archive = finish(&fixture.home, Some(&fixture.source), &mut journal, &pending).unwrap();
     let next = Installation::load(&fixture.home).unwrap();
     assert_ne!(next.id, fixture.installation.id);
     assert!(!next.database().exists());
@@ -117,7 +117,7 @@ fn replacement_preserves_caches_archives_old_state_and_can_resume_after_rename()
     assert!(!pending.exists());
     // Crash after activation/registration but before dropping the pending marker.
     save(&pending, &journal).unwrap();
-    finish(&fixture.home, &fixture.source, &mut journal, &pending).unwrap();
+    finish(&fixture.home, Some(&fixture.source), &mut journal, &pending).unwrap();
     assert_eq!(Installation::load(&fixture.home).unwrap(), next);
 }
 
@@ -127,7 +127,7 @@ fn reset_refuses_symlinks_foreign_archives_and_unremoved_runtime() {
     let pending = fixture.source.join(".proofstorm-dev").join(JOURNAL);
     let mut journal = fixture.journal();
     journal.runtime_removed = false;
-    assert!(finish(&fixture.home, &fixture.source, &mut journal, &pending).is_err());
+    assert!(finish(&fixture.home, Some(&fixture.source), &mut journal, &pending).is_err());
     journal.runtime_removed = true;
     let outside = fixture.source.join("outside");
     fs::create_dir(&outside).unwrap();
@@ -136,7 +136,7 @@ fn reset_refuses_symlinks_foreign_archives_and_unremoved_runtime() {
         fixture.source.join(".proofstorm-dev/reset-history"),
     )
     .unwrap();
-    assert!(finish(&fixture.home, &fixture.source, &mut journal, &pending).is_err());
+    assert!(finish(&fixture.home, Some(&fixture.source), &mut journal, &pending).is_err());
     assert!(outside.read_dir().unwrap().next().is_none());
     assert!(fixture.home.exists());
     fs::set_permissions(
@@ -158,4 +158,64 @@ fn reset_barrier_blocks_setup_and_gui_until_recovery_and_survives_archiving() {
     assert!(Installation::lock(&fixture.home).is_err());
     assert!(crate::artifacts::check_checkout(&fixture.home).is_err());
     assert!(checkout_guard(&fixture.home, true).unwrap().is_some());
+}
+
+#[test]
+fn installed_release_resets_beside_its_home_and_blocks_setup_until_finished() {
+    let root = tempfile::tempdir().unwrap();
+    let prefix = root.path().canonicalize().unwrap().join("prefix");
+    let managed = prefix.join("lib/proofstorm");
+    fs::create_dir_all(&managed).unwrap();
+    save(
+        &managed.join("install.json"),
+        &json!({"format_version":1,"prefix":prefix}),
+    )
+    .unwrap();
+    let home = managed.join("state");
+    let installation = Installation::initialize(&home, None, None).unwrap();
+    fs::create_dir(home.join("tools")).unwrap();
+    fs::write(home.join("tools/helper"), "pinned tool").unwrap();
+    fs::write(installation.database(), "old database fixture").unwrap();
+    let target = describe(&home).unwrap();
+    assert_eq!(target["kind"], "installed");
+    assert_eq!(target["installation_id"], installation.id);
+
+    let pending = managed.join(JOURNAL);
+    let mut journal = Journal {
+        format_version: 1,
+        previous: installation.clone(),
+        replacement: None,
+        runtime_removed: true,
+    };
+    save(&pending, &journal).unwrap();
+    let blocked = Installation::lock(&home).err().unwrap().to_string();
+    assert!(
+        blocked.contains("storm setup --recreate --yes"),
+        "{blocked}"
+    );
+    let archive = finish(&home, None, &mut journal, &pending).unwrap();
+    assert_eq!(
+        archive,
+        managed.join("reset-history").join(&installation.id)
+    );
+    let next = Installation::load(&home).unwrap();
+    assert_ne!(next.id, installation.id);
+    assert!(!next.database().exists());
+    assert_eq!(
+        fs::read_to_string(archive.join("proofstorm.sqlite3")).unwrap(),
+        "old database fixture"
+    );
+    assert_eq!(
+        fs::read_to_string(home.join("tools/helper")).unwrap(),
+        "pinned tool"
+    );
+    assert!(!pending.exists());
+    drop(Installation::lock(&home).unwrap());
+
+    save(
+        &managed.join("install.json"),
+        &json!({"format_version":1,"prefix":"/elsewhere"}),
+    )
+    .unwrap();
+    assert!(describe(&home).is_err());
 }

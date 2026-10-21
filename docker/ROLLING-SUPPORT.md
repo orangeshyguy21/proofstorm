@@ -44,25 +44,30 @@ The added preparation recipes are Bitcoin Core 29.4/30.3 and Nutshell 0.21.0.
 Their checksums, source identities, and recipe digests
 are recorded beside the recipes. LND and CLN use upstream immutable images.
 Preparation recipes are intentionally separate from the installed support list.
-CDK adds versioned 0.18.1 mint and CLI wallet recipes. The 0.18.0 recipes
-and existing unversioned receipt interpretation remain unchanged.
+CDK adds versioned 0.18.1 and 0.18.2 mint and CLI wallet recipes. The 0.18.0
+recipes and existing unversioned receipt interpretation remain unchanged.
 
-The release inventory reviewed on 2026-09-16, with CDK refreshed on 2026-09-18
-and the CDK support floor applied:
+The release inventory reviewed on 2026-09-16, with CDK refreshed on 2026-09-18,
+Lightning and CDK patches refreshed on 2026-10-19, and the CDK support floor applied:
 
 | Implementation | Release families to qualify/retain |
 | --- | --- |
 | Bitcoin Core | 31.1, 30.3, 29.4 |
-| Core Lightning | 26.06.7, 26.04.1, 25.12.1 |
-| LND | 0.21.3-beta, 0.20.4-beta, 0.19.3-beta |
+| Core Lightning | 26.06.9, 26.04.1, 25.12.1 |
+| LND | 0.21.4-beta, 0.20.5-beta, 0.19.3-beta |
 | Nutshell mint and wallet | 0.21.0, 0.20.3 |
-| CDK mint presets and CLI wallet | 0.18.1; add a second family when 0.19 qualifies |
+| CDK mint presets and CLI wallet | 0.18.2; add a second family when 0.19 qualifies |
 
-The catalog now selects the corrected CLN 26.06.7 artifact. Upstream
-[corrected its published images](https://github.com/ElementsProject/lightning/releases/tag/v26.06.7),
-and the corrected multi-platform digest is
-`sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4`.
-Installed-component qualification and candidate compatibility use that same pin.
+The catalog selects CLN 26.06.9 and LND 0.21.4-beta and 0.20.5-beta. CLN 26.06.8
+and 26.06.9 are upstream security point releases; the LND patches are bug fixes
+without database migrations. CLN 26.06.7, LND 0.21.3-beta and LND 0.20.4-beta are
+deprecated and retained for existing locks. Mint compatibility lists are qualification
+claims, so they name only the new patches. Editing an existing cell re-resolves its
+lock, so a cell on a deprecated patch must be recreated before it can be edited.
+The CLN 26.06.9 multi-platform digest is
+`sha256:de74289ddcccb68cd60543b08b2b8594002d819125d200492e17a95166d56577`.
+Installed-component qualification and candidate compatibility use the same pins.
+`cln-hold` is still built on CLN 26.06.7 until its own native rebuild and publication.
 Historical release receipts and saved locks remain records of their original artifacts.
 
 ## Qualification and promotion
@@ -118,8 +123,8 @@ Record evidence for each claimed edge. Emulated tests are useful preparation,
 but do not establish native AMD64 qualification. Fresh-version support also does
 not establish an in-place database migration or downgrade path.
 
-The catalog selects CDK 0.18.1 for all three mint presets and the CLI wallet.
-CDK 0.18.0 entries are deprecated and retained for existing locks. Nutshell
+The catalog selects CDK 0.18.2 for all three mint presets and the CLI wallet.
+CDK 0.18.1 and 0.18.0 entries are deprecated and retained for existing locks. Nutshell
 0.21.0 is preferred for both mint and wallet, with 0.20.3 still supported.
 Both Nutshell releases share the configuration schema; the 0.21 mint selects
 its versioned action contract for native version checking and CLN `xpay`.
@@ -128,6 +133,9 @@ records exact artifacts and completed checks. Native AMD64 and the remaining
 managed-cell storage, authentication, and CDK backend gates still require
 qualification before release.
 
+The current CDK, LND and CLN releases are the `CDK_VERSION`, `LND_VERSION` and
+`CLN_VERSION` constants in `proofstorm-core`; catalog compatibility lists, candidate
+baselines and acceptance gates read them, so a patch bump changes them in one place.
 When promoting subsequent versions, add the exact image/provenance and contracts to the catalog,
 make the newest validated family preferred, and retire the oldest in the same
 reviewed release change. Regenerate coverage, schemas and affected render

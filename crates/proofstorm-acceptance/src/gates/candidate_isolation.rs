@@ -66,7 +66,7 @@ fn check_mounts(context: &GateContext, pod: &Value) -> Result<()> {
 }
 
 fn passive_completion(context: &GateContext, client: &mut McpClient) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(1860);
+    let deadline = Instant::now() + Duration::from_mins(31);
     let mut previous = Value::Null;
     while Instant::now() < deadline {
         // This directory reads durable state only. The GUI observer must collect

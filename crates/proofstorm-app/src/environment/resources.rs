@@ -21,15 +21,14 @@ pub(super) fn include_runtime(
     let Some(resources) = resources else {
         return;
     };
-    if let Some((replicas, observation)) = prober {
-        if let Some(workload) = resources
+    if let Some((replicas, observation)) = prober
+        && let Some(workload) = resources
             .workloads
             .iter_mut()
             .find(|w| w.name == PROTOCOL_PROBER_NAME)
-        {
-            workload.replicas = Some(replicas);
-            workload.observation = Some(observation);
-        }
+    {
+        workload.replicas = Some(replicas);
+        workload.observation = Some(observation);
     }
     resources.retained_storage = resource
         .and_then(|r| r.status.as_ref())

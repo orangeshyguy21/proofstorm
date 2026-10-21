@@ -342,13 +342,12 @@ fn encoded_page<T: Serialize>(
 
 fn project_cell(mut value: Value, fields: &[String]) -> Value {
     if fields.is_empty() {
-        if let Some(runtime) = value.get_mut("runtime").and_then(Value::as_object_mut) {
-            if runtime
+        if let Some(runtime) = value.get_mut("runtime").and_then(Value::as_object_mut)
+            && runtime
                 .remove("message")
                 .is_some_and(|message| !message.is_null())
-            {
-                runtime.insert("message_omitted".into(), json!(true));
-            }
+        {
+            runtime.insert("message_omitted".into(), json!(true));
         }
         if value["owner"]
             .as_str()
@@ -412,19 +411,18 @@ fn bound_directory(
                 .get_mut(section)
                 .and_then(|page| page.get_mut("items"))
                 .and_then(Value::as_array_mut)
+                && entries.len() > query.minimum_items(section)
             {
-                if entries.len() > query.minimum_items(section) {
-                    entries.pop();
-                    let last = entries.last().unwrap();
-                    let id = if section == "sessions" {
-                        &last["session"]["id"]
-                    } else {
-                        &last["id"]
-                    };
-                    let next = query.cursor_for(section, context, id.as_str().unwrap());
-                    cell[section]["next_cursor"] = json!(next);
-                    shortened = true;
-                }
+                entries.pop();
+                let last = entries.last().unwrap();
+                let id = if section == "sessions" {
+                    &last["session"]["id"]
+                } else {
+                    &last["id"]
+                };
+                let next = query.cursor_for(section, context, id.as_str().unwrap());
+                cell[section]["next_cursor"] = json!(next);
+                shortened = true;
             }
         }
         if !shortened {

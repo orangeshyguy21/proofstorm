@@ -81,14 +81,13 @@ impl PrivateIo {
                     .bytes()
                     .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) =>
             {
-                if let InputBinding::Argv { index } = input {
-                    if *bytes > MAX_PRIVATE_ARG_BYTES
+                if let InputBinding::Argv { index } = input
+                    && (*bytes > MAX_PRIVATE_ARG_BYTES
                         || *index == 0
                         || command.argv.get(*index as usize).map(String::as_str)
-                            != Some(PRIVATE_ARG)
-                    {
-                        return Err("private argv binding invalid or too large");
-                    }
+                            != Some(PRIVATE_ARG))
+                {
+                    return Err("private argv binding invalid or too large");
                 }
                 Ok(())
             }

@@ -34,7 +34,7 @@ pub(super) fn run(
     kubectl.apply_stdin(
         &json!({"apiVersion":"v1","kind":"ResourceQuota",
         "metadata":{"name":"recovery-hold","namespace":namespace},
-        "spec":{"hard":{"pods":count.to_string()}}})
+        "spec":{"hard":{"pods":count.clone()}}})
         .to_string(),
     )?;
     // Wait for quota accounting before admitting the Job; existing pods remain.

@@ -423,9 +423,19 @@ pub fn effective_catalog(
     candidates: &[CandidateBuild],
 ) -> Result<CatalogResponse, String> {
     let mut entries = built_in.entries.clone();
+    // A candidate whose base release was retired is no longer offered; it must not
+    // make the rest of the workspace catalog unavailable.
     let mut successful = candidates
         .iter()
         .filter(|c| c.phase == CandidateBuildPhase::Succeeded)
+        .filter(|c| {
+            c.catalog_implementations().iter().all(|implementation| {
+                built_in
+                    .entries
+                    .iter()
+                    .any(|entry| entry.id == *implementation && entry.version == c.base_version)
+            })
+        })
         .collect::<Vec<_>>();
     successful.sort_by(|a, b| {
         a.implementation
@@ -720,7 +730,7 @@ mod tests {
     #[test]
     fn successful_candidate_is_an_exact_non_preferred_catalog_version() {
         let candidate = succeeded_candidate();
-        let catalog = effective_catalog(default_catalog(), &[candidate.clone()])
+        let catalog = effective_catalog(default_catalog(), std::slice::from_ref(&candidate))
             .expect("merge candidate catalog");
         let support = catalog
             .implementations
@@ -744,11 +754,34 @@ mod tests {
     }
 
     #[test]
+    fn candidates_on_retired_bases_drop_out_without_breaking_the_catalog() {
+        let current = succeeded_candidate();
+        let mut stale = succeeded_candidate();
+        stale.id = "stale".into();
+        stale.base_version = "0.0.1".into();
+        stale.version = Some("candidate-stale".into());
+        let catalog = effective_catalog(default_catalog(), &[stale, current.clone()])
+            .expect("a retired base must not fail the catalog");
+        assert!(
+            catalog
+                .entries
+                .iter()
+                .any(|entry| entry.version == current.version.clone().unwrap())
+        );
+        assert!(
+            !catalog
+                .entries
+                .iter()
+                .any(|entry| entry.version == "candidate-stale")
+        );
+    }
+
+    #[test]
     fn candidate_backend_substitutes_for_its_compatible_base_version() {
         let mut candidate = succeeded_candidate();
         candidate.id = "lnd-pr-999".into();
         candidate.implementation = "lnd".into();
-        candidate.base_version = "0.21.3-beta".into();
+        candidate.base_version = "0.21.4-beta".into();
         candidate.version = Some("candidate-pr999-aabbccdd".into());
         candidate.pull_request_url = "https://github.com/lightningnetwork/lnd/pull/999".into();
         candidate.repository = Some("https://github.com/lightningnetwork/lnd.git".into());

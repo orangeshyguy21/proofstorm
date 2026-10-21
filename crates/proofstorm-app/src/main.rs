@@ -94,7 +94,6 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     if let Command::DevReset { yes } = command {
-        use std::io::{IsTerminal, Write};
         let home = args
             .home
             .as_ref()
@@ -109,22 +108,12 @@ async fn main() -> Result<()> {
             "dev reset only uses the checkout's private installation; remove runtime overrides"
         );
         let target = proofstorm_app::dev_reset::describe(home)?;
-        if !yes {
-            anyhow::ensure!(
-                !args.json && std::io::stdin().is_terminal(),
-                "dev reset deletes all checkout cells and runtime storage; rerun with --yes to confirm"
-            );
-            eprintln!(
-                "Delete all cells and runtime storage for {}?\nBuild caches and other installations are preserved. Close coding-agent sessions first.\nType reset to confirm:",
-                home.display()
-            );
-            std::io::stderr().flush()?;
-            let mut answer = String::new();
-            std::io::stdin().read_line(&mut answer)?;
-            if answer.trim() != "reset" {
-                eprintln!("Reset cancelled. Nothing changed.");
-                return Ok(());
-            }
+        anyhow::ensure!(
+            target["kind"] == "checkout",
+            "dev reset requires a checkout; installed releases use storm setup --recreate"
+        );
+        if !confirm_reset(home, yes, args.json, "dev reset", "Build caches")? {
+            return Ok(());
         }
         anyhow::ensure!(
             proofstorm_app::dev_reset::describe(home)? == target,
@@ -216,10 +205,9 @@ async fn main() -> Result<()> {
             | Command::Gui { .. }
             | Command::GuiStart { .. }
             | Command::GuiServe { .. }
-    ) {
-        if let Some(home) = &args.home {
-            proofstorm_app::artifacts::check_checkout(home)?;
-        }
+    ) && let Some(home) = &args.home
+    {
+        proofstorm_app::artifacts::check_checkout(home)?;
     }
     if matches!(
         command,
@@ -374,8 +362,37 @@ async fn main() -> Result<()> {
             allow_development,
             prepare_only,
             prefetch_all,
+            recreate,
+            yes,
         } = command
         {
+            if recreate {
+                let target = proofstorm_app::dev_reset::describe(home)?;
+                output.stop();
+                if !confirm_reset(
+                    home,
+                    yes,
+                    args.json,
+                    "setup --recreate",
+                    "Installed release files",
+                )? {
+                    return Ok(());
+                }
+                anyhow::ensure!(
+                    proofstorm_app::dev_reset::describe(home)? == target,
+                    "reset target changed during confirmation; retry"
+                );
+                output =
+                    cli_output::Output::new(args.json, "setup", Some("Recreating installation"));
+                proofstorm_app::dev_reset::run(
+                    home,
+                    target["installation_id"]
+                        .as_str()
+                        .context("reset identity missing")?,
+                    &|label| output.update(label),
+                )
+                .await?;
+            }
             let bundle = proofstorm_app::artifacts::root(home)?;
             let result = proofstorm_app::bootstrap::setup_with_progress(
                 home,
@@ -457,10 +474,10 @@ async fn main() -> Result<()> {
             &serde_json::json!({"database":environment.database,"workspace":args.workspace,"principal":args.principal,"context":environment.context,"installation":environment.installation,"kubeconfig":environment.kubeconfig,"capabilities":store.capabilities(&args.workspace,&args.principal)?}),
         );
     }
-    if matches!(command, Command::Result { .. }) {
-        if let Command::Result { id } = command {
-            return output.show(&store.operation(&args.workspace, &args.principal, &id)?);
-        }
+    if matches!(command, Command::Result { .. })
+        && let Command::Result { id } = command
+    {
+        return output.show(&store.operation(&args.workspace, &args.principal, &id)?);
     }
     if let Command::OpsList {
         name,
@@ -702,6 +719,36 @@ fn new_request_id() -> Result<String> {
     }
     Ok(id)
 }
+/// Ask before deleting an installation's cells and runtime storage.
+fn confirm_reset(
+    home: &std::path::Path,
+    yes: bool,
+    json: bool,
+    command: &str,
+    preserved: &str,
+) -> Result<bool> {
+    use std::io::{IsTerminal, Write};
+    if yes {
+        return Ok(true);
+    }
+    anyhow::ensure!(
+        !json && std::io::stdin().is_terminal(),
+        "{command} deletes all cells and runtime storage; rerun with --yes to confirm"
+    );
+    eprintln!(
+        "Delete all cells and runtime storage for {}?\n{preserved} and other installations are preserved. Close coding-agent sessions first.\nType reset to confirm:",
+        home.display()
+    );
+    std::io::stderr().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    if answer.trim() != "reset" {
+        eprintln!("Reset cancelled. Nothing changed.");
+        return Ok(false);
+    }
+    Ok(true)
+}
+
 fn print(value: &impl serde::Serialize) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())

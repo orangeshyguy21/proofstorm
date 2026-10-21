@@ -32,8 +32,8 @@ mod wallet_builds;
 pub use update::{CellChanges, CellUpdatePlan, CellUpdateTarget};
 
 pub use backend::{
-    BackendContractRegistry, BarkProcessorConfig, BitcoinCoreConfig, CdkEmbeddedLightning,
-    CdkEmbeddedOnchain, CdkMintConfig, ClnConfig, ComponentBackendContract,
+    BackendContractRegistry, BarkProcessorConfig, BarkServerConfig, BitcoinCoreConfig,
+    CdkEmbeddedLightning, CdkEmbeddedOnchain, CdkMintConfig, ClnConfig, ComponentBackendContract,
     ComponentConditionReason, ComponentConditionState, ComponentConditionType,
     ComponentPlanContract, ComponentPlanInput, ConditionAggregationContract, ConfigDefault,
     ConfigFieldContract, ConfigRule, ConfigSettingClass, ConfigValueKind,
@@ -52,13 +52,13 @@ pub use candidate::{
     effective_catalog, is_github_repository,
 };
 pub use catalog::{
-    AuthenticationMode, BuildProvenance, CDK_MINT_IMAGE, CatalogDependencySupport,
-    CatalogEndpointCondition, CatalogEntry, CatalogFeature, CatalogImplementationSupport,
-    CatalogOrigin, CatalogPaymentBindingSupport, CatalogPlatform, CatalogResponse,
-    CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport, ReleaseChannel,
-    StorageBackend, SupportLifecycle, catalog_for_platform, catalog_image_source, default_catalog,
-    distributed_catalog, distributed_catalog_for_platform, validate_catalog_component,
-    validate_component_config, validate_new_cell_versions,
+    AuthenticationMode, BuildProvenance, CDK_MINT_IMAGE, CDK_VERSION, CLN_VERSION,
+    CatalogDependencySupport, CatalogEndpointCondition, CatalogEntry, CatalogFeature,
+    CatalogImplementationSupport, CatalogOrigin, CatalogPaymentBindingSupport, CatalogPlatform,
+    CatalogResponse, CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport,
+    LND_VERSION, ReleaseChannel, StorageBackend, SupportLifecycle, catalog_for_platform,
+    catalog_image_source, default_catalog, distributed_catalog, distributed_catalog_for_platform,
+    validate_catalog_component, validate_component_config, validate_new_cell_versions,
 };
 pub use coverage::{
     CONFIGURATION_COVERAGE_API_VERSION, ConfigurationCoverageEntry, ConfigurationCoverageManifest,

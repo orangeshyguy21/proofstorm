@@ -168,6 +168,10 @@ enum Command {
 }
 
 #[derive(ClapArgs)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each field is an independent command-line flag"
+)]
 struct SetupArgs {
     /// Permit a verified local development bundle.
     #[arg(long, hide = true)]
@@ -178,6 +182,12 @@ struct SetupArgs {
     /// Download all cell images now.
     #[arg(long, conflicts_with = "prepare_only")]
     prefetch_all: bool,
+    /// Replace the runtime and its state with a fresh installation first; deletes all cells.
+    #[arg(long, conflicts_with = "prepare_only")]
+    recreate: bool,
+    /// Confirm --recreate without prompting.
+    #[arg(long, requires = "recreate")]
+    yes: bool,
 }
 
 #[derive(ClapArgs)]
@@ -469,10 +479,14 @@ impl Command {
                 allow_development,
                 prepare_only,
                 prefetch_all,
+                recreate,
+                yes,
             }) => Action::Setup {
                 allow_development,
                 prepare_only,
                 prefetch_all,
+                recreate,
+                yes,
             },
             Self::Doctor => Action::Doctor {},
             Self::Gui(GuiArgs {

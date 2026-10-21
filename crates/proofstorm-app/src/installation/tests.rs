@@ -125,6 +125,30 @@ fn initialization_is_idempotent_and_does_not_overwrite_changed_configuration() {
 }
 
 #[test]
+fn k3s_pin_changes_explain_the_reset_and_keep_the_saved_configuration() {
+    let root = tempfile::tempdir().unwrap();
+    let installation = Installation::initialize(root.path(), None, None).unwrap();
+    let mut saved = installation.cluster_config();
+    saved["image"] = json!("docker.io/rancher/k3s:v1.0.0-k3s1");
+    let saved = serde_json::to_vec_pretty(&saved).unwrap();
+    fs::write(installation.cluster_config_path(), &saved).unwrap();
+    let error = Installation::initialize(root.path(), None, None)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("docker.io/rancher/k3s:v1.0.0-k3s1"),
+        "{error}"
+    );
+    assert!(error.contains(installation.cluster_config()["image"].as_str().unwrap()));
+    assert!(error.contains("storm setup --recreate"), "{error}");
+    assert_eq!(
+        saved_k3s_image(&installation.home).as_deref(),
+        Some("docker.io/rancher/k3s:v1.0.0-k3s1")
+    );
+    assert_eq!(fs::read(installation.cluster_config_path()).unwrap(), saved);
+}
+
+#[test]
 fn copied_corrupt_and_unknown_manifests_fail_closed() {
     let root = tempfile::tempdir().unwrap();
     let installation = Installation::initialize(&root.path().join("first"), None, None).unwrap();

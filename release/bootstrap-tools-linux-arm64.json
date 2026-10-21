@@ -12,18 +12,18 @@
     },
     {
       "name": "kubectl",
-      "version": "v1.34.1",
-      "url": "https://dl.k8s.io/release/v1.34.1/bin/linux/arm64/kubectl",
-      "sha256": "420e6110e3ba7ee5a3927b5af868d18df17aae36b720529ffa4e9e945aa95450",
-      "executable_sha256": "420e6110e3ba7ee5a3927b5af868d18df17aae36b720529ffa4e9e945aa95450",
+      "version": "v1.34.12",
+      "url": "https://dl.k8s.io/release/v1.34.12/bin/linux/arm64/kubectl",
+      "sha256": "c819e3eb6a540d4f1e6aacaac85580bf0793bd1e7d05095a47407733ccf0cfb7",
+      "executable_sha256": "c819e3eb6a540d4f1e6aacaac85580bf0793bd1e7d05095a47407733ccf0cfb7",
       "archive_member": null
     },
     {
       "name": "helm",
-      "version": "v4.2.3",
-      "url": "https://get.helm.sh/helm-v4.2.3-linux-arm64.tar.gz",
-      "sha256": "21abd9354d39b2cd79a8d76be6912cd137a983cbf997193503fb8a6a6e2f2785",
-      "executable_sha256": "01bdd0c90f371968326162daaa427cdd14da2641ded094131afc44fb7a538b62",
+      "version": "v4.3.1",
+      "url": "https://get.helm.sh/helm-v4.3.1-linux-arm64.tar.gz",
+      "sha256": "8cf8f66ecbc252ac8f7f06cca68aba88508ddfde3a6a34feb1678ad1694b4f88",
+      "executable_sha256": "d459cbff1331af4326a6f97ea83c547742b4056dac7404f20fc436c084178c43",
       "archive_member": "linux-arm64/helm"
     }
   ]

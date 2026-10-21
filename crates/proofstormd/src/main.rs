@@ -1444,11 +1444,11 @@ async fn reconcile(cell: Arc<ProofstormCell>, context: Arc<Context>) -> Result<A
                 } else {
                     apply(cell.clone(), &context).await
                 };
-                if let Err(error) = &result {
-                    if let Some(status) = reconciliation_failure_status(&cell, error) {
-                        context.probes.remove(&cell.spec.instance_key);
-                        patch_status(&cell, &context, status).await?;
-                    }
+                if let Err(error) = &result
+                    && let Some(status) = reconciliation_failure_status(&cell, error)
+                {
+                    context.probes.remove(&cell.spec.instance_key);
+                    patch_status(&cell, &context, status).await?;
                 }
                 result
             }
@@ -1720,23 +1720,22 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
         "data": {"inventory.json": serde_json::to_string(&inventory).expect("inventory serializes"),
             "inventoryDigest": inventory_digest}
     });
-    if let Some(old) = configs.get_opt(&inventory_name).await? {
-        if old.immutable == Some(true)
-            && old.labels().get("proofstorm.dev/instance") == Some(&cell.spec.instance_key)
-        {
-            configs
-                .delete(
-                    &inventory_name,
-                    &DeleteParams {
-                        preconditions: Some(kube::api::Preconditions {
-                            uid: old.metadata.uid.clone(),
-                            resource_version: old.metadata.resource_version.clone(),
-                        }),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-        }
+    if let Some(old) = configs.get_opt(&inventory_name).await?
+        && old.immutable == Some(true)
+        && old.labels().get("proofstorm.dev/instance") == Some(&cell.spec.instance_key)
+    {
+        configs
+            .delete(
+                &inventory_name,
+                &DeleteParams {
+                    preconditions: Some(kube::api::Preconditions {
+                        uid: old.metadata.uid.clone(),
+                        resource_version: old.metadata.resource_version.clone(),
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await?;
     }
     configs
         .patch(&inventory_name, &patch, &Patch::Apply(inventory_resource))

@@ -62,10 +62,10 @@ impl ExternalClient {
             if line == "\r\n" {
                 break;
             }
-            if let Some((key, value)) = line.split_once(':') {
-                if key.eq_ignore_ascii_case("content-length") {
-                    length = Some(value.trim().parse::<usize>()?);
-                }
+            if let Some((key, value)) = line.split_once(':')
+                && key.eq_ignore_ascii_case("content-length")
+            {
+                length = Some(value.trim().parse::<usize>()?);
             }
         }
         let length = length.context("mint info must provide a content length")?;

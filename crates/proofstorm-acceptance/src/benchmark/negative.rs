@@ -352,7 +352,7 @@ mod tests {
         let grade = super::super::score::grade(
             task,
             &observed,
-            &[call.clone()],
+            std::slice::from_ref(&call),
             Some(task.target_seconds),
             "completed",
             true,

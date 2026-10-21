@@ -88,9 +88,8 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                         }
                         if value["metadata"].get("uid").is_none() { value["metadata"]["uid"]=json!(format!("uid-{}",value["metadata"]["name"].as_str().unwrap())); }
                         cluster.objects.insert(path,value.clone());
-                        if value["metadata"]["annotations"][proofstorm_core::private_io::PRIVATE_ACCESS_ANNOTATION].is_string() {
-                            if let Some(hook) = cluster.after_private_access.take() { hook(); }
-                        }
+                        if value["metadata"]["annotations"][proofstorm_core::private_io::PRIVATE_ACCESS_ANNOTATION].is_string()
+                            && let Some(hook) = cluster.after_private_access.take() { hook(); }
                         (200,value)
                     }
                 },

@@ -38,13 +38,12 @@ pub async fn wait_chain(url: &str, cookie: &Path) -> Result<()> {
     for _ in 0..120 {
         let request = client.post(url).basic_auth(user, Some(password))
             .json(&serde_json::json!({"jsonrpc":"2.0","id":"bark-start","method":"getblockchaininfo","params":[]}));
-        if let Ok((status, value)) = crate::http::json(request).await {
-            if status.is_success()
-                && value["error"].is_null()
-                && value["result"]["chain"] == "regtest"
-            {
-                return Ok(());
-            }
+        if let Ok((status, value)) = crate::http::json(request).await
+            && status.is_success()
+            && value["error"].is_null()
+            && value["result"]["chain"] == "regtest"
+        {
+            return Ok(());
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }

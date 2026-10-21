@@ -316,16 +316,16 @@ fn observation_output(success: bool, stdout: String) -> Result<String> {
     if success {
         return Ok(stdout);
     }
-    if let Ok(value) = serde_json::from_str::<Value>(&stdout) {
-        if value["code"] == "wallet_orchestration_failed" && value["stage"] == "quote" {
-            if let Some(reason) = value["reason"].as_str().filter(|reason| {
-                !reason.is_empty()
-                    && reason.len() <= 96
-                    && reason.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
-            }) {
-                bail!("quote observation failed: {reason}");
-            }
-        }
+    if let Ok(value) = serde_json::from_str::<Value>(&stdout)
+        && value["code"] == "wallet_orchestration_failed"
+        && value["stage"] == "quote"
+        && let Some(reason) = value["reason"].as_str().filter(|reason| {
+            !reason.is_empty()
+                && reason.len() <= 96
+                && reason.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+        })
+    {
+        bail!("quote observation failed: {reason}");
     }
     bail!("driver observation failed without a recognized diagnostic");
 }

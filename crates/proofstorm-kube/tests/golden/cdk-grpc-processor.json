@@ -119,7 +119,7 @@
         "CDK_MINTD_WORK_DIR": "/app/data",
         "HOME": "/app/data"
       },
-      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+      "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
       "mounts": [
         {
           "mount_path": "/config",
@@ -238,7 +238,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:d84154ccf094f8c6d334a0cbc5e75c108cd928b948a680f6492d3dba2cdd55ae",
+    "rollout_digest": "sha256:5ce1bfd5e5d935dcd411d21e214728cec56fbcd90a8fba1377250865ec10491d",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -251,7 +251,7 @@
       "ports": {
         "http": 3338
       },
-      "version": "0.18.1"
+      "version": "0.18.2"
     },
     "workload": {
       "desired_replicas": 1,
@@ -314,7 +314,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:d84154ccf094f8c6d334a0cbc5e75c108cd928b948a680f6492d3dba2cdd55ae"
+                "proofstorm.dev/rollout-digest": "sha256:5ce1bfd5e5d935dcd411d21e214728cec56fbcd90a8fba1377250865ec10491d"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -354,7 +354,7 @@
                       "value": "sqlite"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -464,7 +464,7 @@
                     "-ec",
                     "for attempt in $(seq 1 120); do if /opt/proofstorm/driver processor-settings https://processor:50051 /payment-processor/tls cdk-ldk-server-processor; then exit 0; fi; sleep 1; done; echo 'Payment processor dependency did not become ready' >&2; exit 1"
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
                   "name": "wait-for-payment-processor",
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
@@ -503,7 +503,7 @@
                       "value": "sqlite"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:d0544631da1645457956345b39c5243ae13ae98cfed2529d2bb0c1cc242603df",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "initialize-config",
                   "securityContext": {

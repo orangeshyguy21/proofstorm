@@ -217,12 +217,12 @@ fn helper_probe(work: &Path, id: &str) -> Result<()> {
             if Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                if let Ok(id) = fs::read_to_string(&cidfile) {
-                    if sha256(id.trim()) {
-                        let _ = Command::new("docker")
-                            .args(["rm", "-f", id.trim()])
-                            .output();
-                    }
+                if let Ok(id) = fs::read_to_string(&cidfile)
+                    && sha256(id.trim())
+                {
+                    let _ = Command::new("docker")
+                        .args(["rm", "-f", id.trim()])
+                        .output();
                 }
                 bail!("controller {stem} probe timed out");
             }

@@ -129,8 +129,7 @@ fn request(url: &str, token: Option<&str>, head: bool, local: bool) -> Result<Ve
 fn check_head(headers: &[u8]) -> Result<()> {
     let status = std::str::from_utf8(headers)?
         .lines()
-        .filter(|line| line.starts_with("HTTP/"))
-        .next_back()
+        .rfind(|line| line.starts_with("HTTP/"))
         .and_then(|line| line.split_whitespace().nth(1));
     ensure!(status == Some("200"), "registry layer is not available");
     Ok(())

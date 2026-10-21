@@ -134,7 +134,7 @@ mod tests {
                 // The gate checks registration of every rail and pays bolt11 and onchain.
                 for method in ["bolt11", "onchain", "arkoor"] {
                     let claim = format!(
-                        "cdk@0.18.1:payment:[\"{method}\",\"sat\",\"cdk-bark-processor\",\"0.1.0-fe468ca\"]"
+                        "cdk@0.18.2:payment:[\"{method}\",\"sat\",\"cdk-bark-processor\",\"0.1.0-fe468ca\"]"
                     );
                     assert!(gate.claims.contains(&claim), "{claim}");
                 }

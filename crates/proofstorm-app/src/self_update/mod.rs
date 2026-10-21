@@ -98,13 +98,13 @@ pub async fn run(check: bool, home: Option<&Path>, progress: &dyn Fn(&str)) -> U
         .await
     }
     .await;
-    if let Err(error) = outcome {
-        if result.error.is_none() {
-            result.error = Some(Fault {
-                code: "update_unavailable".into(),
-                message: format!("{error:#}"),
-            });
-        }
+    if let Err(error) = outcome
+        && result.error.is_none()
+    {
+        result.error = Some(Fault {
+            code: "update_unavailable".into(),
+            message: format!("{error:#}"),
+        });
     }
     result
 }
@@ -276,7 +276,25 @@ fn follow_ups(
             command: Some(advice_command(installation, home, &["gui", "stop"])),
         });
     }
-    if refresh {
+    // A k3s pin change cannot reuse the existing cluster; plain setup would refuse.
+    let k3s = info["tools"]
+        .as_str()
+        .and_then(|tools| {
+            tools
+                .lines()
+                .find_map(|line| line.strip_prefix("K3S_VERSION="))
+        })
+        .map(crate::installation::k3s_image)
+        .zip(crate::installation::saved_k3s_image(home))
+        .filter(|(release, saved)| release != saved);
+    if let Some((release, saved)) = k3s {
+        actions.push(FollowUp {
+            message: format!(
+                "This release runs Kubernetes from {release}; this installation's cluster uses {saved}. Kubernetes cannot be upgraded in place: recreate the installation, which deletes all cells, then reconnect coding agents."
+            ),
+            command: Some(advice_command(installation, home, &["setup", "--recreate"])),
+        });
+    } else if refresh {
         actions.push(FollowUp {
             message: "Refresh the controller and tools; installed files were updated separately."
                 .into(),

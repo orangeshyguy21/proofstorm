@@ -19,6 +19,14 @@ pub struct BarkProcessorConfig {
     pub payment_methods: BTreeSet<PaymentMethod>,
 }
 
+/// Ark server fees an agent may set; every other native setting stays upstream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BarkServerConfig {
+    pub lightning_receive_base_fee_sat: u64,
+    pub lightning_receive_ppm: u64,
+}
+
 const PROFILE: ProcessorProfile = ProcessorProfile::Bark;
 
 pub(super) fn stack_contracts() -> [ComponentBackendContract; 2] {
@@ -28,6 +36,7 @@ pub(super) fn stack_contracts() -> [ComponentBackendContract; 2] {
             ComponentKind::ArkServer,
             "bark-server/0.7/v1",
             "proofstorm/bark-server-state/v1",
+            server_fee_fields(),
             BTreeMap::from([("rpc".into(), 3535)]),
         ),
         stack_contract(
@@ -35,6 +44,7 @@ pub(super) fn stack_contracts() -> [ComponentBackendContract; 2] {
             ComponentKind::Lightning,
             "cln-hold/26.06/v1",
             "proofstorm/cln-hold-state/v1",
+            BTreeMap::new(),
             BTreeMap::from([
                 ("p2p".into(), 9735),
                 ("grpc".into(), 9988),
@@ -44,18 +54,58 @@ pub(super) fn stack_contracts() -> [ComponentBackendContract; 2] {
     ]
 }
 
+/// captaind's `[fees.lightning_receive]` values; defaults match its upstream config.
+/// Expiry-table fees cannot be set through captaind's environment, so they stay upstream.
+fn server_fee_fields() -> BTreeMap<String, ConfigFieldContract> {
+    BTreeMap::from([
+        (
+            "lightning_receive_base_fee_sat".into(),
+            config_field(
+                "Ark server base fee in sats for receiving a Lightning payment (fees.lightning_receive.base_fee_sat). Upstream default 100; set 0 for clients that require free receives",
+                ConfigValueKind::Integer,
+                ConfigDefault::Literal(json!(100)),
+            )
+            .with_numeric_bounds(0.0, 1_000_000.0),
+        ),
+        (
+            "lightning_receive_ppm".into(),
+            config_field(
+                "Ark server fee in parts per million of a received Lightning payment (fees.lightning_receive.ppm). Upstream default 2000 (0.2%)",
+                ConfigValueKind::Integer,
+                ConfigDefault::Literal(json!(2000)),
+            )
+            .with_numeric_bounds(0.0, 1_000_000.0),
+        ),
+    ])
+}
+
+pub(super) fn server_effective_config(
+    component: &ComponentSpec,
+) -> Result<EffectiveComponentConfig, String> {
+    let integer = |name: &str| {
+        required_config_value(component, name)?
+            .as_u64()
+            .ok_or_else(|| typed_config_error(component, name))
+    };
+    Ok(EffectiveComponentConfig::BarkServer(BarkServerConfig {
+        lightning_receive_base_fee_sat: integer("lightning_receive_base_fee_sat")?,
+        lightning_receive_ppm: integer("lightning_receive_ppm")?,
+    }))
+}
+
 fn stack_contract(
     id: &str,
     kind: ComponentKind,
     version: &str,
     state: &str,
+    config_fields: BTreeMap<String, ConfigFieldContract>,
     ports: BTreeMap<String, u16>,
 ) -> ComponentBackendContract {
     let mut backend = contract(
         id,
         kind,
         version,
-        BTreeMap::new(),
+        config_fields,
         ports,
         state,
         service_conditions(true, false),
@@ -108,7 +158,7 @@ fn stack_contract(
         ),
         (
             "native_settings",
-            "Pinned upstream defaults with managed regtest overrides",
+            "Pinned upstream defaults with managed regtest overrides; only declared fee fields are authorable",
             ConfigSettingClass::RuntimePolicy,
         ),
     ] {

@@ -89,6 +89,19 @@ old processes continue using retained files until stopped. Disconnect old MCP
 sessions and stop the GUI before explicit `setup`, then reconnect/start them.
 The passive deployment receipt is a version gate, not a runtime health result.
 
+## Kubernetes upgrades
+
+An installation's cluster keeps the k3s version it was created with; Kubernetes
+cannot be upgraded in place. When an updated release pins a different k3s,
+the update's follow-up names `setup --recreate` instead of `setup`, and plain
+`setup` refuses with both versions. `storm setup --recreate` asks for
+confirmation (or takes `--yes`), removes the runtime and all cells, archives
+the old state under `lib/proofstorm/reset-history/`, creates a fresh
+installation in the same home, and continues setup on the new k3s. Installed
+release files are kept; reconnect coding agents afterwards. An interrupted
+recreate blocks setup until `storm setup --recreate --yes` is run again.
+Checkouts use `storm dev reset` the same way.
+
 Coordinated process refresh remains separate work. The first release cannot
 retrofit safeguards into already-running older binaries. Packaging checks and
 cross-version validation are described in [RELEASING.md](../scripts/RELEASING.md).

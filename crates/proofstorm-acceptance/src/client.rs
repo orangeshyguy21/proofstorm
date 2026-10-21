@@ -142,10 +142,11 @@ impl McpClient {
     ///
     /// This mirrors what every Python client did: `json.loads(result["content"][0]["text"])`.
     pub fn call(&mut self, tool: &str, mut arguments: Value) -> Result<Value> {
-        if matches!(tool, "cell_plan" | "cell_up") && arguments["cell"].is_object() {
-            if let Some(observer) = &self.qualification {
-                observer.document(&mut arguments["cell"])?;
-            }
+        if matches!(tool, "cell_plan" | "cell_up")
+            && arguments["cell"].is_object()
+            && let Some(observer) = &self.qualification
+        {
+            observer.document(&mut arguments["cell"])?;
         }
         // Gate convenience: follow the same status -> close -> wait token contract as agents.
         // Raw envelope helpers intentionally do not fill fields, for contract refusal tests.

@@ -14,9 +14,9 @@ fn cell_document() -> Value {
         "name": "quote-composition",
         "components": [
             {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
-            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "quote-mint"}},
-            {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "quote-payer"}},
-            {"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.1", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Quote Composition Mint"}},
+            {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": proofstorm_core::LND_VERSION, "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "quote-mint"}},
+            {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": proofstorm_core::LND_VERSION, "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "quote-payer"}},
+            {"id": "mint", "kind": "mint", "implementation": "cdk", "version": proofstorm_core::CDK_VERSION, "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Quote Composition Mint"}},
             {"id": "payer-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.21.0", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}},
             {"id": "recipient-wallet", "kind": "wallet", "implementation": "nutshell-wallet", "version": "0.21.0", "config_version": "nutshell-wallet/0.20/v1", "control": "cell", "config": {}}
         ],

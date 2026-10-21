@@ -87,12 +87,55 @@ impl Task {
 
 pub fn o1() -> &'static Task {
     static TASK: OnceLock<Task> = OnceLock::new();
-    TASK.get_or_init(|| common_allowance(o1_v08(), "0.9"))
+    TASK.get_or_init(|| {
+        component_patches(
+            o1_v09(),
+            "0.10",
+            &[("lnd", "0.21.4-beta"), ("cdk", "0.18.2")],
+        )
+    })
 }
 
 pub fn o5() -> &'static Task {
     static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| {
+        component_patches(
+            o5_v05(),
+            "0.6",
+            &[("lnd", "0.21.4-beta"), ("cdk", "0.18.2")],
+        )
+    })
+}
+
+fn o1_v09() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| common_allowance(o1_v08(), "0.9"))
+}
+
+fn o5_v05() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
     TASK.get_or_init(|| common_allowance(o5_v04(), "0.5"))
+}
+
+/// The same contract on newer catalog patch releases. Patch releases do not
+/// change the infrastructure baseline, so the timing calibration carries over.
+fn component_patches(base: &Task, version: &str, patches: &[(&str, &str)]) -> Task {
+    let mut task = base.clone();
+    task.version = version.into();
+    task.scorer = format!("{}-70-15-15/{version}", task.id.to_lowercase());
+    for (implementation, patched) in patches {
+        for component in &mut task.components {
+            if component["implementation"] == *implementation {
+                component["version"] = json!(patched);
+            }
+        }
+    }
+    task.rules["timing"]["calibration_images"] = json!(format!(
+        "Measured with the {} {} contract images; carried over unchanged to these patch releases.",
+        base.id, base.version
+    ));
+    task.prompt = prompt(&task);
+    task
 }
 
 fn o1_v08() -> &'static Task {
@@ -233,8 +276,12 @@ pub fn lookup(id: &str, version: &str) -> Option<&'static Task> {
         o5_v02(),
         o1_v07(),
         o5_v03(),
+        o1_v09(),
+        o5_v05(),
         o1_v08(),
         o5_v04(),
+        o1_v09_diagnostic(),
+        o5_v05_diagnostic(),
         o1_v08_diagnostic(),
         o5_v04_diagnostic(),
         o1_v07_diagnostic(),
@@ -288,6 +335,16 @@ fn o1_v07_diagnostic() -> &'static Task {
 fn o5_v03_diagnostic() -> &'static Task {
     static TASK: OnceLock<Task> = OnceLock::new();
     TASK.get_or_init(|| extended(o5_v03()))
+}
+
+fn o1_v09_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o1_v09()))
+}
+
+fn o5_v05_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o5_v05()))
 }
 
 fn o1_v08_diagnostic() -> &'static Task {
@@ -527,6 +584,40 @@ mod tests {
             assert!(task.prompt.contains("zero at 1200 seconds"));
         }
         assert!(json!(o1_v08()).get("time_zero_seconds").is_none());
+    }
+
+    #[test]
+    fn component_patches_only_change_versions_and_preserve_previous_contract_hashes() {
+        assert_eq!(
+            proofstorm_core::digest_json(o1_v09()),
+            "sha256:40e4c966eadc2e4f8ca31ccdd26265ffb7aba9e85412d590b0d6eb1c84827eb1"
+        );
+        assert_eq!(
+            proofstorm_core::digest_json(o5_v05()),
+            "sha256:8103b31f3469d720d5657c3c0fbcf4f9da68cb762e37afafa4e677584acb7a35"
+        );
+        for (previous, current, version) in [(o1_v09(), o1(), "0.10"), (o5_v05(), o5(), "0.6")] {
+            assert_eq!(current.version, version);
+            assert_eq!(
+                current.target_seconds.to_bits(),
+                previous.target_seconds.to_bits()
+            );
+            assert_eq!(current.deadline_seconds, previous.deadline_seconds);
+            assert!(current.timing_calibrated);
+            assert!(lookup(&previous.id, &previous.version).is_some());
+            for component in &current.components {
+                match component["implementation"].as_str().unwrap() {
+                    "lnd" => assert_eq!(component["version"], "0.21.4-beta"),
+                    "cdk" => assert_eq!(component["version"], "0.18.2"),
+                    _ => {}
+                }
+            }
+            let mut restored = json!(current);
+            for field in ["version", "scorer", "components", "rules", "prompt"] {
+                restored[field] = json!(previous)[field].clone();
+            }
+            assert_eq!(restored, json!(previous));
+        }
     }
 
     #[test]

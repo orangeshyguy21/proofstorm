@@ -10,7 +10,7 @@ preservation. Anonymous manifest/config/layer reads and Docker pulls verified al
 six published images. The processor's patched upstream library suite passed all
 37 tests during image builds.
 
-The distributed catalog includes these images and CDK 0.18.1's bolt11, onchain
+The distributed catalog includes these images and CDK 0.18.2's bolt11, onchain
 and arkoor sat bindings to the processor. Each processor component selects the
 rails it advertises with `payment_methods`; the default is all three, as upstream.
 Bark remains experimental, with no default version.
@@ -166,7 +166,7 @@ all three). Network, endpoints, storage paths and credentials are managed settin
   the processor boards the deposit into Ark and credits the original quote with
   the board fee deducted. `onchain` melts offboard from the processor's Ark balance.
 - `arkoor` is a CDK custom method for melts only. The request is an Ark address
-  on the same server, with zero fee. cdk-cli 0.18.1 cannot create custom-method
+  on the same server, with zero fee. cdk-cli 0.18.2 cannot create custom-method
   melts, and no catalog component provides a receiving Bark wallet yet.
 
 The processor runs as one StatefulSet with the complete `/data` directory on its
@@ -202,7 +202,13 @@ payment/restart results on both native Linux architectures.
 The reserved `bark-server` and `cln-hold` backends now render separate StatefulSets
 with complete owned `/data` volumes. This integration fixes native tuning to the
 pinned upstream defaults and managed regtest settings; it accepts no arbitrary
-native configuration. Endpoints come from validated typed dependencies. Both
+native configuration. The one exception is the Lightning receive fee:
+`lightning_receive_base_fee_sat` (default 100) and `lightning_receive_ppm`
+(default 2000) on `bark-server` render as captaind's
+`BARK_SERVER__FEES__LIGHTNING_RECEIVE__*` overrides, so clients that require free
+receives can set both to 0. Board, offboard, refresh and Lightning send fees use
+expiry tables that captaind cannot read from the environment, so they stay
+upstream. Endpoints come from validated typed dependencies. Both
 components wait for Bitcoin RPC readiness before initializing fresh state.
 
 Bark uses the image's pinned configuration template with explicit environment

@@ -28,7 +28,7 @@ fn cell_document() -> Value {
                 "id": "lightning",
                 "kind": "lightning",
                 "implementation": "lnd",
-                "version": "0.21.3-beta",
+                "version": proofstorm_core::LND_VERSION,
                 "config_version": "lnd/0.20/v1",
                 "control": "cell",
                 "config": {"alias": "proofstorm-lightning"}
@@ -37,7 +37,7 @@ fn cell_document() -> Value {
                 "id": "mint",
                 "kind": "mint",
                 "implementation": "cdk",
-                "version": "0.18.1",
+                "version": proofstorm_core::CDK_VERSION,
                 "config_version": "cdk-mintd/0.18/v1",
                 "control": "target",
                 "config": {

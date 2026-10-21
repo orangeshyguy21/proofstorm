@@ -178,11 +178,11 @@ pub fn render_server(plan: &ComponentPlanContract) -> Result<RenderedComponent, 
             LinkKind::DatabaseBackend,
         ],
     )?;
-    if plan.effective_config != EffectiveComponentConfig::BarkServer {
+    let EffectiveComponentConfig::BarkServer(fees) = &plan.effective_config else {
         return Err(AdapterError::InvalidPlan(
             "Bark server typed configuration missing".into(),
         ));
-    }
+    };
     let chain = dependency(
         plan,
         LinkKind::ChainBackend,
@@ -203,7 +203,7 @@ pub fn render_server(plan: &ComponentPlanContract) -> Result<RenderedComponent, 
         CLN_HOLD,
     )?;
     let database = server_database(plan)?;
-    let env = server_env(chain, cln, &database)?;
+    let env = server_env(chain, cln, &database, fees)?;
     let mut rendered = RenderedComponent::default();
     rendered.services.push(resource(service_from_plan(plan))?);
     rendered.config_maps.push(config(
@@ -291,6 +291,7 @@ fn server_env(
     chain: &super::TargetDescriptorContract,
     cln: &super::TargetDescriptorContract,
     db: &super::PostgresDatabase,
+    fees: &proofstorm_core::BarkServerConfig,
 ) -> Result<Value, AdapterError> {
     let cln_config = json!([{"uri":format!("https://{}:{}",cln.component_id,required_port(cln,"grpc")?),"priority":0,
         "server_cert_path":"/cln-tls/ca.pem","client_cert_path":"/cln-tls/client.pem","client_key_path":"/cln-tls/client-key.pem",
@@ -316,6 +317,14 @@ fn server_env(
         ("POSTGRES__NAME", db.database.clone()),
         ("POSTGRES__USER", super::POSTGRES_OWNER.into()),
         ("CLN_ARRAY", cln_config.to_string()),
+        (
+            "FEES__LIGHTNING_RECEIVE__BASE_FEE_SAT",
+            fees.lightning_receive_base_fee_sat.to_string(),
+        ),
+        (
+            "FEES__LIGHTNING_RECEIVE__PPM",
+            fees.lightning_receive_ppm.to_string(),
+        ),
     ]
     .into_iter()
     .map(|(key, value)| json!({"name":format!("BARK_SERVER__{key}"),"value":value}))

@@ -163,10 +163,7 @@ pub(super) fn extend(
             crate::digest_json(&(&entry.source_digest, &entry.image, &provenance));
         entry.build_provenance = Some(provenance);
     }
-    for entry in entries
-        .iter_mut()
-        .filter(|entry| entry.id == "cdk" && entry.version == "0.18.1")
-    {
+    for entry in entries.iter_mut().filter(|entry| entry.id == "cdk") {
         entry
             .support_matrix
             .payment_backends
@@ -176,7 +173,7 @@ pub(super) fn extend(
             BARK_PROCESSOR,
             &[PROCESSOR_VERSION],
         ));
-        // CDK 0.18.1 registers every method a gRPC processor advertises,
+        // CDK 0.18 registers every method a gRPC processor advertises,
         // including on-chain and custom methods.
         for method in ProcessorProfile::Bark.supported_methods() {
             entry
@@ -209,7 +206,7 @@ pub(super) fn endpoints(implementation: &str) -> Option<Vec<CatalogRuntimeEndpoi
         ),
         BARK_SERVER => (
             "ark_server",
-            "Regtest Ark server; Lightning payments route through CLN/hold (bolt11/sat). Requires indexed Bitcoin, primary PostgreSQL and CLN/hold on the same chain. Public Ark RPC uses port 3535; admin/integration APIs remain on loopback. Native entrypoint: captaind --config /usr/local/share/bark/captaind.default.toml rpc. Use component_exec_live for loopback access. Native mnemonic/state and the PostgreSQL identity seal must persist together. Restore missing retained state rather than reinitializing it. No standalone Bark CLI wallet is included; the CDK Bark processor holds the managed Bark wallet.",
+            "Regtest Ark server; Lightning payments route through CLN/hold (bolt11/sat). Requires indexed Bitcoin, primary PostgreSQL and CLN/hold on the same chain. Public Ark RPC uses port 3535; admin/integration APIs remain on loopback. Lightning receive fees are configurable (lightning_receive_base_fee_sat, lightning_receive_ppm; upstream 100 sat and 2000 ppm); other fees stay upstream. Native entrypoint: captaind --config /usr/local/share/bark/captaind.default.toml rpc. Use component_exec_live for loopback access. Native mnemonic/state and the PostgreSQL identity seal must persist together. Restore missing retained state rather than reinitializing it. No standalone Bark CLI wallet is included; the CDK Bark processor holds the managed Bark wallet.",
         ),
         CLN_HOLD => (
             "lightning",

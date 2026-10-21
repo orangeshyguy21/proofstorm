@@ -9,7 +9,7 @@ The `upstream/<registry>/<repository>` path records their original source.
 | Component | Source |
 | --- | --- |
 | Bitcoin Core 31.1 | Proofstorm packaging of verified bitcoincore.org release binaries |
-| LND 0.21.3-beta (preferred), 0.20.4-beta | docker.io/lightninglabs/lnd |
+| LND 0.21.4-beta (preferred), 0.20.5-beta | docker.io/lightninglabs/lnd |
 | Core Lightning | docker.io/elementsproject/lightningd |
 | CDK and Nutshell | docker.io/cashubtc images, with the existing management-client wrappers |
 | LDK Server and CDK LDK Server processor | Pinned upstream source builds; see [payment processor packaging](payment/README.md) |
@@ -52,7 +52,7 @@ reviewed recipes; it does not change versions, catalog pins, or provenance.
 ```sh
 just catalog-image list
 scratch="$(mktemp -d)"
-just catalog-image build cdk-cli-wallet@0.18.1 linux/arm64 "$scratch/wallet"
+just catalog-image build cdk-cli-wallet@0.18.2 linux/arm64 "$scratch/wallet"
 # Inspect image.json and probe.stdout before authorizing a push:
 just catalog-image publish "$scratch/wallet" \
   --confirm-namespace ghcr.io/orangeshyguy21/proofstorm

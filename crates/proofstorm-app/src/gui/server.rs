@@ -87,7 +87,7 @@ impl Session {
                 ));
             }
         }
-        paths.sort_by(|a, b| b.0.cmp(&a.0));
+        paths.sort_by_key(|path| std::cmp::Reverse(path.0));
         let mut result = Vec::new();
         for (_, path) in paths {
             if !result.contains(&path) {

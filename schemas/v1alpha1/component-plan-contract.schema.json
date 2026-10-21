@@ -22,6 +22,27 @@
       ],
       "type": "object"
     },
+    "BarkServerConfig": {
+      "additionalProperties": false,
+      "description": "Ark server fees an agent may set; every other native setting stays upstream.",
+      "properties": {
+        "lightning_receive_base_fee_sat": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lightning_receive_ppm": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "lightning_receive_base_fee_sat",
+        "lightning_receive_ppm"
+      ],
+      "type": "object"
+    },
     "BitcoinCoreConfig": {
       "additionalProperties": false,
       "properties": {
@@ -512,13 +533,17 @@
         },
         {
           "properties": {
+            "config": {
+              "$ref": "#/$defs/BarkServerConfig"
+            },
             "implementation": {
               "const": "bark-server",
               "type": "string"
             }
           },
           "required": [
-            "implementation"
+            "implementation",
+            "config"
           ],
           "type": "object"
         },

@@ -11,7 +11,7 @@ mod processor;
 pub use processor::LdkServerProcessorConfig;
 #[path = "bark_backend.rs"]
 mod bark;
-pub use bark::BarkProcessorConfig;
+pub use bark::{BarkProcessorConfig, BarkServerConfig};
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
@@ -567,7 +567,7 @@ pub enum EffectiveComponentConfig {
     #[serde(rename = "cdk-bark-processor")]
     BarkProcessor(BarkProcessorConfig),
     #[serde(rename = "bark-server")]
-    BarkServer,
+    BarkServer(BarkServerConfig),
     #[serde(rename = "cln-hold")]
     ClnHold,
     #[serde(rename = "cdk")]
@@ -700,13 +700,13 @@ impl BackendContractRegistry {
         contract.validate_config(component, false)?;
         let mut effective = component.clone();
         for (name, field) in &contract.config_fields {
-            if field.classification.is_agent_authorable() {
-                if let Some(default) = &field.default {
-                    effective
-                        .config
-                        .entry(name.clone())
-                        .or_insert_with(|| resolve_config_default(default, &component.id));
-                }
+            if field.classification.is_agent_authorable()
+                && let Some(default) = &field.default
+            {
+                effective
+                    .config
+                    .entry(name.clone())
+                    .or_insert_with(|| resolve_config_default(default, &component.id));
             }
         }
         contract.validate_config(&effective, true)?;
@@ -1046,7 +1046,7 @@ impl EffectiveComponentConfig {
             })),
             "cdk-ldk-server-processor" => processor::effective_config(component),
             "cdk-bark-processor" => bark::effective_config(component),
-            "bark-server" => Ok(Self::BarkServer),
+            "bark-server" => bark::server_effective_config(component),
             "cln-hold" => Ok(Self::ClnHold),
             "cdk" => Ok(Self::Cdk(cdk()?)),
             "nutshell" => Ok(Self::Nutshell(nutshell()?)),
@@ -1399,17 +1399,16 @@ fn validate_config_value(
             "value is not one of the declared enumeration values",
         ));
     }
-    if let Some(number) = value.as_f64() {
-        if field.minimum.is_some_and(|minimum| number < minimum)
-            || field.maximum.is_some_and(|maximum| number > maximum)
-        {
-            return Err(config_diagnostic(
-                "numeric_bound_violation",
-                component,
-                name,
-                "numeric value is outside the declared inclusive bounds",
-            ));
-        }
+    if let Some(number) = value.as_f64()
+        && (field.minimum.is_some_and(|minimum| number < minimum)
+            || field.maximum.is_some_and(|maximum| number > maximum))
+    {
+        return Err(config_diagnostic(
+            "numeric_bound_violation",
+            component,
+            name,
+            "numeric value is outside the declared inclusive bounds",
+        ));
     }
     if let Some(text) = value.as_str() {
         let length = text.chars().count();
@@ -1513,10 +1512,10 @@ fn resolve_execution_mounts(
         {
             continue;
         }
-        if let ExecutionMountRequirement::AtLeastOne { group } = &mount.requirement {
-            if !optional {
-                alternative_groups.entry(group).or_default();
-            }
+        if let ExecutionMountRequirement::AtLeastOne { group } = &mount.requirement
+            && !optional
+        {
+            alternative_groups.entry(group).or_default();
         }
         let source = match &mount.source {
             ExecutionStorageTemplateSource::StatefulData => ExecutionStorageSource::StatefulData,
@@ -1572,10 +1571,10 @@ fn resolve_execution_mounts(
                 }
             }
         };
-        if let ExecutionMountRequirement::AtLeastOne { group } = &mount.requirement {
-            if !optional {
-                *alternative_groups.entry(group).or_default() += 1;
-            }
+        if let ExecutionMountRequirement::AtLeastOne { group } = &mount.requirement
+            && !optional
+        {
+            *alternative_groups.entry(group).or_default() += 1;
         }
         resolved.push(ExecutionMountContract {
             name: mount.name.clone(),
@@ -4283,8 +4282,8 @@ mod tests {
                 ports: BTreeMap::new(),
             };
         let mut targets = BTreeMap::from([
-            ("bolt11".into(), target("bolt11-node", "lnd", "0.20.4-beta")),
-            ("bolt12".into(), target("bolt12-node", "lnd", "0.20.4-beta")),
+            ("bolt11".into(), target("bolt11-node", "lnd", "0.20.5-beta")),
+            ("bolt12".into(), target("bolt12-node", "lnd", "0.20.5-beta")),
         ]);
         let mounts = resolve_execution_mounts(&backend, "mint", &links, &targets, false)
             .expect("unselected methods and implementations do not collide");
@@ -4297,7 +4296,7 @@ mod tests {
         let cln_link = payment("cln-bolt11", crate::PaymentMethod::Bolt11);
         let cln_targets = BTreeMap::from([(
             "cln-bolt11".into(),
-            target("cln-bolt11-node", "cln", "26.06.7"),
+            target("cln-bolt11-node", "cln", "26.06.9"),
         )]);
         let cln_mounts =
             resolve_execution_mounts(&backend, "mint", &[cln_link], &cln_targets, false)
@@ -4314,7 +4313,7 @@ mod tests {
         links.push(payment("bolt11-secondary", crate::PaymentMethod::Bolt11));
         targets.insert(
             "bolt11-secondary".into(),
-            target("bolt11-secondary-node", "lnd", "0.20.4-beta"),
+            target("bolt11-secondary-node", "lnd", "0.20.5-beta"),
         );
         let error = resolve_execution_mounts(&backend, "mint", &links, &targets, false)
             .expect_err("duplicate exact selectors must refuse");
@@ -4363,7 +4362,7 @@ mod tests {
                         component_id: "lightning".into(),
                         kind: ComponentKind::Lightning,
                         backend_id: "lnd".into(),
-                        version: "0.20.4-beta".into(),
+                        version: "0.20.5-beta".into(),
                         ports: BTreeMap::from([("rpc".into(), 10_009)]),
                     },
                 )]),

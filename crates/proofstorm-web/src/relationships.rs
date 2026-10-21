@@ -103,63 +103,62 @@ pub fn edges(cell: &EnvironmentCell, usage: Option<&CellUsage>, now: i64) -> Vec
     // Ambiguous node identities must never connect the wrong cell components.
     let mut identities = BTreeMap::<&str, Vec<&str>>::new();
     for balance in &usage.balances {
-        if lightning_endpoint(&balance.component).is_some() {
-            if let Some(key) = balance
+        if lightning_endpoint(&balance.component).is_some()
+            && let Some(key) = balance
                 .lightning
                 .as_ref()
                 .and_then(|o| o.node_pubkey.as_deref())
-            {
-                identities.entry(key).or_default().push(&balance.component);
-            }
+        {
+            identities.entry(key).or_default().push(&balance.component);
         }
     }
     let mut channels = BTreeMap::<String, ((bool, bool, i64), Edge)>::new();
     let mut bitcoin = BTreeMap::<(String, String), Edge>::new();
     for balance in &usage.balances {
-        if let Some(observation) = &balance.bitcoin {
-            if kind(&balance.component) == Some(ComponentKind::Bitcoin) {
-                for peer in &observation.peers {
-                    if peer == &balance.component || kind(peer) != Some(ComponentKind::Bitcoin) {
-                        continue;
-                    }
-                    if observation.error.is_some()
-                        && usage
-                            .balances
-                            .iter()
-                            .find(|b| &b.component == peer)
-                            .and_then(|b| b.bitcoin.as_ref())
-                            .is_some_and(|other| {
-                                other.error.is_none()
-                                    && other.observed_at_unix >= observation.observed_at_unix
-                                    && !other.peers.contains(&balance.component)
-                            })
-                    {
-                        continue;
-                    }
-                    let (from, to) = if &balance.component < peer {
-                        (balance.component.clone(), peer.clone())
-                    } else {
-                        (peer.clone(), balance.component.clone())
-                    };
-                    let stale = crate::model::observation_freshness(
-                        observation.observed_at_unix,
-                        now,
-                        observation.error.is_some() || usage.error.is_some(),
-                        true,
-                        crate::model::OBSERVATION_MAX_AGE,
-                    ) != crate::model::Freshness::Live;
-                    let edge = Edge {
-                        id: format!("bitcoin-peer:{from}:{to}"),
-                        from: from.clone(),
-                        to: to.clone(),
-                        kind: EdgeKind::BitcoinPeer,
-                        stale,
-                        lane: 0,
-                    };
-                    let entry = bitcoin.entry((from, to)).or_insert(edge.clone());
-                    if !stale {
-                        *entry = edge;
-                    }
+        if let Some(observation) = &balance.bitcoin
+            && kind(&balance.component) == Some(ComponentKind::Bitcoin)
+        {
+            for peer in &observation.peers {
+                if peer == &balance.component || kind(peer) != Some(ComponentKind::Bitcoin) {
+                    continue;
+                }
+                if observation.error.is_some()
+                    && usage
+                        .balances
+                        .iter()
+                        .find(|b| &b.component == peer)
+                        .and_then(|b| b.bitcoin.as_ref())
+                        .is_some_and(|other| {
+                            other.error.is_none()
+                                && other.observed_at_unix >= observation.observed_at_unix
+                                && !other.peers.contains(&balance.component)
+                        })
+                {
+                    continue;
+                }
+                let (from, to) = if &balance.component < peer {
+                    (balance.component.clone(), peer.clone())
+                } else {
+                    (peer.clone(), balance.component.clone())
+                };
+                let stale = crate::model::observation_freshness(
+                    observation.observed_at_unix,
+                    now,
+                    observation.error.is_some() || usage.error.is_some(),
+                    true,
+                    crate::model::OBSERVATION_MAX_AGE,
+                ) != crate::model::Freshness::Live;
+                let edge = Edge {
+                    id: format!("bitcoin-peer:{from}:{to}"),
+                    from: from.clone(),
+                    to: to.clone(),
+                    kind: EdgeKind::BitcoinPeer,
+                    stale,
+                    lane: 0,
+                };
+                let entry = bitcoin.entry((from, to)).or_insert(edge.clone());
+                if !stale {
+                    *entry = edge;
                 }
             }
         }
@@ -238,41 +237,41 @@ pub fn edges(cell: &EnvironmentCell, usage: Option<&CellUsage>, now: i64) -> Vec
                 }
             }
         }
-        if kind(&balance.component) == Some(ComponentKind::Wallet) {
-            if let Some(observation) = &balance.holdings {
-                let mut held = BTreeMap::<String, u64>::new();
-                for holding in &observation.mints {
-                    if let Some(mint) = holding
-                        .mint
-                        .as_ref()
-                        .filter(|id| kind(id) == Some(ComponentKind::Mint))
-                    {
-                        *held.entry(mint.clone()).or_default() = held
-                            .get(mint)
-                            .copied()
-                            .unwrap_or(0)
-                            .saturating_add(holding.held_sat());
-                    }
+        if kind(&balance.component) == Some(ComponentKind::Wallet)
+            && let Some(observation) = &balance.holdings
+        {
+            let mut held = BTreeMap::<String, u64>::new();
+            for holding in &observation.mints {
+                if let Some(mint) = holding
+                    .mint
+                    .as_ref()
+                    .filter(|id| kind(id) == Some(ComponentKind::Mint))
+                {
+                    *held.entry(mint.clone()).or_default() = held
+                        .get(mint)
+                        .copied()
+                        .unwrap_or(0)
+                        .saturating_add(holding.held_sat());
                 }
-                result.extend(
-                    held.into_iter()
-                        .filter(|(_, sat)| *sat > 0)
-                        .map(|(mint, sat)| Edge {
-                            id: format!("holding:{}:{}", balance.component, mint),
-                            from: balance.component.clone(),
-                            to: mint,
-                            kind: EdgeKind::Holding { sat },
-                            stale: crate::model::observation_freshness(
-                                observation.observed_at_unix,
-                                now,
-                                observation.error.is_some() || usage.error.is_some(),
-                                true,
-                                crate::model::OBSERVATION_MAX_AGE,
-                            ) != crate::model::Freshness::Live,
-                            lane: 0,
-                        }),
-                );
             }
+            result.extend(
+                held.into_iter()
+                    .filter(|(_, sat)| *sat > 0)
+                    .map(|(mint, sat)| Edge {
+                        id: format!("holding:{}:{}", balance.component, mint),
+                        from: balance.component.clone(),
+                        to: mint,
+                        kind: EdgeKind::Holding { sat },
+                        stale: crate::model::observation_freshness(
+                            observation.observed_at_unix,
+                            now,
+                            observation.error.is_some() || usage.error.is_some(),
+                            true,
+                            crate::model::OBSERVATION_MAX_AGE,
+                        ) != crate::model::Freshness::Live,
+                        lane: 0,
+                    }),
+            );
         }
     }
     result.extend(bitcoin.into_values());

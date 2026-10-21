@@ -16,7 +16,7 @@ rcgen = "=0.13.2"
 time = "0.3"
 k8s-openapi.workspace = true
 kube.workspace = true
-kube-runtime = { version = "=4.0.0", features = ["unstable-runtime-reconcile-on"] }
+kube-runtime = { version = "=4.2.0", features = ["unstable-runtime-reconcile-on"] }
 proofstorm-kube = { path = "../proofstorm-kube" }
 proofstorm-core = { path = "../proofstorm-core" }
 proofstorm-prober = { path = "../proofstorm-prober", features = ["transport"] }

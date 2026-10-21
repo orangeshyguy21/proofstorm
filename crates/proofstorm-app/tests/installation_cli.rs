@@ -83,6 +83,30 @@ fn setup_prefetch_is_explicit_and_incompatible_with_prepare_only() {
 }
 
 #[test]
+fn setup_recreate_needs_confirmation_and_a_resettable_home() {
+    let root = tempfile::tempdir().unwrap();
+    let help = cli(root.path()).args(["setup", "--help"]).output().unwrap();
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--recreate"));
+    for args in [
+        &["setup", "--yes"][..],
+        &["setup", "--recreate", "--prepare-only"],
+    ] {
+        let refused = cli(root.path()).args(args).output().unwrap();
+        assert_eq!(refused.status.code(), Some(2), "{args:?}");
+    }
+    let home = root.path().join("custom-home");
+    let unsupported = cli(root.path())
+        .arg("--home")
+        .arg(&home)
+        .args(["setup", "--recreate", "--yes"])
+        .output()
+        .unwrap();
+    assert!(!unsupported.status.success());
+    assert!(String::from_utf8_lossy(&unsupported.stderr).contains("reset only supports"));
+    assert!(!home.exists());
+}
+
+#[test]
 fn suspend_resume_require_an_initialized_private_installation() {
     let root = tempfile::tempdir().unwrap();
     for action in ["stop", "start"] {

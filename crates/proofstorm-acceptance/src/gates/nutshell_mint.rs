@@ -28,7 +28,7 @@ fn cell_document() -> Value {
                 "id": "lightning",
                 "kind": "lightning",
                 "implementation": "lnd",
-                "version": "0.21.3-beta",
+                "version": proofstorm_core::LND_VERSION,
                 "config_version": "lnd/0.20/v1",
                 "control": "cell",
                 "config": {"alias": "proofstorm-nutshell-lnd"}

@@ -20,8 +20,8 @@ fn cell_document() -> Value {
         "name": "cdk-lnd-bdk-cell",
         "components": [
             {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}},
-            {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": "0.21.3-beta", "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cdk-lnd-bdk"}},
-            {"id": "mint", "kind": "mint", "implementation": "cdk", "version": "0.18.1", "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK LND + BDK", "embedded_onchain": "bdk"}}
+            {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": proofstorm_core::LND_VERSION, "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cdk-lnd-bdk"}},
+            {"id": "mint", "kind": "mint", "implementation": "cdk", "version": proofstorm_core::CDK_VERSION, "config_version": "cdk-mintd/0.18/v1", "control": "target", "config": {"name": "Proofstorm CDK LND + BDK", "embedded_onchain": "bdk"}}
         ],
         "links": [
             {"id": "lightning-chain", "kind": "chain_backend", "from": "lightning", "to": "chain", "binding": {"type": "chain", "network": "regtest"}},
@@ -53,7 +53,7 @@ fn bitcoin(context: &GateContext, namespace: &str, arguments: &[&str]) -> Result
 
 pub fn run(context: &GateContext) -> Result<()> {
     let mut client = context.default_session("cdk-lnd-bdk-live", "designer")?;
-    let selected_version = context.selected_version("cdk", "0.18.1");
+    let selected_version = context.selected_version("cdk", proofstorm_core::CDK_VERSION);
     let selected_image = context.selected_image("cdk", IMAGE);
     let mut document = context.document(cell_document())?;
     document["components"][2]["version"] = json!(selected_version);

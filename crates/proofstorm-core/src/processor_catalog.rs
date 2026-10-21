@@ -130,10 +130,7 @@ pub(super) fn extend(
         entry.source_digest = crate::digest_json(&(&entry.source_digest, &provenance));
         entry.build_provenance = Some(provenance);
     }
-    for entry in entries
-        .iter_mut()
-        .filter(|entry| entry.id == "cdk" && entry.version == "0.18.1")
-    {
+    for entry in entries.iter_mut().filter(|entry| entry.id == "cdk") {
         entry.features.insert(CatalogFeature::Bolt12);
         entry
             .support_matrix

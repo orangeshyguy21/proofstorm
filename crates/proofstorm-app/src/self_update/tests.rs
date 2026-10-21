@@ -334,6 +334,42 @@ async fn subprocesses_are_bounded_and_descendants_are_stopped() {
 }
 
 #[test]
+fn releases_that_change_k3s_advise_recreating_instead_of_setup() {
+    let root = tempfile::tempdir().unwrap();
+    let installation = managed_fixture(root.path());
+    let home = root.path().join("runtime");
+    let runtime = crate::installation::Installation::initialize(&home, None, None).unwrap();
+    let mut info = managed::json(
+        &installation.bundle.join("release-info.json"),
+        2 * 1024 * 1024,
+    )
+    .unwrap();
+    let saved = crate::installation::saved_k3s_image(&runtime.home).unwrap();
+    info["tools"] = json!(format!(
+        "K3D_VERSION=v5.9.0\nK3S_VERSION={}\n",
+        saved.trim_start_matches("docker.io/rancher/k3s:")
+    ));
+    let same = follow_ups(&installation, Some(&home), &info, true);
+    assert!(same.iter().all(|action| {
+        action
+            .command
+            .as_ref()
+            .is_none_or(|command| !command.contains(&"--recreate".to_owned()))
+    }));
+    info["tools"] = json!("K3D_VERSION=v5.9.0\nK3S_VERSION=v9.9.9-k3s1\n");
+    let actions = follow_ups(&installation, Some(&home), &info, true);
+    let commands: Vec<_> = actions.iter().filter_map(|a| a.command.as_ref()).collect();
+    assert!(
+        commands
+            .iter()
+            .any(|command| command[3..] == ["setup", "--recreate"])
+    );
+    assert!(commands.iter().all(|command| command[3..] != ["setup"]));
+    let advice = serde_json::to_string(&actions).unwrap();
+    assert!(advice.contains("docker.io/rancher/k3s:v9.9.9-k3s1") && advice.contains(&saved));
+}
+
+#[test]
 fn custom_runtime_advice_preserves_home_and_never_changes_shared_state() {
     let root = tempfile::tempdir().unwrap();
     let installation = managed_fixture(root.path());
