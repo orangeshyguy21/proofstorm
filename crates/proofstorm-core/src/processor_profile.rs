@@ -62,12 +62,16 @@ impl ProcessorProfile {
         matches!(self, Self::Bark)
     }
 
-    /// Units a mint may bind. Bark serves only sat upstream; the LDK
-    /// processor's native msat responses reach the mint through CDK's sat
-    /// conversion, the only combination qualified.
+    /// Units the `client` implementation may bind. Bark serves only sat
+    /// upstream. The LDK processor reports msat, which CDK converts to sat,
+    /// the only CDK combination qualified. Nutshell has no conversion, so it
+    /// may also bind the native msat.
     #[must_use]
-    pub fn binding_units(self) -> BTreeSet<&'static str> {
-        ["sat"].into()
+    pub fn binding_units(self, client: &str) -> BTreeSet<&'static str> {
+        match (self, client) {
+            (Self::LdkServer, "nutshell") => ["msat", "sat"].into(),
+            _ => ["sat"].into(),
+        }
     }
 
     /// The native unit required from the authenticated `GetSettings` response.
@@ -80,10 +84,17 @@ impl ProcessorProfile {
     }
 
     #[must_use]
-    pub const fn binding_description(self) -> &'static str {
+    pub fn binding_description(self, client: &str) -> String {
+        let units = self
+            .binding_units(client)
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(" or ");
         match self {
-            Self::LdkServer => "bolt11/sat and bolt12/sat",
-            Self::Bark => "one sat binding for each method in the processor's payment_methods",
+            Self::LdkServer => format!("bolt11 and bolt12 bindings in one unit ({units})"),
+            Self::Bark => {
+                format!("one {units} binding for each method in the processor's payment_methods")
+            }
         }
     }
 
@@ -129,20 +140,22 @@ impl ProcessorProfile {
         (methods.len() == names.len() && self.accepts_methods(&methods)).then_some(methods)
     }
 
-    /// The unit and method set bound by a mint's links: every binding a
-    /// payment binding in one supported unit, each method once, and an
-    /// advertisable set.
+    /// The unit and method set bound by the `client` implementation's links:
+    /// every binding a payment binding in one supported unit, each method
+    /// once, and an advertisable set.
     pub fn bound_methods<'a>(
         self,
+        client: &str,
         bindings: impl IntoIterator<Item = Option<&'a DependencyBinding>>,
     ) -> Option<(String, BTreeSet<PaymentMethod>)> {
+        let units = self.binding_units(client);
         let mut bound_unit = None;
         let mut seen = BTreeSet::new();
         for binding in bindings {
             let Some(DependencyBinding::Payment { method, unit }) = binding else {
                 return None;
             };
-            if !self.binding_units().contains(unit.as_str())
+            if !units.contains(unit.as_str())
                 || bound_unit.is_some_and(|bound| bound != unit)
                 || !seen.insert(method.clone())
             {

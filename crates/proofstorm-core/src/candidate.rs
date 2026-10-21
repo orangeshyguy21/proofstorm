@@ -330,7 +330,8 @@ impl CandidateBuild {
 /// Derive one conservative experimental catalog entry from a successful build.
 ///
 /// Candidate code may change implementation behavior, but it cannot use the
-/// build path to expand the installed adapter's declared capabilities.
+/// build path to expand the installed adapter's declared capabilities, except
+/// that Nutshell candidates may bind CDK gRPC processors.
 ///
 /// # Errors
 ///
@@ -396,6 +397,19 @@ pub fn candidate_catalog_entry(
         if !candidate.build_features.contains(&feature) {
             entry.features.remove(&feature);
         }
+    }
+    // The one exception: released Nutshell has no CDK gRPC processor client,
+    // but candidate source may (nutshell PR #1131). A build without it stops
+    // at startup with "No backends are set." Move this to the release entry
+    // once Nutshell ships the client.
+    if entry.id == "nutshell" {
+        for profile in [
+            crate::ProcessorProfile::LdkServer,
+            crate::ProcessorProfile::Bark,
+        ] {
+            crate::catalog::bind_processor(&mut entry, profile);
+        }
+        entry.runtime_endpoints[0].limitations.push("Candidate builds may bind one CDK gRPC payment processor instead of LND/CLN, over mutual TLS (MINT_PAYMENT_BACKENDS entries of type GrpcPaymentProcessor). Bind every method the processor advertises: bolt11 and bolt12 in sat or msat for cdk-ldk-server-processor, which reports msat and gets no conversion from Nutshell; one sat binding per advertised method for cdk-bark-processor. bolt12 and onchain allow amountless, partial and repeated minting. A build without the gRPC client stops at startup with \"No backends are set.\"".into());
     }
     entry.source_digest = digest_json(&(
         base.source_digest.as_str(),
@@ -648,6 +662,73 @@ mod tests {
                 .get("provenance")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn only_nutshell_mint_candidates_may_bind_cdk_processors() {
+        use crate::{LinkKind, ProcessorProfile};
+        let mint = succeeded_candidate();
+        let mut wallet = mint.clone();
+        wallet.id = "wallet".into();
+        wallet.implementation = "nutshell-wallet".into();
+        wallet.version = Some("candidate-wallet".into());
+        let catalog = effective_catalog(default_catalog(), &[mint, wallet]).unwrap();
+        let processors = |id: &str, version: &str| {
+            let entry = catalog
+                .entries
+                .iter()
+                .find(|e| e.id == id && e.version == version)
+                .unwrap();
+            let bindings = entry
+                .support_matrix
+                .payment_bindings
+                .iter()
+                .filter(|b| {
+                    ProcessorProfile::for_implementation(&b.backend.implementation).is_some()
+                })
+                .map(|b| {
+                    format!(
+                        "{}/{}@{}",
+                        b.method.as_str(),
+                        b.unit,
+                        b.backend.implementation
+                    )
+                })
+                .collect::<BTreeSet<_>>();
+            let dependencies = entry
+                .compatible_dependencies
+                .iter()
+                .filter(|d| {
+                    d.link_kind == LinkKind::PaymentBackend
+                        && ProcessorProfile::for_implementation(&d.implementation).is_some()
+                })
+                .count();
+            (bindings, dependencies)
+        };
+        let (bindings, dependencies) = processors("nutshell", "candidate-pr1095-aabbccdd");
+        assert_eq!(dependencies, 2);
+        assert_eq!(
+            bindings,
+            BTreeSet::from([
+                "bolt11/msat@cdk-ldk-server-processor".into(),
+                "bolt11/sat@cdk-ldk-server-processor".into(),
+                "bolt12/msat@cdk-ldk-server-processor".into(),
+                "bolt12/sat@cdk-ldk-server-processor".into(),
+                "arkoor/sat@cdk-bark-processor".into(),
+                "bolt11/sat@cdk-bark-processor".into(),
+                "onchain/sat@cdk-bark-processor".into(),
+            ])
+        );
+        for (id, version) in [
+            ("nutshell", "0.21.0"),
+            ("nutshell-wallet", "candidate-wallet"),
+        ] {
+            assert_eq!(
+                processors(id, version),
+                (BTreeSet::new(), 0),
+                "{id}@{version}"
+            );
+        }
     }
 
     fn succeeded_candidate() -> CandidateBuild {

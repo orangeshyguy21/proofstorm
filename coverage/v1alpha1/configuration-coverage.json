@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:129795ca99d49a746969fc2cfd4d88f2d284745ce62c3426c01b35357fead342",
+  "catalog_digest": "sha256:1c76f3e741e26b9d99cc5ea162b6d17d6055a75c02eae0dda7d2dc71703ae7ee",
   "entries": [
     {
       "implementation": "bark-server",
@@ -856,6 +856,7 @@
           "ldk-server"
         ],
         "units": [
+          "msat",
           "sat"
         ],
         "payment_bindings": [

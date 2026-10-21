@@ -1501,8 +1501,7 @@ fn resolve_execution_mounts(
             && matches!(&mount.requirement, ExecutionMountRequirement::AtLeastOne { group } if group == "payment-backend");
         // A network processor supplies its own transport credentials. Native
         // LND/CLN data mounts are only applicable to direct node bindings.
-        if backend.id == "cdk"
-            && matches!(&mount.requirement, ExecutionMountRequirement::AtLeastOne { group } if group == "payment-backend")
+        if matches!(&mount.requirement, ExecutionMountRequirement::AtLeastOne { group } if group == "payment-backend")
             && relevant_links.iter().any(|link| {
                 link.kind == crate::LinkKind::PaymentBackend
                     && linked_targets

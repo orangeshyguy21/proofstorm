@@ -17,7 +17,7 @@ use serde_json::json;
 
 use crate::{
     BackendContractRegistry, CandidateSource, ComponentKind, ComponentSpec, ControlClass, LinkKind,
-    PaymentMethod, default_backend_registry,
+    PaymentMethod, ProcessorProfile, default_backend_registry,
 };
 
 #[path = "bark_catalog.rs"]
@@ -1713,6 +1713,48 @@ fn version_support(implementation: &str, versions: &[&str]) -> CatalogVersionSup
         implementation: implementation.into(),
         versions: versions.iter().map(|version| (*version).into()).collect(),
     }
+}
+
+/// Let a mint entry bind every method of a CDK gRPC processor, in the units
+/// the profile allows for that mint.
+pub(crate) fn bind_processor(entry: &mut CatalogEntry, profile: ProcessorProfile) {
+    let implementation = profile.implementation();
+    let version = match profile {
+        ProcessorProfile::LdkServer => processor::LDK_PROCESSOR_VERSION,
+        ProcessorProfile::Bark => bark::PROCESSOR_VERSION,
+    };
+    entry
+        .support_matrix
+        .payment_backends
+        .insert(implementation.into());
+    entry.compatible_dependencies.push(dependency(
+        LinkKind::PaymentBackend,
+        implementation,
+        &[version],
+    ));
+    for method in profile.supported_methods() {
+        entry
+            .features
+            .extend(CatalogFeature::for_payment_method(&method));
+        entry.support_matrix.payment_methods.insert(method.clone());
+        for unit in profile.binding_units(&entry.id) {
+            entry.support_matrix.units.insert(unit.into());
+            entry
+                .support_matrix
+                .payment_bindings
+                .insert(payment_binding(
+                    method.clone(),
+                    unit,
+                    implementation,
+                    &[version],
+                ));
+        }
+    }
+    entry.source_digest = crate::digest_json(&(
+        &entry.source_digest,
+        &entry.support_matrix,
+        &entry.compatible_dependencies,
+    ));
 }
 
 fn dependency(
