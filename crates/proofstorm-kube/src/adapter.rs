@@ -2371,8 +2371,16 @@ pub fn render_nutshell_mint_component(
         ));
     };
     let http_port = target_port(&plan.target_descriptor, "http")?;
-    let (payment_mount, lightning, credential, lightning_rest_port) =
-        nutshell_payment_context(plan)?;
+    // A processor link replaces the mounted Lightning REST credentials.
+    let processor = processor::grpc_target(plan)?;
+    let lightning = if processor.is_some() {
+        None
+    } else {
+        Some(nutshell_payment_context(plan)?)
+    };
+    let uses_cln = lightning
+        .as_ref()
+        .is_some_and(|(_, lightning, _, _)| lightning.backend_id == "cln");
     let database = linked_postgres_database(plan, DatabaseRole::Primary)?;
     // Nutshell keeps its auth ledger separately and may use either engine.
     let auth_database = linked_postgres_database(plan, DatabaseRole::Authentication)?;
@@ -2402,13 +2410,24 @@ pub fn render_nutshell_mint_component(
     let mut environment = nutshell_mint_environment(
         &plan.component_id,
         http_port,
-        lightning,
-        lightning_rest_port,
-        payment_mount,
         config,
         cache.is_some(),
         oidc_discovery_url.as_deref(),
     );
+    if let Some((payment_mount, lightning, _, lightning_rest_port)) = &lightning {
+        environment.extend(nutshell_lightning_environment(
+            config,
+            lightning,
+            *lightning_rest_port,
+            payment_mount,
+        ));
+    }
+    if let Some(processor) = &processor {
+        environment.insert(
+            "MINT_PAYMENT_BACKENDS".into(),
+            processor::nutshell_payment_backends(processor)?,
+        );
+    }
     if auth_database.is_none() {
         environment.insert("MINT_AUTH_DATABASE".into(), "/app/data".into());
     }
@@ -2419,7 +2438,7 @@ pub fn render_nutshell_mint_component(
         .is_some_and(|version| version == "0.21.0");
     if uses_xpay {
         environment.insert("PROOFSTORM_NUTSHELL_VERSION".into(), "0.21.0".into());
-        if lightning.backend_id == "cln" {
+        if uses_cln {
             environment.insert(
                 "MINT_CLNREST_RUNE".into(),
                 "/app/data/.proofstorm/cln-xpay.rune".into(),
@@ -2446,7 +2465,7 @@ pub fn render_nutshell_mint_component(
             "valueFrom": {"secretKeyRef": {"name": cache_secret, "key": "REDIS_URL"}}
         }));
     }
-    let command = if lightning.backend_id == "cln" {
+    let command = if uses_cln {
         json!([
             "sh",
             "-ec",
@@ -2478,6 +2497,24 @@ pub fn render_nutshell_mint_component(
         "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}}
     }))?);
     rendered.services.push(resource(service_from_plan(plan))?);
+    let mut volume_mounts = vec![json!({"name": "data", "mountPath": "/app/data"})];
+    let mut volumes =
+        vec![json!({"name": "data", "persistentVolumeClaim": {"claimName": data_name}})];
+    if let Some((payment_mount, _, credential, _)) = &lightning {
+        volume_mounts.push(json!({"name": payment_mount.name, "mountPath": payment_mount.mount_path, "readOnly": true}));
+        volumes.push(json!({"name": payment_mount.name, "persistentVolumeClaim": {"claimName": credential.claim_name}}));
+    }
+    if let Some(processor) = &processor {
+        volume_mounts.push(processor::tls_mount(
+            "payment-processor",
+            "/payment-processor/tls",
+        ));
+        volumes.push(processor::tls_volume(
+            "payment-processor",
+            &processor.descriptor.component_id,
+            "client",
+        ));
+    }
     let mut deployment = json!({
         "apiVersion": "apps/v1", "kind": "Deployment",
         "metadata": plan_workload_metadata(plan),
@@ -2505,14 +2542,8 @@ pub fn render_nutshell_mint_component(
                         "periodSeconds": 3,
                         "failureThreshold": 40
                     },
-                    "volumeMounts": [
-                        {"name": "data", "mountPath": "/app/data"},
-                        {"name": payment_mount.name, "mountPath": payment_mount.mount_path, "readOnly": true}
-                    ]
-                }], "volumes": [
-                    {"name": "data", "persistentVolumeClaim": {"claimName": data_name}},
-                    {"name": payment_mount.name, "persistentVolumeClaim": {"claimName": credential.claim_name}}
-                ]
+                    "volumeMounts": volume_mounts
+                }], "volumes": volumes
             }
         }}
     });
@@ -2521,7 +2552,16 @@ pub fn render_nutshell_mint_component(
         &mut rendered,
         &mut deployment["spec"]["template"]["spec"],
     )?;
-    if lightning.backend_id == "lnd" {
+    if let Some(processor) = &processor {
+        append_init_container(
+            &mut deployment,
+            processor::wait_for_processor(plan, processor)?,
+        );
+    }
+    if let Some((_, lightning, _, lightning_rest_port)) = lightning
+        .as_ref()
+        .filter(|(_, lightning, _, _)| lightning.backend_id == "lnd")
+    {
         // Nutshell exits if its first REST request races LND startup. The
         // Service publishes endpoints only after LND's getinfo probe succeeds.
         // Wait here so normal dependency startup cannot become a mint crash loop.
@@ -2719,16 +2759,12 @@ fn nutshell_payment_context(
 }
 
 #[allow(
-    clippy::too_many_arguments,
     clippy::too_many_lines,
     reason = "the exact-version environment renderer keeps the complete supported Nutshell setting projection auditable"
 )]
 fn nutshell_mint_environment(
     component: &str,
     http_port: u16,
-    lightning: &TargetDescriptorContract,
-    lightning_rest_port: u16,
-    payment_mount: &proofstorm_core::ExecutionMountContract,
     config: &NutshellMintConfig,
     redis_cache_enabled: bool,
     oidc_discovery_url: Option<&str>,
@@ -2912,8 +2948,19 @@ fn nutshell_mint_environment(
             ),
         ]);
     }
+    environment
+}
+
+/// Nutshell's bolt11/sat REST backend for a directly linked LND or CLN node.
+fn nutshell_lightning_environment(
+    config: &NutshellMintConfig,
+    lightning: &TargetDescriptorContract,
+    lightning_rest_port: u16,
+    payment_mount: &proofstorm_core::ExecutionMountContract,
+) -> BTreeMap<String, String> {
+    let bool_string = |value: bool| if value { "TRUE" } else { "FALSE" }.to_owned();
     if lightning.backend_id == "cln" {
-        environment.extend([
+        BTreeMap::from([
             ("MINT_BACKEND_BOLT11_SAT".into(), "CLNRestWallet".into()),
             (
                 "MINT_CLNREST_ENABLE_MPP".into(),
@@ -2927,9 +2974,9 @@ fn nutshell_mint_environment(
                 "MINT_CLNREST_URL".into(),
                 format!("http://{}:{lightning_rest_port}", lightning.component_id),
             ),
-        ]);
+        ])
     } else {
-        environment.extend([
+        BTreeMap::from([
             ("MINT_BACKEND_BOLT11_SAT".into(), "LndRestWallet".into()),
             (
                 "MINT_LND_ENABLE_MPP".into(),
@@ -2951,9 +2998,8 @@ fn nutshell_mint_environment(
                     payment_mount.mount_path
                 ),
             ),
-        ]);
+        ])
     }
-    environment
 }
 
 /// Render a persistent programmable workspace from a compiled plan without

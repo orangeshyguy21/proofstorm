@@ -18,12 +18,10 @@ pub(super) struct ProcessorTarget<'a> {
     pub(super) methods: BTreeSet<PaymentMethod>,
 }
 
+/// The processor a mint's payment links select, if any.
 pub(super) fn grpc_target(
     plan: &ComponentPlanContract,
 ) -> Result<Option<ProcessorTarget<'_>>, AdapterError> {
-    if plan.backend_id != "cdk" {
-        return Ok(None);
-    }
     let Some(target) = plan.relevant_links.iter().find_map(|link| {
         (link.kind == LinkKind::PaymentBackend)
             .then(|| plan.linked_targets.get(&link.id))
@@ -66,7 +64,10 @@ fn payment_target<'a>(
         .and_then(|link| plan.linked_targets.get(&link.id));
     // Topology validation already matched these bindings to the processor's
     // advertised set; readiness compares them with its live settings.
-    let bound = profile.bound_methods(links.iter().map(|link| link.binding.as_ref()));
+    let bound = profile.bound_methods(
+        &plan.backend_id,
+        links.iter().map(|link| link.binding.as_ref()),
+    );
     if bound.is_none()
         || !target.is_some_and(|target| {
             target.backend_id == implementation
@@ -81,7 +82,7 @@ fn payment_target<'a>(
         return Err(AdapterError::InvalidPlan(format!(
             "component {:?} requires {} bindings to one {implementation}",
             plan.component_id,
-            profile.binding_description()
+            profile.binding_description(&plan.backend_id)
         )));
     }
     let (unit, methods) = bound.expect("validated payment bindings");
@@ -244,6 +245,40 @@ pub(super) fn payment_backend_config(
         "[payment_backend]\nbackend = \"grpcprocessor\"\nunit = \"{unit}\"\nmin_mint = {}\nmax_mint = {}\nmin_melt = {}\nmax_melt = {}\n\n[grpc_processor]\nsupported_units = [\"{unit}\"]\naddress = \"{}\"\nport = {grpc_port}\ntls_dir = \"/payment-processor/tls\"\nallow_insecure = false\n",
         config.min_mint, config.max_mint, config.min_melt, config.max_melt, target.component_id
     ))
+}
+
+/// Nutshell's `MINT_PAYMENT_BACKENDS`: one mutual-TLS entry per bound method.
+/// Reusable BOLT12 offers and on-chain addresses get the three capabilities
+/// upstream documents for them; other methods keep Nutshell's defaults.
+pub(super) fn nutshell_payment_backends(
+    processor: &ProcessorTarget<'_>,
+) -> Result<String, AdapterError> {
+    let target = processor.descriptor;
+    let endpoint = format!("{}:{}", target.component_id, target_port(target, "grpc")?);
+    let backends = processor
+        .methods
+        .iter()
+        .map(|method| {
+            let mut backend = json!({
+                "type": "GrpcPaymentProcessor",
+                "method": method.as_str(),
+                "unit": processor.unit,
+                "endpoint": endpoint,
+                "tls_dir": "/payment-processor/tls",
+            });
+            if matches!(method, PaymentMethod::Bolt12 | PaymentMethod::Onchain) {
+                for capability in [
+                    "allows_amountless_mint",
+                    "allows_partial_mint",
+                    "allows_repeated_payments",
+                ] {
+                    backend[capability] = json!(true);
+                }
+            }
+            backend
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::to_string(&backends)?)
 }
 
 pub(super) fn wait_for_processor(

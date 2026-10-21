@@ -94,7 +94,7 @@ pub(super) fn extend(
             &[StorageBackend::Ephemeral],
             &[PaymentMethod::Bolt11, PaymentMethod::Bolt12],
             &["ldk-server"],
-            &["sat"],
+            &["msat", "sat"],
             &[
                 payment_binding(
                     PaymentMethod::Bolt11,
@@ -131,36 +131,7 @@ pub(super) fn extend(
         entry.build_provenance = Some(provenance);
     }
     for entry in entries.iter_mut().filter(|entry| entry.id == "cdk") {
-        entry.features.insert(CatalogFeature::Bolt12);
-        entry
-            .support_matrix
-            .payment_methods
-            .insert(PaymentMethod::Bolt12);
-        entry
-            .support_matrix
-            .payment_backends
-            .insert(LDK_PROCESSOR.into());
-        entry.compatible_dependencies.push(dependency(
-            LinkKind::PaymentBackend,
-            LDK_PROCESSOR,
-            &[LDK_PROCESSOR_VERSION],
-        ));
-        for method in [PaymentMethod::Bolt11, PaymentMethod::Bolt12] {
-            entry
-                .support_matrix
-                .payment_bindings
-                .insert(payment_binding(
-                    method,
-                    "sat",
-                    LDK_PROCESSOR,
-                    &[LDK_PROCESSOR_VERSION],
-                ));
-        }
-        entry.source_digest = crate::digest_json(&(
-            &entry.source_digest,
-            &entry.support_matrix,
-            &entry.compatible_dependencies,
-        ));
+        super::bind_processor(entry, crate::ProcessorProfile::LdkServer);
     }
 }
 
@@ -179,7 +150,7 @@ pub(super) fn endpoints(implementation: &str) -> Option<Vec<CatalogRuntimeEndpoi
             "payment_processor",
             &["component_logs", "reachability_oracle"],
             &[&format!(
-                "Pinned upstream revision fe468cad486157683eddbc0df4ff87ba71b6c0a3, CDK payment protocol 4.0.0. Requires bolt11/sat and bolt12/sat links to one LDK Server; CDK mints use the same two bindings to this component. The backend reports msat internally; the supported mint contract is sat with CDK conversion. The linked LDK node owns durable payment history; the live event stream does not replay payments missed during an outage. After reconnect, check original Cashu mint and melt quotes to reconcile them against durable LDK payment history. GetSettings: /opt/proofstorm/driver processor-settings https://127.0.0.1:50051 /processor-client/tls {LDK_PROCESSOR}. Mint/processor transport requires mutual TLS. No MPP support."
+                "Pinned upstream revision fe468cad486157683eddbc0df4ff87ba71b6c0a3, CDK payment protocol 4.0.0. Requires bolt11/sat and bolt12/sat links to one LDK Server; CDK mints use the same two bindings to this component in sat; the backend reports msat and CDK converts. Nutshell candidates bind the same two methods in sat or the native msat. The linked LDK node owns durable payment history; the live event stream does not replay payments missed during an outage. After reconnect, check original Cashu mint and melt quotes to reconcile them against durable LDK payment history. GetSettings: /opt/proofstorm/driver processor-settings https://127.0.0.1:50051 /processor-client/tls {LDK_PROCESSOR}. Mint/processor transport requires mutual TLS. No MPP support."
             )],
         )]),
         _ => None,

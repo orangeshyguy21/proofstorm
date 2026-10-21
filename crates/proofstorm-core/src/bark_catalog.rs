@@ -19,7 +19,7 @@ struct Images {
     cln: String,
 }
 
-const PROCESSOR_VERSION: &str = "0.1.0-fe468ca";
+pub(super) const PROCESSOR_VERSION: &str = "0.1.0-fe468ca";
 const SERVER_VERSION: &str = "0.7.0-6188e2d";
 const CLN_HOLD_VERSION: &str = "26.06.7-hold.0.3.3";
 const QUALIFICATION: &str = "Experimental support on Linux AMD64 and ARM64. Published native images passed managed BOLT11/sat payment/restart qualification with original-quote reconciliation. Ordinary native qualification covers the distributed pins.";
@@ -163,38 +163,10 @@ pub(super) fn extend(
             crate::digest_json(&(&entry.source_digest, &entry.image, &provenance));
         entry.build_provenance = Some(provenance);
     }
+    // CDK 0.18 registers every method a gRPC processor advertises,
+    // including on-chain and custom methods.
     for entry in entries.iter_mut().filter(|entry| entry.id == "cdk") {
-        entry
-            .support_matrix
-            .payment_backends
-            .insert(BARK_PROCESSOR.into());
-        entry.compatible_dependencies.push(dependency(
-            LinkKind::PaymentBackend,
-            BARK_PROCESSOR,
-            &[PROCESSOR_VERSION],
-        ));
-        // CDK 0.18 registers every method a gRPC processor advertises,
-        // including on-chain and custom methods.
-        for method in ProcessorProfile::Bark.supported_methods() {
-            entry
-                .features
-                .extend(CatalogFeature::for_payment_method(&method));
-            entry.support_matrix.payment_methods.insert(method.clone());
-            entry
-                .support_matrix
-                .payment_bindings
-                .insert(payment_binding(
-                    method,
-                    "sat",
-                    BARK_PROCESSOR,
-                    &[PROCESSOR_VERSION],
-                ));
-        }
-        entry.source_digest = crate::digest_json(&(
-            &entry.source_digest,
-            &entry.support_matrix,
-            &entry.compatible_dependencies,
-        ));
+        super::bind_processor(entry, ProcessorProfile::Bark);
     }
 }
 

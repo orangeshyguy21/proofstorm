@@ -82,11 +82,11 @@ compatibility details.
 | Core Lightning | `cln` | Lightning, BOLT11 |
 | LDK Server | `ldk-server` | Experimental standalone Lightning node and native CLI |
 | CDK mint | `cdk` | Linked LND / CLN / gRPC processor or embedded LDK Node (BOLT11 / BOLT12), optional embedded BDK on-chain; SQLite / PostgreSQL; optional NUT-21 / NUT-22 auth |
-| CDK LDK Server processor | `cdk-ldk-server-processor` | Experimental gRPC BOLT11 / BOLT12 backend for CDK |
-| CDK Bark processor | `cdk-bark-processor` | Experimental AMD64/ARM64: persistent Bark wallet and gRPC backend for CDK, advertising bolt11, onchain and arkoor in sat (each selectable) |
+| CDK LDK Server processor | `cdk-ldk-server-processor` | Experimental gRPC BOLT11 / BOLT12 backend for CDK and Nutshell candidates |
+| CDK Bark processor | `cdk-bark-processor` | Experimental AMD64/ARM64: persistent Bark wallet and gRPC backend for CDK and Nutshell candidates, advertising bolt11, onchain and arkoor in sat (each selectable) |
 | Bark server | `bark-server` | Experimental AMD64/ARM64: Ark server backed by PostgreSQL and CLN/hold |
 | CLN with hold | `cln-hold` | Experimental AMD64/ARM64: Core Lightning with the hold-invoice plugin |
-| Nutshell mint | `nutshell` | LND / CLN; Redis cache; 0.21.0 supports NUT-21 / NUT-22 auth |
+| Nutshell mint | `nutshell` | LND / CLN; candidate builds may use a gRPC processor instead; Redis cache; 0.21.0 supports NUT-21 / NUT-22 auth |
 | Nutshell wallet | `nutshell-wallet` | Persistent Cashu wallet |
 | CDK CLI wallet | `cdk-cli-wallet` | Cashu wallet CLI |
 | Coco daemon | `cocod-wallet` | Experimental Cashu wallet |

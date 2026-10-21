@@ -4,7 +4,9 @@ use proofstorm_core::{
     CellSpec, ComponentKind, ComponentPlanContract, DependencyBinding, LinkKind, PaymentMethod,
     ProcessorProfile, default_catalog, resolve_lock,
 };
-use proofstorm_kube::{compile_component_plans, render_cdk_component};
+use proofstorm_kube::{
+    compile_component_plans, render_cdk_component, render_nutshell_mint_component,
+};
 
 fn mint_plan(profile: ProcessorProfile) -> ComponentPlanContract {
     let spec: CellSpec =
@@ -250,4 +252,150 @@ fn ldk_methods_cannot_mix_profiles_endpoints_or_descriptors() {
         }
         assert!(render_cdk_component(&invalid).is_err(), "{mutation}");
     }
+}
+
+/// The example LDK processor cell with its mint swapped for Nutshell `version`,
+/// bound in `unit`, against a catalog that holds one Nutshell candidate.
+fn nutshell_cell(version: &str, unit: &str) -> (CellSpec, proofstorm_core::CatalogResponse) {
+    let mut spec: CellSpec =
+        serde_json::from_str(include_str!("../../../examples/ldk-server-cell.json")).unwrap();
+    let candidate = proofstorm_core::CandidateBuild {
+        diagnostics: None,
+        api_version: proofstorm_core::CANDIDATE_BUILD_API_VERSION.into(),
+        id: "nutshell-pr-1131".into(),
+        workspace_id: "test".into(),
+        principal_id: "agent".into(),
+        implementation: "nutshell".into(),
+        base_version: "0.21.0".into(),
+        pull_request_url: "https://github.com/cashubtc/nutshell/pull/1131".into(),
+        resource_name: "candidate-8cb0af79".into(),
+        request_digest: "sha256:request".into(),
+        provenance: None,
+        build_features: [
+            proofstorm_core::CatalogFeature::MintManagementRpc,
+            proofstorm_core::CatalogFeature::NativeCliEntrypoints,
+        ]
+        .into(),
+        phase: proofstorm_core::CandidateBuildPhase::Succeeded,
+        accepted_at_unix: 1,
+        started_at_unix: Some(2),
+        completed_at_unix: Some(3),
+        repository: Some("https://github.com/cashubtc/nutshell.git".into()),
+        commit_sha: Some("8cb0af7957216e8e0ee88d8621d794af67ffb3d9".into()),
+        version: Some("candidate-pr1131-8cb0af79".into()),
+        image: Some(format!(
+            "proofstorm-registry.localhost:5000/proofstorm-candidates/nutshell@sha256:{}",
+            "1".repeat(64)
+        )),
+        error_code: None,
+        error_message: None,
+    };
+    let catalog = proofstorm_core::effective_catalog(default_catalog(), &[candidate]).unwrap();
+    let entry = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.id == "nutshell" && entry.version == version)
+        .unwrap();
+    let mint = spec.components.iter_mut().find(|c| c.id == "mint").unwrap();
+    mint.implementation = "nutshell".into();
+    mint.version = Some(version.into());
+    mint.config_version.clone_from(&entry.config_version);
+    for link in spec.links.iter_mut().filter(|link| link.from == "mint") {
+        let Some(DependencyBinding::Payment { unit: bound, .. }) = &mut link.binding else {
+            unreachable!()
+        };
+        *bound = unit.into();
+    }
+    (spec, catalog)
+}
+
+#[test]
+fn nutshell_candidates_reach_cdk_processors_over_mutual_tls() {
+    let (spec, catalog) = nutshell_cell("candidate-pr1131-8cb0af79", "msat");
+    let lock = resolve_lock(&spec, &catalog).unwrap();
+    let plan = compile_component_plans("i-profile-test", "sha256:profile-test", &spec, &lock)
+        .unwrap()
+        .into_iter()
+        .find(|plan| plan.component_id == "mint")
+        .unwrap();
+    assert!(plan.credentials.is_empty());
+    let rendered = render_nutshell_mint_component(&plan).unwrap();
+    let environment = rendered.config_maps[0].data.as_ref().unwrap();
+    let backends: serde_json::Value =
+        serde_json::from_str(&environment["MINT_PAYMENT_BACKENDS"]).unwrap();
+    let mtls = |method: &str| {
+        serde_json::json!({
+            "type": "GrpcPaymentProcessor", "method": method, "unit": "msat",
+            "endpoint": "processor:50051", "tls_dir": "/payment-processor/tls",
+        })
+    };
+    let mut bolt12 = mtls("bolt12");
+    for capability in [
+        "allows_amountless_mint",
+        "allows_partial_mint",
+        "allows_repeated_payments",
+    ] {
+        bolt12[capability] = true.into();
+    }
+    assert_eq!(backends, serde_json::json!([mtls("bolt11"), bolt12]));
+    assert!(
+        environment
+            .keys()
+            .all(|name| !name.starts_with("MINT_BACKEND_")
+                && !name.starts_with("MINT_LND_")
+                && !name.starts_with("MINT_CLNREST_"))
+    );
+    let deployment = serde_json::to_value(&rendered.deployments[0]).unwrap();
+    let pod = &deployment["spec"]["template"]["spec"];
+    assert_eq!(pod["containers"][0]["command"], serde_json::json!(["mint"]));
+    let volume = pod["volumes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|volume| volume["name"] == "payment-processor")
+        .unwrap();
+    assert_eq!(volume["secret"]["secretName"], "processor-payment-tls");
+    let keys: Vec<_> = volume["secret"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["ca.pem", "client.pem", "client.key"]);
+    let claims: Vec<_> = pod["volumes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|volume| volume["persistentVolumeClaim"]["claimName"].as_str())
+        .collect();
+    assert_eq!(claims, ["mint-data"]);
+    let wait = pod["initContainers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|init| init["name"] == "wait-for-payment-processor")
+        .unwrap();
+    assert!(wait["command"][2].as_str().unwrap().contains(
+        "processor-settings https://processor:50051 /payment-processor/tls cdk-ldk-server-processor;"
+    ));
+    for container in [&pod["containers"][0], wait] {
+        let mount = container["volumeMounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|mount| mount["name"] == "payment-processor")
+            .unwrap();
+        assert_eq!(mount["mountPath"], "/payment-processor/tls");
+        assert_eq!(mount["readOnly"], true);
+    }
+    // sat stays bindable so the candidate's own unit check is observable.
+    let (spec, catalog) = nutshell_cell("candidate-pr1131-8cb0af79", "sat");
+    resolve_lock(&spec, &catalog).unwrap();
+}
+
+#[test]
+fn released_nutshell_cannot_bind_a_processor() {
+    let (spec, catalog) = nutshell_cell("0.21.0", "sat");
+    let error = resolve_lock(&spec, &catalog).unwrap_err();
+    assert!(error.contains("does not declare PaymentBackend"), "{error}");
 }

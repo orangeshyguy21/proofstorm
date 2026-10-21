@@ -20,7 +20,7 @@ pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssu
                 ComponentKind::Lightning,
                 profile.advertised_methods(&component.config),
             )
-        } else if component.implementation == "cdk" {
+        } else if matches!(component.implementation.as_str(), "cdk" | "nutshell") {
             let Some(target) = links.iter().find_map(|link| {
                 cell.components.iter().find(|target| {
                     target.id == link.to
@@ -57,9 +57,13 @@ pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssu
             continue;
         };
         let target_id = links.first().map(|link| &link.to);
-        // CDK registers every advertised method, so bindings must name exactly that set.
+        // CDK registers every advertised method, so bindings must name exactly
+        // that set. Nutshell mints follow the same contract.
         if profile
-            .bound_methods(links.iter().map(|link| link.binding.as_ref()))
+            .bound_methods(
+                &component.implementation,
+                links.iter().map(|link| link.binding.as_ref()),
+            )
             .is_none_or(|(_, bound)| bound != advertised)
             || !links.iter().all(|link| {
                 cell.components.iter().any(|target| {
@@ -79,7 +83,7 @@ pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssu
                 format!("/components/{index}"),
                 format!(
                     "this profile requires {} payment bindings to one {target_implementation} component; it advertises {}",
-                    profile.binding_description(),
+                    profile.binding_description(&component.implementation),
                     method_list(&advertised)
                 ),
             );
@@ -283,6 +287,38 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn nutshell_may_bind_the_ldk_processor_in_native_msat() {
+        let with_units = |implementation: &str, bolt11: &str, bolt12: &str| {
+            let mut cell = example();
+            cell.components
+                .iter_mut()
+                .find(|c| c.id == "mint")
+                .unwrap()
+                .implementation = implementation.into();
+            for link in &mut cell.links {
+                let unit = match link.id.as_str() {
+                    "mint-bolt11" => bolt11,
+                    "mint-bolt12" => bolt12,
+                    _ => continue,
+                };
+                let Some(DependencyBinding::Payment { unit: bound, .. }) = &mut link.binding else {
+                    unreachable!()
+                };
+                *bound = unit.into();
+            }
+            validate_cell(&cell)
+                .issues
+                .into_iter()
+                .filter(|issue| issue.code == "ldk_processor_payment_bindings")
+                .count()
+        };
+        assert_eq!(with_units("nutshell", "sat", "sat"), 0);
+        assert_eq!(with_units("nutshell", "msat", "msat"), 0);
+        assert_eq!(with_units("nutshell", "sat", "msat"), 1);
+        assert_eq!(with_units("cdk", "msat", "msat"), 1);
     }
 
     #[test]
