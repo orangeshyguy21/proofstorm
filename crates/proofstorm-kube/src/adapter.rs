@@ -2427,6 +2427,9 @@ pub fn render_nutshell_mint_component(
             "MINT_PAYMENT_BACKENDS".into(),
             processor::nutshell_payment_backends(processor)?,
         );
+        if let Some(paths) = processor::nutshell_keyset_paths(processor)? {
+            environment.insert("MINT_DERIVATION_PATH_LIST".into(), paths);
+        }
     }
     if auth_database.is_none() {
         environment.insert("MINT_AUTH_DATABASE".into(), "/app/data".into());

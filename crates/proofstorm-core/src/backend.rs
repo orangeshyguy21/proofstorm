@@ -2851,7 +2851,7 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             (
                 "derivation_path".into(),
                 string(
-                    "Fixed disposable-regtest sat keyset derivation path",
+                    "Fixed disposable-regtest sat keyset derivation path, plus the msat path when a payment processor is bound in msat",
                     Policy,
                 ),
             ),

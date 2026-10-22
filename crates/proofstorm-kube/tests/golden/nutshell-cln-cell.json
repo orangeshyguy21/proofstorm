@@ -494,7 +494,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:2557e85338618c4023cc087f1f9a5946d03a7a4e3bc9808090aaff0d67c37945",
+      "rollout_digest": "sha256:4b690c77636356321624cba260f26f15afc6a3038ab1ef45f1f14f19273be9ec",
       "storage": [
         {
           "claim_name": "mint-data"
@@ -821,7 +821,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:2557e85338618c4023cc087f1f9a5946d03a7a4e3bc9808090aaff0d67c37945"
+                "proofstorm.dev/rollout-digest": "sha256:4b690c77636356321624cba260f26f15afc6a3038ab1ef45f1f14f19273be9ec"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

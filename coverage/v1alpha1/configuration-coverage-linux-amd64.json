@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:7264907bb37391ea7cb0650a0a0f61adcb32379d75656b71a64b44af129dc08c",
+  "catalog_digest": "sha256:93a8b8fedf57e86d7bd0c3098875b919f9a34e755c565ae81d718b5aca947aa9",
   "entries": [
     {
       "implementation": "bark-server",
@@ -1657,7 +1657,7 @@
       "release_channel": "stable",
       "support_lifecycle": "supported",
       "config_version": "nutshell-mint/0.20/v1",
-      "config_schema_digest": "sha256:1a4f987b411319db97f257efb2a2090f5d44af99278b4b183e29126a465471c1",
+      "config_schema_digest": "sha256:610d5c7085def0beb33f0c3f6232333c780d39be5ea8ae50b5e475af404dbfc8",
       "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:7981248be39e217c66790bd2825f157ec9ddf460410489715ca89d83952aa754",
       "fields": {
         "auth_max_blind_tokens": {
@@ -1974,7 +1974,7 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "nutshell-mint/0.20/v1",
-      "config_schema_digest": "sha256:1a4f987b411319db97f257efb2a2090f5d44af99278b4b183e29126a465471c1",
+      "config_schema_digest": "sha256:610d5c7085def0beb33f0c3f6232333c780d39be5ea8ae50b5e475af404dbfc8",
       "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:902461e83918af77a7b82ba2b08ef1709989fc81394ed18191d4bd7e60cdd846",
       "fields": {
         "auth_max_blind_tokens": {
