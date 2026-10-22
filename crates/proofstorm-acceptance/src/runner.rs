@@ -21,6 +21,7 @@ use std::{
 pub struct Selection {
     pub benchmark_model: Option<String>,
     pub benchmark_opencode: PathBuf,
+    pub benchmark_opencode_profile: Option<PathBuf>,
     pub benchmark_harness: String,
     pub benchmark_codex: PathBuf,
     pub benchmark_codex_auth: Option<PathBuf>,
@@ -62,6 +63,9 @@ impl Selection {
                 .arg(&self.benchmark_claude_auth);
             if let Some(auth) = &self.benchmark_codex_auth {
                 command.arg("--benchmark-codex-auth").arg(auth);
+            }
+            if let Some(profile) = &self.benchmark_opencode_profile {
+                command.arg("--benchmark-opencode-profile").arg(profile);
             }
         }
         if let Some((plan, case)) = &self.qualification {
@@ -258,6 +262,7 @@ pub fn worker(selection: &Selection, root: &Path, home: &Path, name: &str) -> Re
                     },
                     _ => crate::benchmark::harness::Harness::OpenCode {
                         executable: selection.benchmark_opencode.clone(),
+                        profile: selection.benchmark_opencode_profile.clone(),
                     },
                 },
             });
@@ -972,6 +977,7 @@ mod tests {
         let selection = Selection {
             benchmark_model: None,
             benchmark_opencode: "opencode".into(),
+            benchmark_opencode_profile: None,
             benchmark_harness: "opencode".into(),
             benchmark_codex: "codex".into(),
             benchmark_codex_auth: None,

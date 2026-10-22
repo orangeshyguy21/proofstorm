@@ -25,7 +25,13 @@ pub fn reconcile(
     let mut next = calls.iter().map(|call| call.id).max().unwrap_or(0);
     for event in transcript.iter().filter(|v| v["type"] == "tool_use") {
         let part = &event["part"];
-        if let Some(call_id) = part["callID"].as_str()
+        // V1 uses callID; V2 uses id, scoped to its assistant message.
+        let identity = part["callID"].as_str().map(|id| ("", id)).or_else(|| {
+            part["id"]
+                .as_str()
+                .map(|id| (part["messageID"].as_str().unwrap_or(""), id))
+        });
+        if let Some(call_id) = identity
             && !seen.insert(call_id)
         {
             continue;
@@ -231,6 +237,17 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[1].success, Some(false));
         assert!(!unauthorized);
+    }
+
+    #[test]
+    fn v2_ids_deduplicate_within_messages_but_not_across_turns() {
+        let first = json!({"type":"tool_use","part":{"id":"same-id","messageID":"first","tool":"shell","state":{"status":"error","input":{}}}});
+        let mut second = first.clone();
+        second["part"]["messageID"] = json!("second");
+        let (calls, unauthorized) = reconcile(vec![], &[first.clone(), first, second], true);
+        assert!(unauthorized);
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().all(|call| call.success == Some(false)));
     }
     #[test]
     fn unobserved_success_never_becomes_perfect_telemetry() {

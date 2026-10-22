@@ -19,6 +19,9 @@ struct Arguments {
     /// Headless `OpenCode` executable for the opt-in pilot.
     #[arg(long, default_value = "opencode")]
     benchmark_opencode: PathBuf,
+    /// Private `OpenCode` 2 provider/plugin profile; never load personal settings.
+    #[arg(long)]
+    benchmark_opencode_profile: Option<PathBuf>,
     /// CLI harness for this model attempt.
     #[arg(long, default_value = "opencode", value_parser = ["opencode", "codex", "claude-code"])]
     benchmark_harness: String,
@@ -117,6 +120,7 @@ async fn main() -> Result<()> {
     let selection = runner::Selection {
         benchmark_model: args.benchmark_model,
         benchmark_opencode: args.benchmark_opencode,
+        benchmark_opencode_profile: args.benchmark_opencode_profile,
         benchmark_harness: args.benchmark_harness,
         benchmark_codex: args.benchmark_codex,
         benchmark_codex_auth: args.benchmark_codex_auth,
@@ -143,6 +147,7 @@ async fn main() -> Result<()> {
         )
     });
     if benchmark && !args.benchmark_prepare_images {
+        validate_opencode_profile(&selection)?;
         if args.worker_home.is_none() {
             anyhow::ensure!(
                 args.timeout >= 4200,
@@ -185,6 +190,17 @@ async fn main() -> Result<()> {
         result
     })
     .await?
+}
+
+fn validate_opencode_profile(selection: &runner::Selection) -> Result<()> {
+    if selection.benchmark_harness == "opencode" {
+        let profile = selection
+            .benchmark_opencode_profile
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("OpenCode 2 requires --benchmark-opencode-profile"))?;
+        proofstorm_acceptance::campaign::opencode_profile_hash(profile)?;
+    }
+    Ok(())
 }
 
 fn cancellation_signal() -> Arc<AtomicBool> {

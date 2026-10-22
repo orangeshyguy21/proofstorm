@@ -1,4 +1,9 @@
-//! One headless OpenCode attempt; models are caller-selected, never substituted.
+//! One isolated OpenCode 2 attempt; provider profiles remain private caller data.
+#[cfg(test)]
+mod contract_tests;
+pub(crate) mod profile;
+mod runtime;
+mod session;
 mod telemetry;
 use super::{
     Context,
@@ -6,122 +11,35 @@ use super::{
     read, save,
 };
 use anyhow::{Context as _, Result, ensure};
+#[cfg(test)]
+use runtime::command;
 use serde_json::{Value, json};
 use sha2::Digest;
 use std::{
     fs,
-    os::unix::fs::DirBuilderExt,
     path::Path,
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
-fn command(config: &Context) -> Command {
-    let Harness::OpenCode { executable } = &config.harness else {
-        unreachable!("OpenCode adapter selection")
-    };
-    let mut cmd = Command::new(executable);
-    crate::client::clear_runtime_environment(&mut cmd);
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("OPENCODE_") {
-            cmd.env_remove(key);
-        }
-    }
-    cmd.current_dir(config.work.join("agent"))
-        // OpenCode run resolves its directory from PWD before process.cwd().
-        .env("PWD", config.work.join("agent"))
-        .env("OPENCODE_DISABLE_AUTOUPDATE", "true")
-        .env("OPENCODE_DISABLE_PROJECT_CONFIG", "true")
-        .env("OPENCODE_CONFIG", config.work.join("agent/opencode.json"));
-    cmd
-}
-
 pub fn run(config: &Context) -> Result<()> {
-    let project = config.work.join("agent");
-    fs::DirBuilder::new().mode(0o700).create(&project)?;
-    let executable = std::env::current_exe()?;
-    let entry = json!({"model":config.model,"share":"disabled","autoupdate":false,"snapshot":false,
-        "permission":{"*":"deny","proofstorm_*":"allow"},
-        "agent":{"benchmark":{"mode":"primary","description":format!("Proofstorm {} benchmark",config.task.id),
-            "prompt":"Complete the user's task autonomously using only the supplied Proofstorm MCP tools. Follow the checkpoint and cleanup contract.",
-            "steps":150,"permission":{"*":"deny","proofstorm_*":"allow"}}},
-        "mcp":{"proofstorm":{"type":"local","command":[executable,"--benchmark-proxy",config.work.join("benchmark-context.json")],"enabled":true,"timeout":120_000}}});
-    save(&project.join("opencode.json"), &entry)?;
-    let mut version = command(config);
+    runtime::directories(config)?;
+    let (provider, profile_sha256) = profile::prepare(config)?;
+    let entry = profile::config(config, &provider)?;
+    save(&config.work.join("agent/opencode.json"), &entry)?;
+    let mut version = runtime::command(config);
     version.arg("--version");
     let version = crate::process::capture(version, 30)?;
-    ensure!(version.status.success(), "OpenCode version check failed");
-    let mut models = command(config);
-    models.arg("models").arg(
-        config
-            .model
-            .split('/')
-            .next()
-            .context("provider required")?,
-    );
-    let models = crate::process::capture(models, 60)?;
+    let version_text = String::from_utf8_lossy(&version.stdout).trim().to_owned();
     ensure!(
-        models.status.success()
-            && String::from_utf8_lossy(&models.stdout)
-                .lines()
-                .any(|s| s.trim() == config.model),
-        "requested provider/model unavailable; no substitution"
+        version.status.success() && version_text.starts_with("opencode v2."),
+        "OpenCode 2 required"
     );
-    let mut effective = command(config);
-    effective.args(["debug", "config"]);
-    let effective = crate::process::capture(effective, 60)?;
-    ensure!(
-        effective.status.success(),
-        "OpenCode configuration audit failed"
-    );
-    let effective: Value = serde_json::from_slice(&effective.stdout)?;
-    save(&config.work.join("harness-config.private.json"), &effective)?;
-    ensure!(
-        effective["plugin"].as_array().is_none_or(Vec::is_empty),
-        "plugins outside pilot profile"
-    );
-    ensure!(
-        effective["mcp"]
-            .as_object()
-            .is_some_and(|m| m.len() == 1 && m.contains_key("proofstorm")),
-        "additional MCP servers outside pilot profile"
-    );
-    ensure!(
-        effective["mcp"]["proofstorm"]["command"] == entry["mcp"]["proofstorm"]["command"],
-        "MCP command changed during configuration resolution"
-    );
-    ensure!(
-        effective["permission"] == entry["permission"]
-            && effective["agent"]["benchmark"]["permission"]
-                == entry["agent"]["benchmark"]["permission"]
-            && effective["agent"]["benchmark"]["steps"] == 150,
-        "effective tool permissions differ"
-    );
-    // Verify a real connection before spending model tokens. Give discovery its
-    // own capture directory, so it cannot consume the attempt's proxy identity.
-    let preflight = config.work.join("transport-preflight");
-    fs::DirBuilder::new().mode(0o700).create(&preflight)?;
-    let mut preflight_context = json!(config);
-    preflight_context["work"] = json!(preflight);
-    let preflight_context_path = preflight.join("context.json");
-    save(&preflight_context_path, &preflight_context)?;
-    let mut preflight_entry = entry.clone();
-    preflight_entry["mcp"]["proofstorm"]["command"][2] = json!(preflight_context_path);
-    let preflight_config = preflight.join("opencode.json");
-    save(&preflight_config, &preflight_entry)?;
-    let mut probe = command(config);
-    probe
-        .env("OPENCODE_CONFIG", preflight_config)
-        .args(["mcp", "list", "--pure"]);
-    let probe = crate::process::capture(probe, 60)?;
-    fs::write(
-        config.work.join("harness-preflight.private.txt"),
-        &probe.stdout,
-    )?;
-    ensure!(
-        probe.status.success() && preflight.join("proxy-ready.json").exists(),
-        "OpenCode did not connect to the owned benchmark proxy; model not started"
-    );
+    let server = runtime::Server::start(config)?;
+    // Discovery and the model share this owned server/MCP connection. No probe
+    // can consume the proxy's single-client identity and then reconnect.
+    let model = server.preflight(config, &entry)?;
+    let executable = std::env::current_exe()?;
     let executable_sha256 = format!("{:x}", sha2::Sha256::digest(fs::read(&executable)?));
     let mut source = Command::new("git");
     source.current_dir(&config.root).args(["rev-parse", "HEAD"]);
@@ -135,40 +53,49 @@ pub fn run(config: &Context) -> Result<()> {
     ensure!(dirty.status.success(), "source state unavailable");
     save(
         &config.work.join("benchmark-manifest.json"),
-        &json!({"task":&config.task,"model_requested":config.model,
-        "model_resolved":config.model,"model_is_alias":true,"harness":"opencode","harness_version":String::from_utf8_lossy(&version.stdout).trim(),
-        "harness_config_sha256":proofstorm_core::digest_json(&effective),"prompt_sha256":proofstorm_core::digest_json(&config.task.prompt),
-        "source_revision":String::from_utf8_lossy(&source.stdout).trim(),"source_dirty":!dirty.stdout.is_empty(),"runner_sha256":executable_sha256,
-        "platform":std::env::consts::ARCH,"os":std::env::consts::OS,"budget":{"wall_seconds":u64::from(config.task.deadline_seconds),"agent_steps":150,"spend_hard_limit":null,"token_hard_limit":null},
-        "limitations":["provider credentials/config inherited; effective config audited and privately retained","provider model alias may change","timing contract retained in task","no hard token/spend budget claimed"]}),
+        &json!({
+            "task":&config.task,"model_requested":config.model,"model_resolved":config.model,
+            "model_is_alias":true,"harness":"opencode","harness_version":version_text,
+            "profile":"controlled-mcp-only-opencode2-v1","provider_profile_sha256":profile_sha256,
+            "model_catalog_sha256":proofstorm_core::digest_json(&model),
+            "harness_config_sha256":proofstorm_core::digest_json(&entry),
+            "prompt_sha256":proofstorm_core::digest_json(&config.task.prompt),
+            "source_revision":String::from_utf8_lossy(&source.stdout).trim(),"source_dirty":!dirty.stdout.is_empty(),
+            "runner_sha256":executable_sha256,"platform":std::env::consts::ARCH,"os":std::env::consts::OS,
+            "budget":{"wall_seconds":config.task.deadline_seconds,"agent_steps":150,"spend_hard_limit":null,"token_hard_limit":null},
+            "limitations":["explicit provider/plugin profile privately snapshotted; plugins are trusted caller input","provider model alias may change; upstream weights are not verified","no hard token/spend budget claimed"]
+        }),
     )?;
     fs::write(config.work.join("prompt.txt"), &config.task.prompt)?;
     let output = fs::File::create(config.work.join("harness.jsonl"))?;
     let error = fs::File::create(config.work.join("harness.stderr"))?;
-    let start = Instant::now();
     save(
         &config.work.join("benchmark-attempt.json"),
-        &json!({"outcome":"running","elapsed_seconds":null}),
+        &json!({"outcome":"running","elapsed_seconds":null,"session_export_required":true}),
     )?;
-    let mut cmd = command(config);
+    let mut cmd = server.command(config, "run");
     cmd.args([
-        "run",
-        "--pure",
-        "--dir",
-        project.to_str().context("project path is not UTF-8")?,
         "--format",
         "json",
         "--agent",
         "benchmark",
         "--model",
         &config.model,
-        &config.task.prompt,
+        "--title",
+        "Proofstorm benchmark",
     ])
-    .stdin(Stdio::null())
+    .stdin(Stdio::piped())
     .stdout(output)
     .stderr(error);
     super::harness::mark_launch(config)?;
+    let start = Instant::now();
     let mut child = cmd.spawn().context("start OpenCode")?;
+    // stdin avoids v2 CLI's argument quoting changing the frozen task prompt.
+    {
+        use std::io::Write;
+        let mut input = child.stdin.take().context("OpenCode prompt input")?;
+        input.write_all(config.task.prompt.as_bytes())?;
+    }
     let outcome = loop {
         if let Some(status) = child.try_wait()? {
             break if status.success() {
@@ -189,12 +116,20 @@ pub fn run(config: &Context) -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(100));
     };
-    let elapsed = start.elapsed().as_secs_f64();
-    let attempt = json!({"outcome":outcome,"elapsed_seconds":elapsed,"model":config.model,"usage":null,"cost":null});
-    save(&config.work.join("benchmark-attempt.json"), &attempt)?;
-    if outcome != "completed" {
-        return Ok(());
+    let elapsed_seconds = start.elapsed().as_secs_f64();
+    if matches!(outcome, "completed" | "harness_failure")
+        && let Err(error) = server.capture_session(config)
+    {
+        fs::write(
+            config.work.join("opencode-session-error.private.txt"),
+            format!("{error:#}"),
+        )?;
     }
+    save(
+        &config.work.join("benchmark-attempt.json"),
+        &json!({"outcome":outcome,"elapsed_seconds":elapsed_seconds,"model":config.model,"usage":null,"cost":null,"session_export_required":true}),
+    )?;
+    drop(server);
     Ok(())
 }
 
@@ -211,6 +146,16 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
             Ok(row) => rows.push(row),
             Err(_) => complete = false,
         }
+    }
+    let exported = session::rows(work);
+    if attempt["session_export_required"] == true && exported.is_err() {
+        complete = false;
+    }
+    if let Ok(exported) = exported {
+        // The v2 CLI can exit before printing the last step_finish. The durable
+        // session supplies every assistant turn; keep CLI-only errors as well.
+        rows.retain(|row| row["type"] != "step_finish" && row["type"] != "text");
+        rows.extend(exported);
     }
     let captured = super::events(work).and_then(|rows| super::calls(&rows));
     let telemetry_error = captured.as_ref().err().map(ToString::to_string);
@@ -356,6 +301,7 @@ mod tests {
             model: "provider/model".into(),
             harness: Harness::OpenCode {
                 executable: "opencode".into(),
+                profile: None,
             },
             task: super::super::task::o1().clone(),
         };

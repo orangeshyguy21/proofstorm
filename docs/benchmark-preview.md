@@ -70,6 +70,7 @@ CARGO_TARGET_DIR=.proofstorm-dev/target cargo build --locked -p proofstorm-accep
   --timeout 4200 \
   --benchmark-model kimi-code-plan-global/kimi-for-coding \
   --benchmark-opencode /absolute/path/to/opencode \
+  --benchmark-opencode-profile "$PWD/dev/provider-profile.json" \
   benchmark-o1
 ```
 
@@ -80,6 +81,33 @@ extra plugins, MCP servers, and tool permissions. The agent gets only the
 restricted Proofstorm MCP tool set; direct host shell, filesystem, delegation,
 and web tools are denied. Component-native commands remain available through
 `cell_exec`.
+
+The OpenCode adapter requires version 2 and an explicit private JSON profile with
+native `providers` and optional `plugins` fields. Personal OpenCode settings and
+background servers are not inherited. Keep the profile, model inventory, plans
+and results in ignored `dev/`. Credential settings may reference `{file:/path}`
+or `{env:VARIABLE}`; the resolved configuration is retained only inside the private
+attempt directory. The profile must include the exact selected model entry.
+Each provider/model ID, including separately served revisions or quantizations,
+is a separate campaign slot; the adapter never collapses model families.
+
+Explicit plugins must be self-contained local directories with `package.json`;
+symlinks and external package dependencies are rejected. Their bytes are copied
+into each private attempt and included in the campaign profile fingerprint.
+Plugins are trusted caller input and can change request behavior. Include only
+the provider compatibility code needed for the experiment.
+
+Each attempt owns an authenticated loopback OpenCode server and private home.
+Preflight and inference share its single MCP connection. The controlled agent
+uses direct MCP tools (`codemode: false`), denies other tools, disables title and
+summary inference, and sends the frozen prompt through stdin. The configuration,
+effective agent, model entry and MCP connection are audited before launch.
+OpenCode 2.0.29 was exercised with a local fake model for a successful MCP round
+trip and a forbidden shell attempt. Its CLI can omit the last `step_finish`, so
+the retained session export supplies complete turn usage and supplements tool
+evidence. Missing session evidence cannot earn complete telemetry credit. Token
+counts and costs are CLI-reported; zero catalog cost is not proof of free service.
+Legacy transcripts remain readable for offline grading.
 
 For current contracts, OpenCode's `invalid` rejection wrappers are classified
 using the original tool name and the task's allowlist. A rejected permitted call

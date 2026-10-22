@@ -44,6 +44,15 @@ struct Run {
     executable_sha256: String,
     task: String,
     task_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    opencode_profile: Option<ProfilePin>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePin {
+    path: PathBuf,
+    sha256: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -59,6 +68,11 @@ struct Entry {
 
 pub fn contracts() -> Value {
     json!({"benchmark-o1": contract(task::o1()), "benchmark-o5": contract(task::o5())})
+}
+
+/// Fingerprint caller-owned configuration without loading a model or runtime.
+pub fn opencode_profile_hash(path: &Path) -> Result<String> {
+    crate::benchmark::opencode::profile::fingerprint(path)
 }
 
 fn contract(task: &task::Task) -> Value {
@@ -133,6 +147,12 @@ impl Plan {
                 "unsupported CLI"
             );
             ensure!(run.executable.is_absolute(), "CLI path must be absolute");
+            if let Some(profile) = &run.opencode_profile {
+                ensure!(
+                    run.harness == "opencode" && profile.path.is_absolute(),
+                    "provider profiles require OpenCode and an absolute path"
+                );
+            }
             ensure!(
                 contracts[&run.task]["sha256"].as_str() == Some(&run.task_sha256),
                 "task contract changed or unknown task: {}",
@@ -154,6 +174,14 @@ impl Plan {
             "acceptance runner changed"
         );
         for run in &self.runs {
+            if let Some(profile) = &run.opencode_profile {
+                ensure!(
+                    crate::benchmark::opencode::profile::fingerprint(&profile.path)?
+                        == profile.sha256,
+                    "OpenCode provider profile or plugin changed for {}",
+                    run.id
+                );
+            }
             ensure!(
                 hash(&run.executable)? == run.executable_sha256,
                 "CLI changed for {}",
@@ -266,6 +294,11 @@ fn execute(plan: &Plan, entry: &Entry, cancelled: &AtomicBool) -> Result<Option<
     };
     let mut command = Command::new(&plan.runner);
     crate::client::clear_runtime_environment(&mut command);
+    if let Some(profile) = &run.opencode_profile {
+        command
+            .arg("--benchmark-opencode-profile")
+            .arg(&profile.path);
+    }
     let mut child = command
         .current_dir(&plan.root)
         .arg("--checkout-home")
