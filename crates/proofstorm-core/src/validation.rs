@@ -75,6 +75,7 @@ pub fn validate_cell(cell: &CellSpec) -> ValidationReport {
     bark::validate_topology(cell, &mut issues);
     cdk::validate_topology(cell, &mut issues);
     cdk::validate_payment_override(cell, &mut issues);
+    crate::native_settings::validate(cell, &mut issues);
 
     ValidationReport::from_issues(issues)
 }
@@ -515,7 +516,7 @@ fn exceeds_policy_limit(count: usize, limit: Option<u64>) -> bool {
     limit.is_some_and(|limit| u64::try_from(count).map_or(true, |count| count > limit))
 }
 
-fn issue(
+pub(crate) fn issue(
     issues: &mut Vec<ValidationIssue>,
     code: &str,
     path: impl Into<String>,

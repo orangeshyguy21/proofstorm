@@ -272,6 +272,11 @@
           "const": "string_set",
           "description": "A non-empty array of distinct strings; `enum_values` constrains members.",
           "type": "string"
+        },
+        {
+          "const": "object",
+          "description": "A JSON object whose shape the implementation checks.",
+          "type": "string"
         }
       ]
     },

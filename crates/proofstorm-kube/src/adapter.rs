@@ -820,11 +820,18 @@ fn observe_atomic_conditions(
                 ),
                 ComponentConditionType::ComponentReady => return None,
             };
+            let upstream = if *condition_type == ComponentConditionType::WorkloadReady
+                && reason.blocks_startup()
+            {
+                upstream_init_failure(plan, resources.pods.all(&plan.component_id))
+            } else {
+                None
+            };
             Some(component_condition(
                 *condition_type,
                 state,
                 reason,
-                message,
+                upstream.as_deref().unwrap_or(message),
                 observed_at_unix,
             ))
         })
@@ -955,16 +962,11 @@ fn pod_scheduling_observation(
     })
 }
 
-fn pod_startup_failure<'a>(
-    plan: &ComponentPlanContract,
+fn current_rollout_pods<'a>(
+    plan: &'a ComponentPlanContract,
     pods: impl IntoIterator<Item = &'a Pod>,
-) -> Option<(
-    ComponentConditionState,
-    ComponentConditionReason,
-    &'static str,
-)> {
-    use ComponentConditionReason as Reason;
-    for pod in pods.into_iter().filter(|pod| {
+) -> impl Iterator<Item = &'a Pod> {
+    pods.into_iter().filter(|pod| {
         pod.metadata.deletion_timestamp.is_none()
             && pod
                 .metadata
@@ -984,7 +986,71 @@ fn pod_startup_failure<'a>(
                 .as_ref()
                 .and_then(|annotations| annotations.get(ROLLOUT_DIGEST_ANNOTATION))
                 == Some(&plan.rollout_digest)
-    }) {
+    })
+}
+
+/// Upstream's own last error line from the init container that prepares the
+/// native config: CDK's `initialize-config` (`config validate`, then
+/// `config apply` or `config init`, which also reach the database) and
+/// Nutshell's `native_env` check. Both are upstream programs reading
+/// documents that hold only references to secrets, so their output may reach
+/// component status. Every other container keeps fixed text, because its
+/// native output may echo secrets.
+fn upstream_init_failure<'a>(
+    plan: &'a ComponentPlanContract,
+    pods: impl IntoIterator<Item = &'a Pod>,
+) -> Option<String> {
+    for pod in current_rollout_pods(plan, pods) {
+        let Some(status) = &pod.status else {
+            continue;
+        };
+        for container in status.init_container_statuses.iter().flatten() {
+            if !matches!(
+                container.name.as_str(),
+                CDK_CONFIG_CONTAINER | NATIVE_ENV_CHECK_CONTAINER
+            ) {
+                continue;
+            }
+            // Only a failure happening now: an exit, or the exit behind a
+            // crash-loop wait. An old exit must not explain a later failure.
+            let Some(state) = &container.state else {
+                continue;
+            };
+            let crash_looping = state
+                .waiting
+                .as_ref()
+                .and_then(|waiting| waiting.reason.as_deref())
+                == Some("CrashLoopBackOff");
+            let terminated = if crash_looping {
+                container.last_state.as_ref()?.terminated.as_ref()
+            } else {
+                state.terminated.as_ref()
+            };
+            let Some(terminated) = terminated.filter(|terminated| terminated.exit_code != 0) else {
+                continue;
+            };
+            let line = terminated
+                .message
+                .as_deref()?
+                .lines()
+                .map(str::trim)
+                .rfind(|line| !line.is_empty())?;
+            return Some(format!("{} failed: {line}", container.name));
+        }
+    }
+    None
+}
+
+fn pod_startup_failure<'a>(
+    plan: &'a ComponentPlanContract,
+    pods: impl IntoIterator<Item = &'a Pod>,
+) -> Option<(
+    ComponentConditionState,
+    ComponentConditionReason,
+    &'static str,
+)> {
+    use ComponentConditionReason as Reason;
+    for pod in current_rollout_pods(plan, pods) {
         let Some(status) = &pod.status else {
             continue;
         };
@@ -1881,7 +1947,7 @@ pub fn render_cdk_component(
     rendered.config_maps.push(resource(json!({
         "apiVersion": "v1", "kind": "ConfigMap",
         "metadata": metadata(&config_name, &plan.instance_key, &namespace, Some(&plan.component_id)),
-        "data": {"config.toml": runtime.native_config}
+        "data": {"config.toml": merge_native_toml(plan, runtime.native_config, &config.native_toml)?}
     }))?);
     rendered.secrets.push(resource(json!({
         "apiVersion": "v1", "kind": "Secret",
@@ -1930,6 +1996,62 @@ pub fn render_cdk_component(
     Ok(rendered)
 }
 
+/// Merge a mint's `native_toml` into the rendered document. Validation
+/// already refused keys Proofstorm sets; this refuses them again rather than
+/// overwrite one. Without overrides the rendered text is returned unchanged.
+fn merge_native_toml(
+    plan: &ComponentPlanContract,
+    rendered: String,
+    overrides: &BTreeMap<String, Value>,
+) -> Result<String, AdapterError> {
+    if overrides.is_empty() {
+        return Ok(rendered);
+    }
+    let invalid = |message: String| {
+        AdapterError::InvalidPlan(format!(
+            "component {:?} native_toml {message}",
+            plan.component_id
+        ))
+    };
+    let mut document = rendered
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| invalid(format!("cannot parse the rendered config: {error}")))?;
+    merge_toml_table(document.as_table_mut(), overrides, "").map_err(invalid)?;
+    Ok(document.to_string())
+}
+
+fn merge_toml_table<'a>(
+    table: &mut toml_edit::Table,
+    overrides: impl IntoIterator<Item = (&'a String, &'a Value)>,
+    path: &str,
+) -> Result<(), String> {
+    for (key, value) in overrides {
+        let path = if path.is_empty() {
+            key.clone()
+        } else {
+            format!("{path}.{key}")
+        };
+        match (table.get_mut(key), value) {
+            (Some(toml_edit::Item::Table(existing)), Value::Object(inner)) => {
+                merge_toml_table(existing, inner, &path)?;
+            }
+            (Some(_), _) => return Err(format!("{path} is already set")),
+            (None, Value::Object(inner)) => {
+                let mut created = toml_edit::Table::new();
+                merge_toml_table(&mut created, inner, &path)?;
+                table.insert(key, toml_edit::Item::Table(created));
+            }
+            (None, value) => {
+                let value =
+                    serde::Serialize::serialize(value, toml_edit::ser::ValueSerializer::new())
+                        .map_err(|error| format!("{path}: {error}"))?;
+                table.insert(key, toml_edit::Item::Value(value));
+            }
+        }
+    }
+    Ok(())
+}
+
 struct CdkRuntimeResources {
     native_config: String,
     env: Vec<Value>,
@@ -1944,6 +2066,7 @@ struct CdkRuntimeResources {
 // overwriting an existing mint: --new-mint refuses an already initialized DB.
 // Keep stderr from every step so storage and configuration errors reach logs.
 const CDK_INITIALIZE_CONFIG: &str = include_str!("../drivers/cdk_initialize_config.sh");
+const CDK_CONFIG_CONTAINER: &str = "initialize-config";
 
 /// Loopback management is reachable only within this pod's network namespace.
 /// Separate projections keep server keys out of the native client's TLS directory.
@@ -2182,10 +2305,13 @@ fn cdk_runtime_resources(
         }));
     }
     init_containers.push(json!({
-        "name": "initialize-config",
+        "name": CDK_CONFIG_CONTAINER,
         "image": plan.execution_context.image,
         "imagePullPolicy": "IfNotPresent",
         "command": ["sh", "-ec", CDK_INITIALIZE_CONFIG],
+        // A rejected document leaves upstream's error as the termination
+        // message, which becomes the readiness blocker.
+        "terminationMessagePolicy": "FallbackToLogsOnError",
         "env": env,
         "securityContext": container_security(),
         "volumeMounts": volume_mounts
@@ -2427,6 +2553,9 @@ pub fn render_nutshell_mint_component(
             "MINT_PAYMENT_BACKENDS".into(),
             processor::nutshell_payment_backends(processor)?,
         );
+        if let Some(paths) = processor::nutshell_keyset_paths(processor)? {
+            environment.insert("MINT_DERIVATION_PATH_LIST".into(), paths);
+        }
     }
     if auth_database.is_none() {
         environment.insert("MINT_AUTH_DATABASE".into(), "/app/data".into());
@@ -2465,6 +2594,7 @@ pub fn render_nutshell_mint_component(
             "valueFrom": {"secretKeyRef": {"name": cache_secret, "key": "REDIS_URL"}}
         }));
     }
+    extend_native_env(plan, &config.native_env, &mut environment, &env)?;
     let command = if uses_cln {
         json!([
             "sh",
@@ -2552,6 +2682,28 @@ pub fn render_nutshell_mint_component(
         &mut rendered,
         &mut deployment["spec"]["template"]["spec"],
     )?;
+    if !config.native_env.is_empty() {
+        // Nutshell ignores names it has no setting for; refuse typos up front.
+        // This is the first init container, so a typo fails before waiting
+        // for any dependency.
+        let mut command = vec![
+            json!("python"),
+            json!("-c"),
+            json!(NUTSHELL_CHECK_NATIVE_ENV),
+        ];
+        command.extend(config.native_env.keys().map(|name| json!(name)));
+        append_init_container(
+            &mut deployment,
+            json!({
+                "name": NATIVE_ENV_CHECK_CONTAINER,
+                "image": plan.execution_context.image,
+                "imagePullPolicy": "IfNotPresent",
+                "command": command,
+                "terminationMessagePolicy": "FallbackToLogsOnError",
+                "securityContext": container_security()
+            }),
+        );
+    }
     if let Some(processor) = &processor {
         append_init_container(
             &mut deployment,
@@ -2949,6 +3101,35 @@ fn nutshell_mint_environment(
         ]);
     }
     environment
+}
+
+const NUTSHELL_CHECK_NATIVE_ENV: &str = include_str!("../drivers/nutshell_check_native_env.py");
+const NATIVE_ENV_CHECK_CONTAINER: &str = "check-native-env";
+
+/// Add a mint's `native_env` to its `ConfigMap`. Validation already refused
+/// names Proofstorm sets; this refuses them again rather than overwrite one.
+fn extend_native_env(
+    plan: &ComponentPlanContract,
+    native_env: &BTreeMap<String, String>,
+    environment: &mut BTreeMap<String, String>,
+    env: &[Value],
+) -> Result<(), AdapterError> {
+    for (name, value) in native_env {
+        // Nutshell reads settings ignoring case.
+        if environment
+            .keys()
+            .map(String::as_str)
+            .chain(env.iter().filter_map(|entry| entry["name"].as_str()))
+            .any(|set| set.eq_ignore_ascii_case(name))
+        {
+            return Err(AdapterError::InvalidPlan(format!(
+                "component {:?} native_env {name:?} is already set",
+                plan.component_id
+            )));
+        }
+        environment.insert(name.clone(), value.clone());
+    }
+    Ok(())
 }
 
 /// Nutshell's bolt11/sat REST backend for a directly linked LND or CLN node.
@@ -4254,6 +4435,96 @@ mod tests {
             pod_startup_failure(plan, &[pod]).unwrap().1,
             ComponentConditionReason::PodUnschedulable
         );
+    }
+
+    #[test]
+    fn native_config_init_containers_report_upstreams_error_as_the_blocker() {
+        let mut fixture = chain_observation_fixture();
+        make_chain_fixture_ready(&mut fixture);
+        let plan = &fixture.plans[0];
+        let workload_ready = |name: &str, current: Value, last: Value, main: Value| {
+            let status = |name: &str, current: Value, last: Value| {
+                json!({
+                    "name": name, "image": "image", "imageID": "", "ready": false, "restartCount": 1,
+                    "state": current, "lastState": last
+                })
+            };
+            let pod: Pod = serde_json::from_value(json!({
+                "metadata": {"labels": labels(&plan.instance_key, Some(&plan.component_id)), "annotations": rollout_annotations(plan)},
+                "status": {
+                    "initContainerStatuses": [status(name, current, last)],
+                    "containerStatuses": [status("component", main, json!({}))]
+                }
+            }))
+            .unwrap();
+            let resources = ComponentObservationResources {
+                protocol: &std::collections::BTreeMap::new(),
+                deployments: &[],
+                stateful_sets: std::slice::from_ref(&fixture.workload),
+                persistent_volume_claims: &[],
+                services: &[],
+                endpoint_slices: &[],
+                pods: std::slice::from_ref(&pod),
+            };
+            observe_atomic_conditions(
+                plan,
+                &crate::observation::ObservationIndex::new(&resources),
+                None,
+                false,
+                0,
+            )
+            .into_iter()
+            .find(|condition| condition.condition_type == ComponentConditionType::WorkloadReady)
+            .unwrap()
+        };
+        let upstream = |line: &str| json!({"terminated": {"exitCode": 1, "message": format!("loading /config/config.toml\n{line}\n\n")}});
+        let crash_loop = json!({"waiting": {"reason": "CrashLoopBackOff"}});
+        // The CDK initializer also applies the document to the database, so
+        // its label names the step, not a configuration rejection.
+        let database =
+            "Error: primary database settings do not match the bootstrap database settings";
+        let condition = workload_ready(
+            CDK_CONFIG_CONTAINER,
+            crash_loop.clone(),
+            upstream(database),
+            json!({}),
+        );
+        assert_eq!(
+            condition.reason,
+            ComponentConditionReason::ContainerCrashLoop
+        );
+        assert_eq!(
+            condition.message,
+            bounded_condition_message(&format!("initialize-config failed: {database}"))
+        );
+        let typo = "native_env names this Nutshell build does not read: MINT_MNEMNOIC";
+        let condition = workload_ready(
+            NATIVE_ENV_CHECK_CONTAINER,
+            upstream(typo),
+            json!({}),
+            json!({}),
+        );
+        assert_eq!(condition.reason, ComponentConditionReason::ContainerExited);
+        assert_eq!(
+            condition.message,
+            format!("check-native-env failed: {typo}")
+        );
+        // Other containers' native output never reaches component status, and
+        // an init container's earlier exit doesn't explain the mint's crash loop.
+        for (name, current) in [
+            ("wait-for-lightning", crash_loop.clone()),
+            (
+                NATIVE_ENV_CHECK_CONTAINER,
+                json!({"terminated": {"exitCode": 0}}),
+            ),
+        ] {
+            let condition = workload_ready(name, current, upstream(typo), crash_loop.clone());
+            assert_eq!(
+                condition.reason,
+                ComponentConditionReason::ContainerCrashLoop
+            );
+            assert!(!condition.message.contains("MINT_MNEMNOIC"), "{name}");
+        }
     }
 
     #[test]

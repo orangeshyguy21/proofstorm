@@ -223,6 +223,8 @@ pub enum ConfigValueKind {
     String,
     /// A non-empty array of distinct strings; `enum_values` constrains members.
     StringSet,
+    /// A JSON object whose shape the implementation checks.
+    Object,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -439,6 +441,9 @@ pub struct CdkMintConfig {
     /// Upstream `[mint_management_rpc] allow_mint_quote_payment_override`.
     /// Enabling it requires `mint.quote_payment_override` in the cell policy.
     pub allow_mint_quote_payment_override: bool,
+    /// Policy-gated `config.toml` additions; see `native_settings`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub native_toml: BTreeMap<String, Value>,
 }
 
 /// Lightning backend compiled into the CDK daemon itself. External Lightning
@@ -521,6 +526,9 @@ pub struct NutshellMintConfig {
     pub database_lock_timeout_ms: u64,
     pub regular_tasks_interval_seconds: u64,
     pub websocket_read_timeout_seconds: u64,
+    /// Policy-gated environment additions; see `native_settings`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub native_env: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -963,6 +971,7 @@ impl EffectiveComponentConfig {
                 .ok_or_else(|| {
                     typed_config_error(component, "allow_mint_quote_payment_override")
                 })?,
+                native_toml: optional_config_object(component, "native_toml")?,
             })
         };
         let nutshell = || -> Result<NutshellMintConfig, String> {
@@ -1024,6 +1033,7 @@ impl EffectiveComponentConfig {
                 database_lock_timeout_ms: integer("database_lock_timeout_ms")?,
                 regular_tasks_interval_seconds: integer("regular_tasks_interval_seconds")?,
                 websocket_read_timeout_seconds: integer("websocket_read_timeout_seconds")?,
+                native_env: optional_config_object(component, "native_env")?,
             })
         };
         match component.implementation.as_str() {
@@ -1092,6 +1102,17 @@ fn required_config_value<'a>(
         .config
         .get(name)
         .ok_or_else(|| typed_config_error(component, name))
+}
+
+/// An optional object field, empty when absent.
+fn optional_config_object<T: serde::de::DeserializeOwned + Default>(
+    component: &ComponentSpec,
+    name: &str,
+) -> Result<T, String> {
+    component.config.get(name).map_or_else(
+        || Ok(T::default()),
+        |value| T::deserialize(value).map_err(|_| typed_config_error(component, name)),
+    )
 }
 
 fn typed_config_error(component: &ComponentSpec, name: &str) -> String {
@@ -1289,6 +1310,7 @@ fn config_json_type(kind: ConfigValueKind) -> &'static str {
         ConfigValueKind::Integer => "integer",
         ConfigValueKind::String => "string",
         ConfigValueKind::StringSet => "array",
+        ConfigValueKind::Object => "object",
     }
 }
 
@@ -1357,6 +1379,7 @@ fn validate_config_value(
         ConfigValueKind::StringSet => value
             .as_array()
             .is_some_and(|items| items.iter().all(Value::is_string)),
+        ConfigValueKind::Object => value.is_object(),
     };
     if !type_matches {
         return Err(config_diagnostic(
@@ -2539,7 +2562,7 @@ fn nutshell_config_fields() -> BTreeMap<String, ConfigFieldContract> {
     ])
 }
 
-fn managed_field(
+pub(crate) fn managed_field(
     description: &str,
     value_kind: ConfigValueKind,
     classification: ConfigSettingClass,
@@ -2851,7 +2874,7 @@ fn managed_config_fields(backend: &str) -> BTreeMap<String, ConfigFieldContract>
             (
                 "derivation_path".into(),
                 string(
-                    "Fixed disposable-regtest sat keyset derivation path",
+                    "Fixed disposable-regtest sat keyset derivation path, plus the msat path when a payment processor is bound in msat",
                     Policy,
                 ),
             ),
@@ -3128,6 +3151,7 @@ fn contract(
     applicable_conditions: BTreeSet<ComponentConditionType>,
 ) -> ComponentBackendContract {
     config_fields.extend(managed_config_fields(id));
+    config_fields.extend(crate::native_settings::config_field(id));
     if matches!(id, "cdk" | "nutshell") {
         config_fields.insert(
             "management_rpc".into(),

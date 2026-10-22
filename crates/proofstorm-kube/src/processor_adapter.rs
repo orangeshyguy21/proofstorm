@@ -247,6 +247,25 @@ pub(super) fn payment_backend_config(
     ))
 }
 
+/// Nutshell's `MINT_DERIVATION_PATH_LIST` for a processor bound in a unit
+/// other than sat. Nutshell infers a keyset's unit from the second index of
+/// its derivation path (sat 0, msat 1) and keeps its default sat keyset, so
+/// without this an msat mint has no keyset for the unit it quotes in.
+pub(super) fn nutshell_keyset_paths(
+    processor: &ProcessorTarget<'_>,
+) -> Result<Option<String>, AdapterError> {
+    let index = match processor.unit.as_str() {
+        "sat" => return Ok(None),
+        "msat" => 1,
+        unit => {
+            return Err(AdapterError::InvalidPlan(format!(
+                "Nutshell has no keyset derivation path for processor unit {unit:?}"
+            )));
+        }
+    };
+    Ok(Some(serde_json::to_string(&[format!("m/0'/{index}'/0'")])?))
+}
+
 /// Nutshell's `MINT_PAYMENT_BACKENDS`: one mutual-TLS entry per bound method.
 /// Reusable BOLT12 offers and on-chain addresses get the three capabilities
 /// upstream documents for them; other methods keep Nutshell's defaults.

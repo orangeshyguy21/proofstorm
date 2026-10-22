@@ -409,7 +409,7 @@ pub fn candidate_catalog_entry(
         ] {
             crate::catalog::bind_processor(&mut entry, profile);
         }
-        entry.runtime_endpoints[0].limitations.push("Candidate builds may bind one CDK gRPC payment processor instead of LND/CLN, over mutual TLS (MINT_PAYMENT_BACKENDS entries of type GrpcPaymentProcessor). Bind every method the processor advertises: bolt11 and bolt12 in sat or msat for cdk-ldk-server-processor, which reports msat and gets no conversion from Nutshell; one sat binding per advertised method for cdk-bark-processor. bolt12 and onchain allow amountless, partial and repeated minting. A build without the gRPC client stops at startup with \"No backends are set.\"".into());
+        entry.runtime_endpoints[0].limitations.push("Candidate builds may bind one CDK gRPC payment processor instead of LND/CLN, over mutual TLS (MINT_PAYMENT_BACKENDS entries of type GrpcPaymentProcessor). Bind every method the processor advertises: bolt11 and bolt12 in msat for cdk-ldk-server-processor, which reports msat and gets no conversion from Nutshell (the mint also gets an msat keyset; sat bindings stop at startup with \"CDK processor unit 'msat' does not match 'sat'\"); one sat binding per advertised method for cdk-bark-processor. bolt12 and onchain allow amountless, partial and repeated minting. A build without the gRPC client stops at startup with \"No backends are set.\"".into());
     }
     entry.source_digest = digest_json(&(
         base.source_digest.as_str(),

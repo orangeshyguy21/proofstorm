@@ -126,6 +126,10 @@ pub enum Capability {
     // comment would turn the enum schema into a described oneOf in every tool.
     #[serde(rename = "mint.quote_payment_override")]
     MintQuotePaymentOverride,
+    // Cell policy opt-in for mint settings Proofstorm passes through without
+    // modelling or verifying them (native_env, native_toml).
+    #[serde(rename = "mint.native_config_override")]
+    MintNativeConfigOverride,
 }
 
 #[derive(

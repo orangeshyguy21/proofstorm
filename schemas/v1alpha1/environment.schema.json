@@ -256,6 +256,13 @@
             "string",
             "null"
           ]
+        },
+        "unverified_native_overrides": {
+          "description": "Native config overrides running unverified.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [

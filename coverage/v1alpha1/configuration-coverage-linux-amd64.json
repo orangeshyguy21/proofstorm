@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:7264907bb37391ea7cb0650a0a0f61adcb32379d75656b71a64b44af129dc08c",
+  "catalog_digest": "sha256:0c48e652958f4d0a5310c3f261f0f74c27918b5c4e6cf0c197defd5d5257a489",
   "entries": [
     {
       "implementation": "bark-server",
@@ -173,7 +173,7 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "cdk-mintd/0.18/v1",
-      "config_schema_digest": "sha256:7aee6e33ed42761629a3eeafa123a43a923bb61133db36b8b5d453a2921862d9",
+      "config_schema_digest": "sha256:e0b735ab33b6396e36e6b286fcc5df50dd0a027540042d99c4be34fdafbd2193",
       "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
       "fields": {
         "allow_mint_quote_payment_override": {
@@ -347,6 +347,10 @@
         "name": {
           "classification": "agent_authorable",
           "required": true
+        },
+        "native_toml": {
+          "classification": "agent_authorable",
+          "required": false
         },
         "network": {
           "classification": "runtime_policy",
@@ -1657,7 +1661,7 @@
       "release_channel": "stable",
       "support_lifecycle": "supported",
       "config_version": "nutshell-mint/0.20/v1",
-      "config_schema_digest": "sha256:1a4f987b411319db97f257efb2a2090f5d44af99278b4b183e29126a465471c1",
+      "config_schema_digest": "sha256:a3982a1307f68fa9705abf934e5309c2e261ab4cf9d64ecbc073e50db349baa1",
       "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:7981248be39e217c66790bd2825f157ec9ddf460410489715ca89d83952aa754",
       "fields": {
         "auth_max_blind_tokens": {
@@ -1815,6 +1819,10 @@
         "name": {
           "classification": "agent_authorable",
           "required": true
+        },
+        "native_env": {
+          "classification": "agent_authorable",
+          "required": false
         },
         "oidc_client_id": {
           "classification": "agent_authorable",
@@ -1974,7 +1982,7 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "nutshell-mint/0.20/v1",
-      "config_schema_digest": "sha256:1a4f987b411319db97f257efb2a2090f5d44af99278b4b183e29126a465471c1",
+      "config_schema_digest": "sha256:a3982a1307f68fa9705abf934e5309c2e261ab4cf9d64ecbc073e50db349baa1",
       "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:902461e83918af77a7b82ba2b08ef1709989fc81394ed18191d4bd7e60cdd846",
       "fields": {
         "auth_max_blind_tokens": {
@@ -2132,6 +2140,10 @@
         "name": {
           "classification": "agent_authorable",
           "required": true
+        },
+        "native_env": {
+          "classification": "agent_authorable",
+          "required": false
         },
         "oidc_client_id": {
           "classification": "agent_authorable",

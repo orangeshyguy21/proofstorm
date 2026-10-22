@@ -338,6 +338,12 @@ fn nutshell_candidates_reach_cdk_processors_over_mutual_tls() {
         bolt12[capability] = true.into();
     }
     assert_eq!(backends, serde_json::json!([mtls("bolt11"), bolt12]));
+    // Without an msat keyset every msat quote fails with code 11013.
+    assert_eq!(environment["MINT_DERIVATION_PATH"], "m/0'/0'/0'");
+    assert_eq!(
+        environment["MINT_DERIVATION_PATH_LIST"],
+        r#"["m/0'/1'/0'"]"#
+    );
     assert!(
         environment
             .keys()
@@ -388,9 +394,18 @@ fn nutshell_candidates_reach_cdk_processors_over_mutual_tls() {
         assert_eq!(mount["mountPath"], "/payment-processor/tls");
         assert_eq!(mount["readOnly"], true);
     }
-    // sat stays bindable so the candidate's own unit check is observable.
+    // sat stays bindable so the candidate's own unit check is observable, and
+    // keeps only the default sat keyset.
     let (spec, catalog) = nutshell_cell("candidate-pr1131-8cb0af79", "sat");
-    resolve_lock(&spec, &catalog).unwrap();
+    let lock = resolve_lock(&spec, &catalog).unwrap();
+    let plan = compile_component_plans("i-profile-test", "sha256:profile-test", &spec, &lock)
+        .unwrap()
+        .into_iter()
+        .find(|plan| plan.component_id == "mint")
+        .unwrap();
+    let rendered = render_nutshell_mint_component(&plan).unwrap();
+    let environment = rendered.config_maps[0].data.as_ref().unwrap();
+    assert!(!environment.contains_key("MINT_DERIVATION_PATH_LIST"));
 }
 
 #[test]

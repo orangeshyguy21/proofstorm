@@ -98,6 +98,7 @@ pub use quote::{WalletQuoteDirection, WalletQuoteObservation, WalletQuoteObserva
 pub use schema::schema_documents;
 pub use validation::{ValidationIssue, ValidationReport, is_cashu_unit, validate_cell};
 pub mod native;
+pub mod native_settings;
 pub mod workspace;
 
 pub mod private_io;

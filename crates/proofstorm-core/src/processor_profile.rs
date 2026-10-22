@@ -64,8 +64,9 @@ impl ProcessorProfile {
 
     /// Units the `client` implementation may bind. Bark serves only sat
     /// upstream. The LDK processor reports msat, which CDK converts to sat,
-    /// the only CDK combination qualified. Nutshell has no conversion, so it
-    /// may also bind the native msat.
+    /// the only CDK combination qualified. Nutshell has no conversion: it works
+    /// in the native msat, and refuses sat at startup. sat stays bindable so
+    /// that refusal is observable.
     #[must_use]
     pub fn binding_units(self, client: &str) -> BTreeSet<&'static str> {
         match (self, client) {

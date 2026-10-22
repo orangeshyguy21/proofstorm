@@ -1545,14 +1545,14 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
             "component",
             "mint",
             &["component_logs", "reachability_oracle"],
-            &[NUTSHELL_MANAGEMENT, NUTSHELL_DATABASE],
+            &[NUTSHELL_MANAGEMENT, NUTSHELL_DATABASE, "native_env passes extra environment variables for settings Proofstorm does not model, such as a candidate's new setting. It requires mint.native_config_override in policy.allow, refuses names Proofstorm sets, blocks startup on names the image does not read, and is listed in the lock as unverified."],
         )],
         "cdk" => vec![
             runtime_endpoint(
                 "component",
                 "mint",
                 &["component_logs", "reachability_oracle"],
-                &[CDK_MANAGEMENT, CDK_DATABASE, CDK_LOGS, "Enable NUT-21/22 with an authentication_backend link to Keycloak; auth_max_blind_tokens defaults to 50. SQLite primary storage uses local SQLite auth and forbids an auth database link. PostgreSQL primary storage requires a separate database_backend link with role authentication; both databases may share one PostgreSQL component. Endpoint protection follows upstream defaults. Use native cdk-cli authentication commands; typed wallet operations against protected mints are not supported."],
+                &[CDK_MANAGEMENT, CDK_DATABASE, CDK_LOGS, "native_toml merges extra config.toml keys and tables for settings Proofstorm does not model, such as a candidate's new key. It requires mint.native_config_override in policy.allow, refuses keys and tables Proofstorm sets, blocks startup with upstream's config validate error, and is listed in the lock as unverified.", "Enable NUT-21/22 with an authentication_backend link to Keycloak; auth_max_blind_tokens defaults to 50. SQLite primary storage uses local SQLite auth and forbids an auth database link. PostgreSQL primary storage requires a separate database_backend link with role authentication; both databases may share one PostgreSQL component. Endpoint protection follows upstream defaults. Use native cdk-cli authentication commands; typed wallet operations against protected mints are not supported."],
             ),
             runtime_endpoint(
                 "ldk-node",
