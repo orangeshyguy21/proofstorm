@@ -10,6 +10,7 @@ fn plan(work: &Path, count: usize) -> Plan {
         runner_sha256: "runner-digest".into(),
         revision: "source-revision".into(),
         checkout_home: work.join("checkout"),
+        bootstrap_tool_cache: None,
         gate_timeout_seconds: 4200,
         max_setup_attempts: 3,
         runs: (0..count)
@@ -685,6 +686,7 @@ fn subprocess_uses_exact_cli_arguments_and_a_private_non_reusable_log() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let mut plan = plan(dir.path(), 1);
+    plan.bootstrap_tool_cache = Some(dir.path().join("tool-cache"));
     fs::write(&plan.runner, b"#!/bin/sh\nprintf '%s\\n' \"$@\"\nexit 0\n").unwrap();
     fs::set_permissions(&plan.runner, fs::Permissions::from_mode(0o700)).unwrap();
     for (index, (harness, option)) in [
@@ -712,7 +714,14 @@ fn subprocess_uses_exact_cli_arguments_and_a_private_non_reusable_log() {
         let work = plan.attempt_path(&entry);
         let log = work.with_extension("log");
         let args = fs::read_to_string(&log).unwrap();
-        let mut expected = vec![];
+        let mut expected = vec![
+            "--bootstrap-tool-cache",
+            plan.bootstrap_tool_cache
+                .as_ref()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+        ];
         if let Some(profile) = &plan.runs[0].opencode_profile {
             expected.extend([
                 "--benchmark-opencode-profile",

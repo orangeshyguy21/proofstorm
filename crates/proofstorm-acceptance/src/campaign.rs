@@ -29,6 +29,8 @@ pub struct Plan {
     runner_sha256: String,
     revision: String,
     checkout_home: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bootstrap_tool_cache: Option<PathBuf>,
     gate_timeout_seconds: u64,
     max_setup_attempts: u32,
     runs: Vec<Run>,
@@ -120,6 +122,12 @@ impl Plan {
             "gate timeout must be 1200..=14400 seconds"
         );
         ensure!(!self.runs.is_empty(), "campaign has no runs");
+        ensure!(
+            self.bootstrap_tool_cache
+                .as_ref()
+                .is_none_or(|path| path.is_absolute()),
+            "tool cache path must be absolute"
+        );
         for path in [&self.root, &self.work, &self.runner, &self.checkout_home] {
             ensure!(path.is_absolute(), "campaign paths must be absolute");
         }
@@ -294,6 +302,9 @@ fn execute(plan: &Plan, entry: &Entry, cancelled: &AtomicBool) -> Result<Option<
     };
     let mut command = Command::new(&plan.runner);
     crate::client::clear_runtime_environment(&mut command);
+    if let Some(cache) = &plan.bootstrap_tool_cache {
+        command.arg("--bootstrap-tool-cache").arg(cache);
+    }
     if let Some(profile) = &run.opencode_profile {
         command
             .arg("--benchmark-opencode-profile")

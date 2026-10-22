@@ -156,6 +156,14 @@ not silently reclassified under the shared-host policy.
 
 ## Pinned tool transfers
 
+An optional plan-level `bootstrap_tool_cache` absolute path reuses host tools
+without downloading them for every slot. The directory must contain the exact
+`<name>-<executable_sha256>` files from the current platform's bootstrap pins.
+Acceptance verifies all required checksums before copying any tool into a new
+installation. It never adopts the cache's runtime or ownership state. A missing
+or changed tool fails setup before model launch; the cache grants no exception
+to the pinned tool versions.
+
 Catalog image inspection and copying use a temporary Docker configuration with
 anonymous authentication, shared with installation-local controller publication.
 The selected local engine and Buildx executable are preserved; user credential
