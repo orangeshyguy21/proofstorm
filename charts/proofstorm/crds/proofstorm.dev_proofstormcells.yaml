@@ -216,6 +216,7 @@ spec:
                           - snapshot.create
                           - snapshot.restore
                           - mint.quote_payment_override
+                          - mint.native_config_override
                           type: string
                         type: array
                       limits:
@@ -511,6 +512,13 @@ spec:
                           type: object
                         source_digest:
                           type: string
+                        unverified_native_overrides:
+                          description: |-
+                            Native config overrides this component runs that Proofstorm has not
+                            verified: `native_env` names or dotted `native_toml` paths.
+                          items:
+                            type: string
+                          type: array
                         version:
                           type: string
                       required:

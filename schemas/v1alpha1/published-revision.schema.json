@@ -305,7 +305,8 @@
         "policy.edit",
         "snapshot.create",
         "snapshot.restore",
-        "mint.quote_payment_override"
+        "mint.quote_payment_override",
+        "mint.native_config_override"
       ],
       "type": "string"
     },
@@ -697,6 +698,13 @@
         },
         "source_digest": {
           "type": "string"
+        },
+        "unverified_native_overrides": {
+          "description": "Native config overrides this component runs that Proofstorm has not\nverified: `native_env` names or dotted `native_toml` paths.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "version": {
           "type": "string"

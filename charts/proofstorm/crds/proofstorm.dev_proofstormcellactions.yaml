@@ -288,6 +288,7 @@ spec:
                 - snapshot.create
                 - snapshot.restore
                 - mint.quote_payment_override
+                - mint.native_config_override
                 type: string
               cellName:
                 type: string

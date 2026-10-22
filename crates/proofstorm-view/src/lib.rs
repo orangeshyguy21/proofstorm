@@ -172,6 +172,9 @@ pub struct ComponentDetails {
     pub adapter_version: String,
     pub source_commit: Option<String>,
     pub embedded: Vec<EmbeddedResourceView>,
+    /// Native config overrides running unverified.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unverified_native_overrides: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 /// A logical resource sharing its parent component's process; it is not another workload.

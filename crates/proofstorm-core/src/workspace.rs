@@ -69,31 +69,43 @@ impl TaskStart {
         if self.timeout_seconds == Some(0) {
             return Err("task timeout must be positive or omitted");
         }
-        if self.env.len() > 64
-            || self.env.iter().any(|(key, value)| {
-                key.is_empty()
-                    || key.len() > 128
-                    || key.starts_with("PROOFSTORM_")
-                    || !key.bytes().enumerate().all(|(i, b)| {
-                        b == b'_' || b.is_ascii_alphabetic() || (i > 0 && b.is_ascii_digit())
-                    })
-                    || value.contains('\0')
-                    || value.len() > 4096
-            })
-        {
-            return Err("invalid task environment; PROOFSTORM_ variables are reserved");
-        }
-        if self
-            .env
-            .iter()
-            .map(|(k, v)| k.len() + v.len())
-            .sum::<usize>()
-            > 8192
-        {
-            return Err("task environment exceeds 8192 bytes");
-        }
-        Ok(())
+        validate_env(&self.env)
     }
+}
+
+/// Bounds shared by workspace task env and Nutshell `native_env`.
+///
+/// # Errors
+/// Rejects more than 64 variables, names outside `[A-Za-z_][A-Za-z0-9_]*`
+/// or over 128 bytes, `PROOFSTORM_` names, values over 4096 bytes or with
+/// NUL, and more than 8192 bytes in total.
+pub(crate) fn validate_env(env: &BTreeMap<String, String>) -> Result<(), &'static str> {
+    if env.len() > 64 {
+        return Err("environment has more than 64 variables");
+    }
+    if env.keys().any(|key| {
+        key.is_empty()
+            || key.len() > 128
+            || !key
+                .bytes()
+                .enumerate()
+                .all(|(i, b)| b == b'_' || b.is_ascii_alphabetic() || (i > 0 && b.is_ascii_digit()))
+    }) {
+        return Err("environment names must match [A-Za-z_][A-Za-z0-9_]* within 128 bytes");
+    }
+    if env.keys().any(|key| key.starts_with("PROOFSTORM_")) {
+        return Err("PROOFSTORM_ environment variables are reserved");
+    }
+    if env
+        .values()
+        .any(|value| value.contains('\0') || value.len() > 4096)
+    {
+        return Err("environment values must be at most 4096 bytes without NUL");
+    }
+    if env.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>() > 8192 {
+        return Err("environment exceeds 8192 bytes");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

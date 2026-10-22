@@ -592,6 +592,7 @@ fn component_details(
                     .map(|p| p.commit_sha.clone())
             }),
         embedded,
+        unverified_native_overrides: entry.unverified_native_overrides.clone(),
     }
 }
 

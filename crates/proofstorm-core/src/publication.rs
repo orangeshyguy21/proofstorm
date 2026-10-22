@@ -35,6 +35,10 @@ pub struct LockEntry {
     pub source: Option<CandidateSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_provenance: Option<crate::catalog::BuildProvenance>,
+    /// Native config overrides this component runs that Proofstorm has not
+    /// verified: `native_env` names or dotted `native_toml` paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unverified_native_overrides: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -91,6 +95,10 @@ pub fn resolve_effective_cell(
 /// Returns an error when an implementation is not installed or its requested
 /// implementation or configuration version differs from the installed catalog
 /// entry.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass derives every lock entry field from the same catalog and backend contract"
+)]
 pub fn resolve_lock(cell: &CellSpec, catalog: &CatalogResponse) -> Result<ResolvedLock, String> {
     let report = crate::validate_cell(cell);
     if !report.valid {
@@ -182,6 +190,7 @@ pub fn resolve_lock(cell: &CellSpec, catalog: &CatalogResponse) -> Result<Resolv
                 source_digest,
                 source: entry.source.clone(),
                 build_provenance: entry.build_provenance.clone(),
+                unverified_native_overrides: crate::native_settings::override_keys(component),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -671,6 +680,45 @@ mod tests {
                 "field {field:?} must trigger a mint rollout"
             );
         }
+    }
+
+    #[test]
+    fn native_overrides_are_locked_as_authored_and_marked_unverified() {
+        let cell = payment_cell(crate::PaymentMethod::Bolt11, "sat");
+        let catalog = default_catalog();
+        let mint = |lock: &ResolvedLock| {
+            lock.entries
+                .iter()
+                .find(|entry| entry.component_id == "mint")
+                .expect("mint lock")
+                .clone()
+        };
+        let baseline = mint(&resolve_lock(&cell, catalog).expect("baseline lock"));
+        assert!(baseline.unverified_native_overrides.is_empty());
+        let mut configured = cell.clone();
+        configured.components[0].config.insert(
+            "native_toml".into(),
+            serde_json::json!({"info": {"new_flag": true}, "prometheus": {"enabled": true}}),
+        );
+        let refused = resolve_lock(&configured, catalog).expect_err("opt-in required");
+        assert!(
+            refused.contains("native_config_override_not_allowed"),
+            "{refused}"
+        );
+        configured
+            .policy
+            .allow
+            .insert(crate::Capability::MintNativeConfigOverride);
+        let locked = mint(&resolve_lock(&configured, catalog).expect("opted-in lock"));
+        assert_eq!(
+            locked.unverified_native_overrides,
+            ["info.new_flag", "prometheus.enabled"]
+        );
+        assert_ne!(
+            baseline.effective_config_digest,
+            locked.effective_config_digest
+        );
+        assert_ne!(baseline.rollout_digest, locked.rollout_digest);
     }
 
     #[test]

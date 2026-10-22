@@ -179,6 +179,11 @@
         "name": {
           "type": "string"
         },
+        "native_toml": {
+          "additionalProperties": true,
+          "description": "Policy-gated `config.toml` additions; see `native_settings`.",
+          "type": "object"
+        },
         "onchain_max_melt_sat": {
           "format": "uint64",
           "minimum": 0,
@@ -1025,6 +1030,13 @@
         },
         "name": {
           "type": "string"
+        },
+        "native_env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Policy-gated environment additions; see `native_settings`.",
+          "type": "object"
         },
         "oidc_client_id": {
           "type": "string"

@@ -2214,3 +2214,230 @@ fn cdk_quote_payment_override_renders_the_authored_policy_choice() {
         enabled.replace("allow_mint_quote_payment_override = true", "")
     );
 }
+
+/// Every setting the adapter writes for a mint must be reserved from native
+/// config overrides, so an override can never replace one. New keys in an
+/// adapter table stay allowed; only the rendered keys themselves are checked.
+#[test]
+fn every_rendered_mint_setting_is_reserved_from_native_overrides() {
+    fn toml_leaves(table: &toml_edit::Table, path: &str, leaves: &mut Vec<String>) {
+        for (key, item) in table {
+            let path = if path.is_empty() {
+                key.to_owned()
+            } else {
+                format!("{path}.{key}")
+            };
+            match item {
+                toml_edit::Item::Table(inner) => toml_leaves(inner, &path, leaves),
+                _ => leaves.push(path),
+            }
+        }
+    }
+    let directory = golden_path("x").parent().unwrap().to_owned();
+    let mut checked = BTreeMap::<String, usize>::new();
+    for entry in fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|extension| extension != "json") {
+            continue;
+        }
+        let golden: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        let plans = golden["plans"]
+            .as_array()
+            .cloned()
+            .unwrap_or_else(|| vec![golden["plan"].clone()]);
+        for plan in plans {
+            let (Some(backend), Some(component)) =
+                (plan["backend_id"].as_str(), plan["component_id"].as_str())
+            else {
+                continue;
+            };
+            if !matches!(backend, "nutshell" | "cdk") {
+                continue;
+            }
+            let resources = &golden["resources"];
+            let named = |kind: &str, name: &str| {
+                resources[kind]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|resource| resource["metadata"]["name"] == name)
+                    .cloned()
+                    .unwrap_or_else(|| panic!("{backend} golden has no {kind} {name}"))
+            };
+            let config = named("configMaps", &format!("{component}-config"));
+            let mut keys = Vec::new();
+            if backend == "nutshell" {
+                keys.extend(config["data"].as_object().unwrap().keys().cloned());
+                let deployment = named("deployments", component);
+                for container in deployment["spec"]["template"]["spec"]["containers"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|container| container["name"] == "component")
+                {
+                    keys.extend(
+                        container["env"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|env| env["name"].as_str().map(str::to_owned)),
+                    );
+                }
+            } else {
+                let document = config["data"]["config.toml"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<toml_edit::DocumentMut>()
+                    .unwrap();
+                toml_leaves(document.as_table(), "", &mut keys);
+            }
+            for key in &keys {
+                assert!(
+                    proofstorm_core::native_settings::reserved(backend, key).is_some(),
+                    "{backend} renders {key:?}, which native overrides could replace; reserve it in native_settings.rs"
+                );
+            }
+            *checked.entry(backend.to_owned()).or_default() += keys.len();
+        }
+    }
+    assert!(
+        checked["nutshell"] > 100 && checked["cdk"] > 100,
+        "{checked:?}"
+    );
+}
+
+/// Compile one backend's golden cell with optional native overrides.
+fn mint_plan_with_overrides(
+    backend: &str,
+    overrides: Option<Value>,
+) -> proofstorm_core::ComponentPlanContract {
+    let (mut spec, component_id) = backend_cell(backend);
+    if let Some(overrides) = overrides {
+        let field = proofstorm_core::native_settings::field(backend).unwrap();
+        spec.components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .unwrap()
+            .config
+            .insert(field.into(), overrides);
+        spec.policy
+            .allow
+            .insert(Capability::MintNativeConfigOverride);
+    }
+    let lock = resolve_lock(&spec, default_catalog()).unwrap();
+    compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock)
+        .unwrap()
+        .into_iter()
+        .find(|plan| plan.component_id == component_id)
+        .unwrap()
+}
+
+#[test]
+fn cdk_native_toml_adds_keys_to_the_rendered_config_without_replacing_any() {
+    let config = |plan: &proofstorm_core::ComponentPlanContract| {
+        render_cdk_component(plan).unwrap().config_maps[0]
+            .data
+            .as_ref()
+            .unwrap()["config.toml"]
+            .clone()
+    };
+    let baseline = config(&mint_plan_with_overrides("cdk", None));
+    // An empty overlay leaves the document, and so the applied digest, unchanged.
+    assert_eq!(
+        config(&mint_plan_with_overrides("cdk", Some(json!({})))),
+        baseline
+    );
+    let merged = config(&mint_plan_with_overrides(
+        "cdk",
+        Some(json!({
+            "info": {"new_flag": true, "quote_ttl": {"new_ttl": 5}},
+            "prometheus": {"enabled": true, "port": 9000},
+            "new_list": [1, "two", {"three": 3.5}]
+        })),
+    ));
+    let document = merged.parse::<toml_edit::DocumentMut>().unwrap();
+    assert_eq!(document["info"]["new_flag"].as_bool(), Some(true));
+    assert_eq!(
+        document["info"]["quote_ttl"]["new_ttl"].as_integer(),
+        Some(5)
+    );
+    assert_eq!(document["prometheus"]["port"].as_integer(), Some(9000));
+    assert_eq!(document["new_list"].as_array().unwrap().len(), 3);
+    for line in baseline.lines() {
+        assert!(merged.lines().any(|merged| merged == line), "lost {line:?}");
+    }
+    // Validation refuses keys Proofstorm sets; rendering refuses them again.
+    let mut plan = mint_plan_with_overrides("cdk", None);
+    let proofstorm_core::EffectiveComponentConfig::Cdk(cdk) = &mut plan.effective_config else {
+        panic!("CDK plan");
+    };
+    cdk.native_toml
+        .insert("info".into(), json!({"url": "http://elsewhere"}));
+    let refused = render_cdk_component(&plan).unwrap_err().to_string();
+    assert!(refused.contains("info.url is already set"), "{refused}");
+}
+
+#[test]
+fn nutshell_native_env_reaches_the_mint_after_the_image_accepts_its_names() {
+    let init_containers = |rendered: &RenderedComponent| {
+        serde_json::to_value(&rendered.deployments[0]).unwrap()["spec"]["template"]["spec"]
+            ["initContainers"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    };
+    let check = |containers: &[Value]| {
+        containers
+            .iter()
+            .find(|container| container["name"] == "check-native-env")
+            .cloned()
+    };
+    let baseline =
+        render_nutshell_mint_component(&mint_plan_with_overrides("nutshell", None)).unwrap();
+    assert!(check(&init_containers(&baseline)).is_none());
+
+    let plan = mint_plan_with_overrides(
+        "nutshell",
+        Some(json!({"MINT_MNEMONIC": "abandon abandon about", "DEBUG": "TRUE"})),
+    );
+    let rendered = render_nutshell_mint_component(&plan).unwrap();
+    let environment = rendered.config_maps[0].data.as_ref().unwrap();
+    assert_eq!(environment["MINT_MNEMONIC"], "abandon abandon about");
+    assert_eq!(environment["DEBUG"], "TRUE");
+    let containers = init_containers(&rendered);
+    // The check runs before the mint waits for any dependency.
+    let names = containers
+        .iter()
+        .map(|container| container["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    let check_at = names.iter().position(|name| *name == "check-native-env");
+    let first_wait = names.iter().position(|name| name.starts_with("wait-for-"));
+    assert!(
+        check_at.is_some() && first_wait.is_some() && check_at < first_wait,
+        "{names:?}"
+    );
+    let check = check(&containers).expect("name check");
+    let command = check["command"].as_array().unwrap();
+    assert_eq!(command[..2], [json!("python"), json!("-c")]);
+    // Names are argv, never shell text.
+    assert_eq!(command[3..], [json!("DEBUG"), json!("MINT_MNEMONIC")]);
+    assert_eq!(check["terminationMessagePolicy"], "FallbackToLogsOnError");
+    assert_eq!(check["image"], json!(plan.execution_context.image));
+
+    let mut plan = mint_plan_with_overrides("nutshell", None);
+    let proofstorm_core::EffectiveComponentConfig::Nutshell(nutshell) = &mut plan.effective_config
+    else {
+        panic!("Nutshell plan");
+    };
+    // Nutshell reads settings ignoring case, so this would replace MINT_DATABASE.
+    nutshell
+        .native_env
+        .insert("mint_database".into(), "/tmp".into());
+    let refused = render_nutshell_mint_component(&plan)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("\"mint_database\" is already set"),
+        "{refused}"
+    );
+}
