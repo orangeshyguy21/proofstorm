@@ -3,6 +3,7 @@ import http.server
 import json
 import pathlib
 import sys
+import time
 
 mode, directory = sys.argv[1:3]
 work = pathlib.Path(directory)
@@ -59,6 +60,15 @@ else:
             payload = ("".join("data: " + json.dumps(c) + "\n\n" for c in chunks) + "data: [DONE]\n\n").encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
+            self.send_header("x-request-id", f"http-fixture-{call}")
+            self.send_header("set-cookie", "fixture-secret-cookie")
+            if mode == "stall" and call == 2:
+                self.end_headers()
+                self.wfile.write(("data: " + json.dumps(chunks[0]) + "\n\n").encode())
+                self.wfile.flush()
+                (work / "stalled").write_text("ready")
+                time.sleep(60)
+                return
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)

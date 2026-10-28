@@ -83,7 +83,7 @@ and web tools are denied. Component-native commands remain available through
 `cell_exec`.
 
 The OpenCode adapter requires version 2 and an explicit private JSON profile with
-native `providers` and optional `plugins` fields. Personal OpenCode settings and
+native `providers` and optional `plugins` and `diagnostics` fields. Personal OpenCode settings and
 background servers are not inherited. Keep the profile, model inventory, plans
 and results in ignored `dev/`. Credential settings may reference `{file:/path}`
 or `{env:VARIABLE}`; the resolved configuration is retained only inside the private
@@ -108,6 +108,14 @@ the retained session export supplies complete turn usage and supplements tool
 evidence. Missing session evidence cannot earn complete telemetry credit. Token
 counts and costs are CLI-reported; zero catalog cost is not proof of free service.
 Legacy transcripts remain readable for offline grading.
+
+New OpenCode attempts use the `controlled-mcp-only-opencode2-v2` profile with
+bounded private HTTP diagnostics, independent connection probes, local stop
+receipts, session export on timeout, and exact-argument reconciliation detail.
+See [OpenCode failure capture](benchmark-opencode-diagnostics.md) for evidence,
+optional independent control origins, attribution limits and fixture tests.
+Keep an in-progress campaign on its frozen runner and profile; introduce this
+capture version in a separately identified campaign.
 
 For current contracts, OpenCode's `invalid` rejection wrappers are classified
 using the original tool name and the task's allowlist. A rejected permitted call

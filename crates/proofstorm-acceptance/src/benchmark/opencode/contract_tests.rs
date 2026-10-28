@@ -2,7 +2,7 @@
 use super::*;
 use std::io::{BufRead, BufReader, Write};
 
-fn contract(denied: bool) -> Result<()> {
+fn contract(denied: bool, timeout: bool) -> Result<()> {
     let temporary = tempfile::tempdir()?;
     let work = std::env::var_os("PROOFSTORM_OPENCODE_TEST_WORK")
         .map_or_else(|| temporary.path().join("run"), std::path::PathBuf::from);
@@ -11,7 +11,13 @@ fn contract(denied: bool) -> Result<()> {
     fs::write(&fixture, include_str!("fixture.py"))?;
     let mut model = Command::new("python3")
         .arg(&fixture)
-        .arg(if denied { "denied" } else { "model" })
+        .arg(if timeout {
+            "stall"
+        } else if denied {
+            "denied"
+        } else {
+            "model"
+        })
         .arg(&work)
         .stdout(Stdio::piped())
         .spawn()?;
@@ -86,6 +92,11 @@ export default Plugin.define({ id: "fixture.compat", async setup(ctx) {
             .write_all(context.task.prompt.as_bytes())?;
         let start = Instant::now();
         loop {
+            if timeout && work.join("stalled").exists() {
+                child.kill()?;
+                child.wait()?;
+                break;
+            }
             if child.try_wait()?.is_some() {
                 break;
             }
@@ -96,12 +107,95 @@ export default Plugin.define({ id: "fixture.compat", async setup(ctx) {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        server.capture_session(&context)?;
-        drop(server);
+        let outcome = if timeout { "timeout" } else { "completed" };
         save(
             &work.join("benchmark-attempt.json"),
-            &json!({"outcome":"completed","elapsed_seconds":1,"session_export_required":true}),
+            &json!({"outcome":outcome,"elapsed_seconds":1,"session_export_required":true}),
         )?;
+        server.finish_session(&context, outcome)?;
+        drop(server);
+        diagnostics::summarize(&work)?;
+        let stop = read(&work.join("opencode-stop.json"))?;
+        ensure!(
+            stop["export_succeeded"] == true,
+            "durable session export failed: {stop}"
+        );
+        let capture_status = read(&work.join("transport-capture-status.json"))?;
+        ensure!(
+            capture_status["closed"] == true && capture_status["drain_complete"] == true,
+            "capture did not flush at shutdown: {capture_status}"
+        );
+        ensure!(
+            capture_status["write_errors"] == 0 && capture_status["dropped_records"] == 0,
+            "capture evidence incomplete: {capture_status}"
+        );
+        let transport = fs::read_to_string(work.join("transport.private.jsonl"))?;
+        ensure!(
+            !transport.contains("not-a-key") && !transport.contains("fixture-secret-cookie"),
+            "capture leaked credential"
+        );
+        let events: Vec<Value> = transport
+            .lines()
+            .map(serde_json::from_str)
+            .collect::<std::result::Result<_, _>>()?;
+        ensure!(
+            !events
+                .iter()
+                .any(|v| v["type"] == "correlation_gap" || v["type"] == "capture_error"),
+            "HTTP capture gap: {events:?}"
+        );
+        let requests: Vec<_> = events.iter().filter(|v| v["type"] == "request").collect();
+        let responses: Vec<_> = events
+            .iter()
+            .filter(|v| v["type"] == "response_headers")
+            .collect();
+        ensure!(
+            requests.len() == if denied { 3 } else { 2 },
+            "missing/extra captured requests"
+        );
+        ensure!(
+            responses.len() == requests.len(),
+            "missing response headers"
+        );
+        for response in responses {
+            ensure!(
+                requests
+                    .iter()
+                    .any(|r| r["request_id"] == response["request_id"]),
+                "uncorrelated response"
+            );
+            ensure!(
+                response["headers"]["x-request-id"]
+                    .as_str()
+                    .is_some_and(|v| v.starts_with("http-fixture-")),
+                "HTTP trace ID missing"
+            );
+        }
+        if timeout {
+            ensure!(
+                stop["interrupt_succeeded"] == true,
+                "owned session interrupt failed: {stop}"
+            );
+            ensure!(
+                events.iter().any(|v| v["type"] == "request_signal_abort"
+                    || v["type"] == "consumer_cancel"
+                    || v["type"] == "stream_error"),
+                "cancellation observation missing"
+            );
+            let diagnostics = read(&work.join("failure-diagnostics.json"))?;
+            ensure!(
+                diagnostics["local_termination"] == "timeout",
+                "local timeout lost"
+            );
+            ensure!(
+                fs::read_to_string(work.join("requests.jsonl"))?
+                    .lines()
+                    .count()
+                    == 2,
+                "interrupt initiated extra inference"
+            );
+            return Ok(());
+        }
         let output = retained(&work)?;
         ensure!(
             output.outcome == "completed" && output.final_text == "fixture complete",
@@ -173,11 +267,17 @@ export default Plugin.define({ id: "fixture.compat", async setup(ctx) {
 #[test]
 #[ignore = "requires explicit OpenCode 2 CLI and Python; fake model/MCP only"]
 fn installed_cli_round_trip() -> Result<()> {
-    contract(false)
+    contract(false, false)
 }
 
 #[test]
 #[ignore = "requires explicit OpenCode 2 CLI and Python; fake model/MCP only"]
 fn installed_cli_forbidden_attempt() -> Result<()> {
-    contract(true)
+    contract(true, false)
+}
+
+#[test]
+#[ignore = "requires explicit OpenCode 2 CLI and Python; fake model/MCP only"]
+fn installed_cli_timeout_exports_and_cancels_owned_session() -> Result<()> {
+    contract(false, true)
 }

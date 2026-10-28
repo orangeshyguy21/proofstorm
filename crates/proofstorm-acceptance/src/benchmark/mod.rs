@@ -370,6 +370,13 @@ pub(crate) const EVIDENCE_FILES: &[&str] = &[
     "opencode-preflight.private.json",
     "opencode-session.private.json",
     "opencode-session-error.private.txt",
+    "opencode-interrupt-error.private.txt",
+    "opencode-stop.json",
+    "transport-capture-config.json",
+    "transport.private.jsonl",
+    "transport-capture-status.json",
+    "failure-diagnostics.json",
+    "telemetry-reconciliation.private.json",
 ];
 
 /// Called by the parent after reaping the worker, including cancellation/recovery.

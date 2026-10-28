@@ -55,15 +55,19 @@ fn load(path: &Path) -> Result<Profile> {
     ensure!(path.is_absolute(), "OpenCode profile path must be absolute");
     let config: Value = serde_json::from_slice(&bytes(path)?)?;
     ensure!(
-        config.as_object().is_some_and(|m| m
-            .keys()
-            .all(|k| matches!(k.as_str(), "$schema" | "providers" | "plugins"))),
-        "OpenCode profile accepts only providers and explicit local plugins"
+        config
+            .as_object()
+            .is_some_and(|m| m.keys().all(|k| matches!(
+                k.as_str(),
+                "$schema" | "providers" | "plugins" | "diagnostics"
+            ))),
+        "OpenCode profile accepts only providers, explicit local plugins and diagnostics"
     );
     ensure!(
         config["providers"].is_object(),
         "OpenCode profile requires native v2 providers"
     );
+    super::diagnostics::controls(&config)?;
     let mut plugins = Vec::new();
     if let Some(list) = config.get("plugins") {
         let list = list
@@ -197,6 +201,8 @@ pub(super) fn prepare(context: &Context) -> Result<(Value, String)> {
         }
         plugins.push(root.canonicalize()?);
     }
+    // Last hook observes the final request after caller compatibility plugins.
+    plugins.push(super::diagnostics::install(context, &profile.config)?);
     Ok((
         json!({"providers":{provider:selected},"plugins":plugins}),
         fingerprint,

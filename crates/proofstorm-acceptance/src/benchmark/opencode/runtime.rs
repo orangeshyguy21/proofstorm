@@ -8,7 +8,7 @@ use std::{
     io::Read,
     os::unix::fs::DirBuilderExt,
     process::{Child, Command, Stdio},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 pub(super) fn command(context: &Context) -> Command {
@@ -113,12 +113,22 @@ impl Server {
         operation: &str,
         parameters: &[String],
     ) -> Result<Value> {
+        self.api_bounded(context, operation, parameters, 60)
+    }
+
+    fn api_bounded(
+        &self,
+        context: &Context,
+        operation: &str,
+        parameters: &[String],
+        seconds: u64,
+    ) -> Result<Value> {
         let mut cmd = self.command(context, "api");
         cmd.arg(operation);
         for parameter in parameters {
             cmd.args(["--param", parameter]);
         }
-        let result = crate::process::capture(cmd, 60)?;
+        let result = crate::process::capture(cmd, seconds)?;
         if !result.status.success() {
             fs::write(
                 context.work.join("opencode-api-error.private.txt"),
@@ -131,23 +141,12 @@ impl Server {
 
     pub(super) fn capture_session(&self, context: &Context) -> Result<()> {
         let transcript = fs::read_to_string(context.work.join("harness.jsonl"))?;
-        let rows = transcript
-            .lines()
-            .map(serde_json::from_str::<Value>)
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let session = rows
-            .iter()
-            .find_map(|row| row["sessionID"].as_str())
-            .context("OpenCode session identity missing")?;
-        ensure!(
-            rows.iter()
-                .all(|row| row["sessionID"].as_str().is_none_or(|id| id == session)),
-            "mixed OpenCode sessions"
-        );
-        let export = self.api_params(
+        let session = session_identity(&transcript)?;
+        let export = self.api_bounded(
             context,
             "experimental.session.export",
             &[format!("sessionID={session}")],
+            15,
         )?;
         let data = &export["data"];
         let (provider, model) = context.model.split_once('/').context("model identity")?;
@@ -176,6 +175,49 @@ impl Server {
             "session model substitution"
         );
         save(&context.work.join("opencode-session.private.json"), &export)
+    }
+
+    pub(super) fn finish_session(&self, context: &Context, outcome: &str) -> Result<()> {
+        let interrupt = matches!(outcome, "timeout" | "output_limit");
+        let mut record = json!({"format_version":1,"local_termination":outcome,
+            "stop_observed_at_unix_ms":SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+            "interrupt_requested":interrupt,"export_attempted":true,
+            "interrupt_timeout_seconds":5,"export_timeout_seconds":15});
+        save(&context.work.join("opencode-stop.json"), &record)?;
+        if interrupt {
+            let result = (|| -> Result<()> {
+                let session =
+                    session_identity(&fs::read_to_string(context.work.join("harness.jsonl"))?)?;
+                record["session_id"] = json!(session);
+                self.api_bounded(
+                    context,
+                    "session.interrupt",
+                    &[format!("sessionID={session}"), "continue=false".into()],
+                    5,
+                )?;
+                Ok(())
+            })();
+            record["interrupt_succeeded"] = json!(result.is_ok());
+            record["interrupt_finished_at_unix_ms"] =
+                json!(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis());
+            if let Err(error) = result {
+                fs::write(
+                    context.work.join("opencode-interrupt-error.private.txt"),
+                    format!("{error:#}"),
+                )?;
+            }
+        }
+        let result = self.capture_session(context);
+        record["export_succeeded"] = json!(result.is_ok());
+        record["export_finished_at_unix_ms"] =
+            json!(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis());
+        if let Err(error) = result {
+            fs::write(
+                context.work.join("opencode-session-error.private.txt"),
+                format!("{error:#}"),
+            )?;
+        }
+        save(&context.work.join("opencode-stop.json"), &record)
     }
 
     pub(super) fn preflight(&self, context: &Context, expected: &Value) -> Result<Value> {
@@ -289,6 +331,26 @@ impl Server {
     }
 }
 
+fn session_identity(transcript: &str) -> Result<String> {
+    let lines: Vec<_> = transcript.lines().collect();
+    let mut session = None;
+    for (index, line) in lines.iter().enumerate() {
+        let row: Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(_) if index + 1 == lines.len() && !transcript.ends_with('\n') => break,
+            Err(error) => return Err(error.into()),
+        };
+        if let Some(id) = row["sessionID"].as_str() {
+            ensure!(
+                session.as_deref().is_none_or(|previous| previous == id),
+                "mixed OpenCode sessions"
+            );
+            session = Some(id.to_owned());
+        }
+    }
+    session.context("OpenCode session identity missing")
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         drop(self.child.stdin.take());
@@ -314,4 +376,20 @@ pub(super) fn directories(context: &Context) -> Result<()> {
         fs::create_dir_all(context.work.join("opencode-home").join(path))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::session_identity;
+
+    #[test]
+    fn interrupted_tail_does_not_hide_session_identity_or_mixed_sessions() {
+        assert_eq!(
+            session_identity("{\"sessionID\":\"one\"}\n{\"type\":").unwrap(),
+            "one"
+        );
+        assert!(session_identity("{\"sessionID\":\"one\"}\n{\"sessionID\":\"two\"}\n").is_err());
+        assert!(session_identity("invalid\n{\"sessionID\":\"one\"}\n").is_err());
+        assert!(session_identity("{\"sessionID\":").is_err());
+    }
 }

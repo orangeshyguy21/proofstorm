@@ -1,6 +1,7 @@
 //! One isolated OpenCode 2 attempt; provider profiles remain private caller data.
 #[cfg(test)]
 mod contract_tests;
+mod diagnostics;
 pub(crate) mod profile;
 mod runtime;
 mod session;
@@ -56,7 +57,8 @@ pub fn run(config: &Context) -> Result<()> {
         &json!({
             "task":&config.task,"model_requested":config.model,"model_resolved":config.model,
             "model_is_alias":true,"harness":"opencode","harness_version":version_text,
-            "profile":"controlled-mcp-only-opencode2-v1","provider_profile_sha256":profile_sha256,
+            "profile":"controlled-mcp-only-opencode2-v2","provider_profile_sha256":profile_sha256,
+            "diagnostics":read(&config.work.join("transport-capture-config.json"))?,
             "model_catalog_sha256":proofstorm_core::digest_json(&model),
             "harness_config_sha256":proofstorm_core::digest_json(&entry),
             "prompt_sha256":proofstorm_core::digest_json(&config.task.prompt),
@@ -117,19 +119,15 @@ pub fn run(config: &Context) -> Result<()> {
         std::thread::sleep(Duration::from_millis(100));
     };
     let elapsed_seconds = start.elapsed().as_secs_f64();
-    if matches!(outcome, "completed" | "harness_failure")
-        && let Err(error) = server.capture_session(config)
-    {
-        fs::write(
-            config.work.join("opencode-session-error.private.txt"),
-            format!("{error:#}"),
-        )?;
-    }
     save(
         &config.work.join("benchmark-attempt.json"),
         &json!({"outcome":outcome,"elapsed_seconds":elapsed_seconds,"model":config.model,"usage":null,"cost":null,"session_export_required":true}),
     )?;
+    // Record the local termination before interrupting a still-running server
+    // session. Export while that owned server is alive, including timeout paths.
+    server.finish_session(config, outcome)?;
     drop(server);
+    diagnostics::summarize(&config.work)?;
     Ok(())
 }
 
@@ -138,6 +136,11 @@ pub fn run(config: &Context) -> Result<()> {
 pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
     let attempt =
         read(&work.join("benchmark-attempt.json")).unwrap_or(json!({"outcome":"not_started"}));
+    let (rows, complete) = transcript(work, attempt["session_export_required"] == true);
+    retained_rows(work, &attempt, &rows, complete)
+}
+
+fn transcript(work: &Path, export_required: bool) -> (Vec<Value>, bool) {
     let transcript = fs::read_to_string(work.join("harness.jsonl")).unwrap_or_default();
     let mut rows = Vec::new();
     let mut complete = !transcript.is_empty();
@@ -148,7 +151,7 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
         }
     }
     let exported = session::rows(work);
-    if attempt["session_export_required"] == true && exported.is_err() {
+    if export_required && exported.is_err() {
         complete = false;
     }
     if let Ok(exported) = exported {
@@ -157,6 +160,15 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
         rows.retain(|row| row["type"] != "step_finish" && row["type"] != "text");
         rows.extend(exported);
     }
+    (rows, complete)
+}
+
+fn retained_rows(
+    work: &Path,
+    attempt: &Value,
+    rows: &[Value],
+    complete: bool,
+) -> Result<AttemptOutput> {
     let captured = super::events(work).and_then(|rows| super::calls(&rows));
     let telemetry_error = captured.as_ref().err().map(ToString::to_string);
     let captured = captured.unwrap_or_else(|_| {
@@ -171,7 +183,7 @@ pub(super) fn retained(work: &Path) -> Result<AttemptOutput> {
     let task = read(&work.join("benchmark-task.json"))
         .ok()
         .and_then(|value| serde_json::from_value::<super::task::Task>(value).ok());
-    let (mut calls, unauthorized) = telemetry::reconcile(captured, &rows, task.as_ref());
+    let (mut calls, unauthorized) = telemetry::reconcile(captured, rows, task.as_ref());
     if !complete {
         let id = calls
             .iter()
