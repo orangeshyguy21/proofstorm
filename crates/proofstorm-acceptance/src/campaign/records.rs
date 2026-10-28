@@ -91,6 +91,12 @@ fn model_result(plan: &Plan, entry: &Entry, acceptance: &Value, result: &Value) 
     );
     let manifest_task: crate::benchmark::task::Task =
         serde_json::from_value(manifest["task"].clone())?;
+    if let Some(profile) = &run.opencode_profile {
+        ensure!(
+            manifest["provider_profile_sha256"] == profile.sha256,
+            "attempt provider profile differs from frozen campaign"
+        );
+    }
     ensure!(
         proofstorm_core::digest_json(&manifest_task) == run.task_sha256,
         "manifest task changed"

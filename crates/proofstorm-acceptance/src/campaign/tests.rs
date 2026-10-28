@@ -10,6 +10,7 @@ fn plan(work: &Path, count: usize) -> Plan {
         runner_sha256: "runner-digest".into(),
         revision: "source-revision".into(),
         checkout_home: work.join("checkout"),
+        bootstrap_tool_cache: None,
         gate_timeout_seconds: 4200,
         max_setup_attempts: 3,
         runs: (0..count)
@@ -19,6 +20,7 @@ fn plan(work: &Path, count: usize) -> Plan {
                 harness: "codex".into(),
                 executable: work.join("codex"),
                 executable_sha256: "cli-digest".into(),
+                opencode_profile: None,
                 task: "benchmark-o1".into(),
                 task_sha256: contracts()["benchmark-o1"]["sha256"]
                     .as_str()
@@ -637,6 +639,30 @@ fn source_validation_checks_runner_and_cli_bytes_before_git_or_launch() {
 }
 
 #[test]
+fn provider_profile_is_checked_before_git_or_launch() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut plan = plan(dir.path(), 1);
+    fs::write(&plan.runner, b"runner").unwrap();
+    plan.runner_sha256 = hash(&plan.runner).unwrap();
+    let path = dir.path().join("profile.json");
+    save(&path, &json!({"providers":{}})).unwrap();
+    plan.runs[0].opencode_profile = Some(ProfilePin {
+        sha256: opencode_profile_hash(&path).unwrap(),
+        path: path.clone(),
+    });
+    assert!(plan.validate().is_err());
+    plan.runs[0].harness = "opencode".into();
+    assert!(plan.validate().is_ok());
+    save(&path, &json!({"providers":{"changed":{}}})).unwrap();
+    assert!(
+        plan.verify_source()
+            .unwrap_err()
+            .to_string()
+            .contains("provider profile or plugin changed")
+    );
+}
+
+#[test]
 fn campaign_lock_is_exclusive_and_released_without_deleting_the_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lock");
@@ -660,6 +686,7 @@ fn subprocess_uses_exact_cli_arguments_and_a_private_non_reusable_log() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let mut plan = plan(dir.path(), 1);
+    plan.bootstrap_tool_cache = Some(dir.path().join("tool-cache"));
     fs::write(&plan.runner, b"#!/bin/sh\nprintf '%s\\n' \"$@\"\nexit 0\n").unwrap();
     fs::set_permissions(&plan.runner, fs::Permissions::from_mode(0o700)).unwrap();
     for (index, (harness, option)) in [
@@ -671,6 +698,10 @@ fn subprocess_uses_exact_cli_arguments_and_a_private_non_reusable_log() {
     .enumerate()
     {
         plan.runs[0].harness = harness.into();
+        plan.runs[0].opencode_profile = (harness == "opencode").then(|| ProfilePin {
+            path: dir.path().join("profile.json"),
+            sha256: "profile-digest".into(),
+        });
         let entry = Entry {
             run: 0,
             setup_attempt: u32::try_from(index + 1).unwrap(),
@@ -683,7 +714,21 @@ fn subprocess_uses_exact_cli_arguments_and_a_private_non_reusable_log() {
         let work = plan.attempt_path(&entry);
         let log = work.with_extension("log");
         let args = fs::read_to_string(&log).unwrap();
-        let expected = vec![
+        let mut expected = vec![
+            "--bootstrap-tool-cache",
+            plan.bootstrap_tool_cache
+                .as_ref()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+        ];
+        if let Some(profile) = &plan.runs[0].opencode_profile {
+            expected.extend([
+                "--benchmark-opencode-profile",
+                profile.path.to_str().unwrap(),
+            ]);
+        }
+        expected.extend([
             "--checkout-home",
             plan.checkout_home.to_str().unwrap(),
             "--root",
@@ -699,7 +744,7 @@ fn subprocess_uses_exact_cli_arguments_and_a_private_non_reusable_log() {
             "--benchmark-model",
             "model-0",
             "benchmark-o1",
-        ];
+        ]);
         assert_eq!(args.lines().collect::<Vec<_>>(), expected);
         assert_eq!(
             fs::metadata(log).unwrap().permissions().mode() & 0o777,

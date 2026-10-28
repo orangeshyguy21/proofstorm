@@ -3,11 +3,20 @@ use super::super::{score::Call, task::Task};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub fn reconcile(
+pub fn reconcile(calls: Vec<Call>, transcript: &[Value], task: Option<&Task>) -> (Vec<Call>, bool) {
+    let (calls, unauthorized, _) = detailed(calls, transcript, task);
+    (calls, unauthorized)
+}
+
+pub(super) fn audit(calls: Vec<Call>, transcript: &[Value], task: Option<&Task>) -> Value {
+    detailed(calls, transcript, task).2
+}
+
+fn detailed(
     mut calls: Vec<Call>,
     transcript: &[Value],
     task: Option<&Task>,
-) -> (Vec<Call>, bool) {
+) -> (Vec<Call>, bool, Value) {
     let explicit_outcomes =
         task.is_some_and(|task| task.rules["interpretation"] == "explicit-outcomes-v1");
     let mut available = BTreeMap::<String, VecDeque<usize>>::new();
@@ -21,11 +30,20 @@ pub fn reconcile(
             .push_back(index);
     }
     let mut seen = BTreeSet::new();
+    let mut matched = Vec::new();
+    let mut unmatched = Vec::new();
+    let original_count = calls.len();
     let mut unauthorized = false;
     let mut next = calls.iter().map(|call| call.id).max().unwrap_or(0);
     for event in transcript.iter().filter(|v| v["type"] == "tool_use") {
         let part = &event["part"];
-        if let Some(call_id) = part["callID"].as_str()
+        // V1 uses callID; V2 uses id, scoped to its assistant message.
+        let identity = part["callID"].as_str().map(|id| ("", id)).or_else(|| {
+            part["id"]
+                .as_str()
+                .map(|id| (part["messageID"].as_str().unwrap_or(""), id))
+        });
+        if let Some(call_id) = identity
             && !seen.insert(call_id)
         {
             continue;
@@ -52,6 +70,7 @@ pub fn reconcile(
             if let Some(indices) = available.get_mut(&key)
                 && let Some(index) = indices.pop_front()
             {
+                matched.push(json!({"proxy_call_id":calls[index].id,"harness_identity":identity}));
                 // A reply arriving after the harness timed out is not a
                 // successful interaction for the agent, even if MCP succeeded.
                 if part["state"]["status"] == "error" {
@@ -61,6 +80,12 @@ pub fn reconcile(
                 }
                 continue;
             }
+        }
+        if let Some(name) = name
+            && rejected_tool.is_none()
+        {
+            unmatched.push(json!({"tool":name,"harness_identity":identity,
+                "status":part["state"]["status"],"arguments":arguments}));
         }
         // Missing MCP success is unknown telemetry; a harness schema/permission
         // rejection is an attempted call failure even though no MCP frame existed.
@@ -84,7 +109,30 @@ pub fn reconcile(
             elapsed_ms: 0,
         });
     }
-    if available.values().any(|indices| !indices.is_empty()) {
+    let remaining: Vec<_> = available.values().flatten().copied().collect();
+    for entry in &mut unmatched {
+        let candidates: Vec<_> = remaining
+            .iter()
+            .filter(|&&i| calls[i].tool == entry["tool"])
+            .collect();
+        entry["same_tool_candidates"] = json!(
+            candidates
+                .iter()
+                .take(16)
+                .map(|&&i| json!({
+                    "proxy_call_id":calls[i].id,"arguments":calls[i].arguments,
+                    "differences":differences(&entry["arguments"], &calls[i].arguments, ""),
+                }))
+                .collect::<Vec<_>>()
+        );
+        entry["candidate_count"] = json!(candidates.len());
+    }
+    let audit = json!({"format_version":1,"matching":"exact-tool-and-arguments",
+        "candidate_limit_per_call":16,"difference_limit_per_candidate":64,"arrays_compared_as":"whole_values",
+        "proxy_call_count":original_count,"matched":matched,"unmatched_harness_calls":unmatched,
+        "unmatched_proxy_call_ids":remaining.iter().map(|&i| calls[i].id).collect::<Vec<_>>(),
+        "interpretation":"Same-tool candidates are diagnostic comparisons, not inferred identities or permission to normalize arguments. Scoring remains strict."});
+    if !remaining.is_empty() {
         next += 1;
         calls.push(Call {
             id: next,
@@ -94,13 +142,88 @@ pub fn reconcile(
             elapsed_ms: 0,
         });
     }
-    (calls, unauthorized)
+    (calls, unauthorized, audit)
+}
+
+fn differences(left: &Value, right: &Value, path: &str) -> Vec<Value> {
+    fn kind(value: &Value) -> &'static str {
+        match value {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        }
+    }
+    if left == right {
+        return Vec::new();
+    }
+    if let (Some(a), Some(b)) = (left.as_object(), right.as_object()) {
+        let keys: BTreeSet<_> = a.keys().chain(b.keys()).collect();
+        return keys.into_iter().flat_map(|key| {
+            let pointer = format!("{path}/{}", key.replace('~', "~0").replace('/', "~1"));
+            match (a.get(key), b.get(key)) {
+                (Some(a), Some(b)) => differences(a, b, &pointer),
+                (a, b) => vec![json!({"path":pointer,"kind":"property_presence", "harness_present":a.is_some(),"proxy_present":b.is_some()})],
+            }
+        }).take(64).collect();
+    }
+    vec![
+        json!({"path":path,"kind":if kind(left) == kind(right) {"value"} else {"type"},"harness_type":kind(left),"proxy_type":kind(right)}),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::super::task;
     use super::*;
+
+    #[test]
+    fn argument_audit_explains_coercion_and_stripped_fields_without_repairing_scores() {
+        for (harness, proxy, path, kind) in [
+            (
+                json!({"expected_generation":"1"}),
+                json!({"expected_generation":1}),
+                "/expected_generation",
+                "type",
+            ),
+            (
+                json!({"name":"wallet","fields":["balance"]}),
+                json!({"name":"wallet"}),
+                "/fields",
+                "property_presence",
+            ),
+        ] {
+            let call = Call {
+                id: 34,
+                tool: "cell_inspect".into(),
+                arguments: proxy,
+                success: Some(true),
+                elapsed_ms: 1,
+            };
+            let row = json!({"type":"tool_use","part":{"id":"tool-1","messageID":"msg-1","tool":"proofstorm_cell_inspect","state":{"status":"completed","input":harness}}});
+            let audit = super::audit(
+                vec![call.clone()],
+                &[row.clone(), row.clone()],
+                Some(task::o1()),
+            );
+            assert_eq!(audit["unmatched_proxy_call_ids"], json!([34]));
+            assert_eq!(
+                audit["unmatched_harness_calls"].as_array().unwrap().len(),
+                1
+            );
+            let diff =
+                &audit["unmatched_harness_calls"][0]["same_tool_candidates"][0]["differences"][0];
+            assert_eq!(diff["path"], path);
+            assert_eq!(diff["kind"], kind);
+            let (calls, unauthorized) = super::reconcile(vec![call], &[row], Some(task::o1()));
+            assert!(!unauthorized);
+            assert_eq!(calls.len(), 3);
+            assert!(calls[1].success.is_none());
+            assert_eq!(calls[2].tool, "telemetry_gap");
+        }
+    }
 
     fn reconcile(calls: Vec<Call>, transcript: &[Value], explicit: bool) -> (Vec<Call>, bool) {
         super::reconcile(
@@ -231,6 +354,17 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[1].success, Some(false));
         assert!(!unauthorized);
+    }
+
+    #[test]
+    fn v2_ids_deduplicate_within_messages_but_not_across_turns() {
+        let first = json!({"type":"tool_use","part":{"id":"same-id","messageID":"first","tool":"shell","state":{"status":"error","input":{}}}});
+        let mut second = first.clone();
+        second["part"]["messageID"] = json!("second");
+        let (calls, unauthorized) = reconcile(vec![], &[first.clone(), first, second], true);
+        assert!(unauthorized);
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().all(|call| call.success == Some(false)));
     }
     #[test]
     fn unobserved_success_never_becomes_perfect_telemetry() {

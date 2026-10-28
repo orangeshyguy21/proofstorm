@@ -58,9 +58,25 @@ Add entries in the intended execution order. IDs must be unique and contain only
 letters, digits or hyphens. Supported harnesses are `codex`, `claude-code`, and
 `opencode`; tasks are `benchmark-o1` and `benchmark-o5`. Use each CLI's exact model
 ID. Authentication uses the existing adapter defaults (Codex file login, Claude
-Code login, OpenCode configuration). The plan contains no credentials. Executable
+Code login, explicit private OpenCode 2 provider profile). The plan contains no credentials. Executable
 hashes pin the executable file, not an entire CLI installation or its dynamically
 loaded dependencies. Model aliases are still subject to provider changes.
+
+For OpenCode 2, add `opencode_profile` to each run, with an absolute `path` and
+`sha256`. Compute that fingerprint with:
+
+```sh
+.proofstorm-dev/target/debug/proofstorm-benchmark-campaign \
+  --opencode-profile-hash "$PWD/dev/provider-profile.json"
+```
+
+This pins the native provider configuration and every explicit local plugin file;
+credential references are pinned without copying their secret values into the plan.
+Changes to the profile or plugin stop the next slot. The attempt manifest must
+match the plan's fingerprint. See the pilot guide for the private profile format.
+Keep provider inventories, profiles, campaign plans and results in ignored `dev/`;
+they do not need to become source-controlled model definitions. Use separate
+entries for every exact variant ID and each task, even when display names match.
 
 The current acceptance gate timeout is 4,200–14,400 seconds: the common
 3,600-second model allowance plus at least 600 seconds for verification. Each task retains its
@@ -139,6 +155,14 @@ policy. Historical receipts retain their original policies and grades; they are
 not silently reclassified under the shared-host policy.
 
 ## Pinned tool transfers
+
+An optional plan-level `bootstrap_tool_cache` absolute path reuses host tools
+without downloading them for every slot. The directory must contain the exact
+`<name>-<executable_sha256>` files from the current platform's bootstrap pins.
+Acceptance verifies all required checksums before copying any tool into a new
+installation. It never adopts the cache's runtime or ownership state. A missing
+or changed tool fails setup before model launch; the cache grants no exception
+to the pinned tool versions.
 
 Catalog image inspection and copying use a temporary Docker configuration with
 anonymous authentication, shared with installation-local controller publication.

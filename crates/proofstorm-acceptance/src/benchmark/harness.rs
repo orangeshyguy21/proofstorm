@@ -31,6 +31,8 @@ pub(super) fn mark_launch(config: &Context) -> Result<()> {
 pub enum Harness {
     OpenCode {
         executable: PathBuf,
+        #[serde(default)]
+        profile: Option<PathBuf>,
     },
     Codex {
         executable: PathBuf,

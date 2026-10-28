@@ -4,7 +4,7 @@ mod codex;
 pub mod harness;
 mod negative;
 mod observer;
-mod opencode;
+pub(crate) mod opencode;
 pub mod preparation;
 pub mod proxy;
 pub mod reference;
@@ -367,6 +367,16 @@ pub(crate) const EVIDENCE_FILES: &[&str] = &[
     "codex-prompt.private.json",
     "claude-mcp.private.json",
     "claude-preflight.private.json",
+    "opencode-preflight.private.json",
+    "opencode-session.private.json",
+    "opencode-session-error.private.txt",
+    "opencode-interrupt-error.private.txt",
+    "opencode-stop.json",
+    "transport-capture-config.json",
+    "transport.private.jsonl",
+    "transport-capture-status.json",
+    "failure-diagnostics.json",
+    "telemetry-reconciliation.private.json",
 ];
 
 /// Called by the parent after reaping the worker, including cancellation/recovery.
@@ -517,7 +527,8 @@ mod tests {
                     mcp: "unused".into(),
                     model: "test".into(),
                     harness: harness::Harness::OpenCode {
-                        executable: "unused".into()
+                        executable: "unused".into(),
+                        profile: None,
                     },
                     task: selected.clone()
                 }),

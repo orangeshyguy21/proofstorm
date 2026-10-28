@@ -23,6 +23,7 @@ serde_json.workspace = true
 serde.workspace = true
 sha2.workspace = true
 tempfile = "3.20"
+url = "2"
 tokio = { workspace = true, features = ["process"] }
 tonic = { version = "=0.14.6", default-features = false, features = ["transport", "codegen", "tls-ring"] }
 tonic-prost = "=0.14.6"

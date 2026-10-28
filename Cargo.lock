@@ -2938,6 +2938,7 @@ dependencies = [
  "toml_edit",
  "tonic",
  "tonic-prost",
+ "url",
 ]
 
 [[package]]
