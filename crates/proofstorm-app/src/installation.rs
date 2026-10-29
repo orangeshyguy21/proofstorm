@@ -16,6 +16,11 @@ use std::{
 pub const CATALOG_REGISTRY: &str = "proofstorm-registry.localhost:5000";
 pub const OWNER_LABEL: &str = "proofstorm.dev/installation";
 const MANIFEST: &str = "installation.json";
+/// Kubelet deletes unused images only at 85% of the node filesystem, which under
+/// Docker Desktop is the whole VM disk. Delete images unused for a day instead;
+/// nodes pull them again from the installation registry or upstream. The age
+/// must exceed k3s's two-minute minimum or kubelet refuses to start.
+const NODE_IMAGE_CLEANUP: &str = "apiVersion: kubelet.config.k8s.io/v1beta1\nkind: KubeletConfiguration\nimageMaximumGCAge: 24h\n";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -234,6 +239,13 @@ impl Installation {
                 // k3d interprets a single-line string as a file path, not inline config.
                 "config": format!("{mirrors:#}")
             },
+            // k3s reads kubelet drop-ins only when a node is created.
+            "files": [{
+                "description": "Delete node images unused for a day",
+                "source": NODE_IMAGE_CLEANUP,
+                "destination": "/var/lib/rancher/k3s/agent/etc/kubelet.conf.d/50-proofstorm-image-gc.conf",
+                "nodeFilters": ["server:*", "agent:*"]
+            }],
             "options": {
                 "kubeconfig": {"updateDefaultKubeconfig": false, "switchCurrentContext": false},
                 "k3d": {"wait": true, "timeout": "120s"},
@@ -275,7 +287,7 @@ impl Installation {
         let path = self.cluster_config_path();
         if path.try_exists()? {
             let saved = fs::read(&path)?;
-            if saved == bytes {
+            if saved == bytes || comparable(&saved, &config).is_some_and(|saved| saved == config) {
                 return Ok(());
             }
             if let Some(image) = superseded_k3s(&saved, &config) {
@@ -302,9 +314,20 @@ pub(crate) fn saved_k3s_image(home: &Path) -> Option<String> {
     saved.get("image")?.as_str().map(str::to_owned)
 }
 
+/// A saved configuration as compared with this release's. Clusters created
+/// before node image cleanup keep running without it until recreated.
+fn comparable(saved: &[u8], generated: &Value) -> Option<Value> {
+    let mut saved: Value = serde_json::from_slice(saved).ok()?;
+    saved
+        .as_object_mut()?
+        .entry("files")
+        .or_insert_with(|| generated["files"].clone());
+    Some(saved)
+}
+
 /// The saved k3s image, when a release pin change is the only difference.
 fn superseded_k3s(saved: &[u8], generated: &Value) -> Option<String> {
-    let mut saved: Value = serde_json::from_slice(saved).ok()?;
+    let mut saved = comparable(saved, generated)?;
     let image = saved.get("image")?.as_str()?.to_owned();
     saved["image"] = generated["image"].clone();
     (saved == *generated).then_some(image)
