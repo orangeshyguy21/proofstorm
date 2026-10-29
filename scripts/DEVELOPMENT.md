@@ -230,6 +230,13 @@ the retained receipt contains only amounts, exit codes and rejection flags.
 The old quote-flood/SLA experiment is retired; no sustained-load availability
 claim is made by this gate.
 
+`just e2e candidate-bundle` makes one unpublished commit on the pinned public
+CDK source, marking cdk-mintd's help text, and builds it from a git bundle. It
+checks that only the build's `source` container mounts the bundle Secret,
+read-only, and that the image's `cdk-mintd --help` shows the marker; that check
+runs the image in host Docker without a network. It then removes the candidate
+and waits for its build resource, Job, Pod and Secret to disappear.
+
 `just check-cdk-config` is a separate image-only contract check: Docker and jq,
 no cluster. It validates generated CDK configs and tests initializer edits,
 restart retries and failed-edit recovery without network access in containers.

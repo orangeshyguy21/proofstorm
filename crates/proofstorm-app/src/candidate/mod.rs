@@ -36,6 +36,37 @@ pub struct CandidateBuildRequest {
     pub idempotency_key: String,
 }
 
+/// Replace a bundle request's local path with the identity of the file's bytes.
+/// Returns the bytes, which reach the build only through its owned Secret.
+///
+/// # Errors
+/// Rejects unreadable or malformed bundles and requests that supply derived fields.
+pub fn load_bundle(request: &mut CandidateBuildRequest) -> Result<Option<Vec<u8>>, Error> {
+    let Some(CandidateInput::Bundle {
+        path,
+        commit,
+        sha256,
+        prerequisites,
+    }) = &request.source
+    else {
+        return Ok(None);
+    };
+    let refused = |message: String| Error::problem("candidate_bundle_refused", message);
+    let path = path
+        .as_deref()
+        .filter(|path| (1..=4096).contains(&path.len()))
+        .filter(|_| sha256.is_none() && prerequisites.is_empty())
+        .ok_or_else(|| refused("supply path (1..4096 bytes) and commit only".into()))?;
+    let max = proofstorm_core::CANDIDATE_BUNDLE_MAX_BYTES as u64;
+    let (bytes, _) =
+        crate::cell::read_local_file(std::path::Path::new(path), max).map_err(refused)?;
+    request.source = Some(
+        CandidateInput::from_bundle(&bytes, commit)
+            .map_err(|message| Error::problem("candidate_source_invalid", message))?,
+    );
+    Ok(Some(bytes))
+}
+
 pub async fn admit(
     store: &Store,
     workspace: &str,

@@ -8,7 +8,8 @@ use crate::{GateContext, McpClient, gate::CONTROL_NAMESPACE, json as expect};
 
 const ID: &str = "acceptance-build-isolation";
 
-fn build_pod(context: &GateContext) -> Result<Value> {
+/// The candidate's runtime resource name and its first build Pod.
+pub(super) fn build_pod(context: &GateContext, id: &str) -> Result<(String, Value)> {
     let deadline = Instant::now() + Duration::from_secs(90);
     while Instant::now() < deadline {
         let builds = context.kubectl.get_json(&[
@@ -17,11 +18,15 @@ fn build_pod(context: &GateContext) -> Result<Value> {
             "-n",
             CONTROL_NAMESPACE,
         ])?;
-        if let Some(job) = expect::array(&builds, "/items")?
+        let build = expect::array(&builds, "/items")?
             .iter()
-            .find(|build| build["spec"]["candidateId"] == ID)
-            .and_then(|build| build["status"]["jobName"].as_str())
-        {
+            .find(|build| build["spec"]["candidateId"] == id);
+        if let Some((resource, job)) = build.and_then(|build| {
+            Some((
+                build["metadata"]["name"].as_str()?,
+                build["status"]["jobName"].as_str()?,
+            ))
+        }) {
             let pods = context.kubectl.get_json(&[
                 "get",
                 "pods",
@@ -31,7 +36,7 @@ fn build_pod(context: &GateContext) -> Result<Value> {
                 &format!("job-name={job}"),
             ])?;
             if let Some(pod) = expect::array(&pods, "/items")?.first() {
-                return Ok(pod.clone());
+                return Ok((resource.to_owned(), pod.clone()));
             }
         }
         std::thread::sleep(Duration::from_secs(1));
@@ -39,14 +44,26 @@ fn build_pod(context: &GateContext) -> Result<Value> {
     anyhow::bail!("candidate build Pod did not appear within 90 seconds");
 }
 
-fn check_mounts(context: &GateContext, pod: &Value) -> Result<()> {
+/// Only disposable storage, plus a bundle source's Secret that solely the
+/// `source` init container mounts, read-only.
+pub(super) fn check_mounts(
+    context: &GateContext,
+    label: &str,
+    pod: &Value,
+    bundle_secret: Option<&str>,
+) -> Result<()> {
     let spec = &pod["spec"];
+    let containers: Vec<&Value> = expect::array(spec, "/initContainers")?
+        .iter()
+        .chain(expect::array(spec, "/containers")?)
+        .collect();
     // Inspect Pod metadata only; never open a mounted credential or host file.
     let observation = json!({"pod":pod["metadata"]["name"],
         "automount":spec["automountServiceAccountToken"],
         "volumes":spec["volumes"],
+        "mounts":containers.iter().map(|c| json!({"container":c["name"],"mounts":c["volumeMounts"]})).collect::<Vec<_>>(),
         "host_network":spec["hostNetwork"],"host_pid":spec["hostPID"]});
-    context.record("candidate-build-isolation-pod.json", &observation)?;
+    context.record(&format!("{label}-pod.json"), &observation)?;
     ensure!(
         spec["automountServiceAccountToken"] == false,
         "build Pod did not disable API credential automount"
@@ -55,13 +72,46 @@ fn check_mounts(context: &GateContext, pod: &Value) -> Result<()> {
         spec["hostNetwork"] != true && spec["hostPID"] != true,
         "build Pod uses a host namespace"
     );
-    let volumes = expect::array(spec, "/volumes")?;
+    let (secrets, disposable): (Vec<&Value>, Vec<&Value>) = expect::array(spec, "/volumes")?
+        .iter()
+        .partition(|volume| volume.get("secret").is_some());
     ensure!(
-        !volumes.is_empty()
-            && volumes.iter().all(|volume| volume["emptyDir"].is_object()
-                && volume.as_object().is_some_and(|fields| fields.len() == 2)),
+        !disposable.is_empty()
+            && disposable
+                .iter()
+                .all(|volume| volume["emptyDir"].is_object()
+                    && volume.as_object().is_some_and(|fields| fields.len() == 2)),
         "build Pod mounted something other than disposable build storage: {observation}"
     );
+    let Some(bundle_secret) = bundle_secret else {
+        ensure!(
+            secrets.is_empty(),
+            "build Pod mounted a Secret: {observation}"
+        );
+        return Ok(());
+    };
+    ensure!(
+        secrets.len() == 1 && secrets[0]["secret"]["secretName"] == bundle_secret,
+        "build Pod did not mount exactly the bundle Secret: {observation}"
+    );
+    for container in &containers {
+        let mounts: Vec<&Value> = container["volumeMounts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|mount| mount["name"] == secrets[0]["name"])
+            .collect();
+        let allowed = if container["name"] == "source" {
+            mounts.len() == 1 && mounts[0]["readOnly"] == true
+        } else {
+            mounts.is_empty()
+        };
+        ensure!(
+            allowed,
+            "bundle Secret reached {} or was writable: {observation}",
+            container["name"]
+        );
+    }
     Ok(())
 }
 
@@ -101,7 +151,8 @@ pub(super) fn run(context: &GateContext) -> Result<()> {
             "implementation":"cocod-wallet","request_id":ID,
             "source":{"type":"commit","sha":super::candidates::COCO}}),
         )?;
-        check_mounts(context, &build_pod(context)?)?;
+        let (_, pod) = build_pod(context, ID)?;
+        check_mounts(context, "candidate-build-isolation", &pod, None)?;
         passive_completion(context, &mut client)?;
         // Read the terminal receipt only after independent observation succeeded.
         let receipt = super::candidates::wait(context, &mut client, ID)?;

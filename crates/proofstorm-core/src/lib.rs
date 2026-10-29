@@ -47,9 +47,9 @@ pub use backend::{
     default_backend_registry,
 };
 pub use candidate::{
-    CANDIDATE_BUILD_API_VERSION, CandidateBuild, CandidateBuildPhase, CandidateDiagnostics,
-    CandidateInput, CandidateLog, CandidateProvenance, CandidateSource, candidate_catalog_entry,
-    effective_catalog, is_github_repository,
+    CANDIDATE_BUILD_API_VERSION, CANDIDATE_BUNDLE_MAX_BYTES, CandidateBuild, CandidateBuildPhase,
+    CandidateDiagnostics, CandidateInput, CandidateLog, CandidateProvenance, CandidateSource,
+    candidate_catalog_entry, effective_catalog, is_github_repository,
 };
 pub use catalog::{
     AuthenticationMode, BuildProvenance, CDK_MINT_IMAGE, CDK_VERSION, CLN_VERSION,

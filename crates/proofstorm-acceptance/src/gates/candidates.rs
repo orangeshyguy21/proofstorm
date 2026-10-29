@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use crate::{GateContext, McpClient, cell, gate::CONTROL_NAMESPACE, json as expect};
 
-const CDK: &str = "d3dec24c784e8fec1fd65f853241c7a2261c7abd";
+pub(super) const CDK: &str = "d3dec24c784e8fec1fd65f853241c7a2261c7abd";
 pub(super) const COCO: &str = "44e5101cbea370132af6e68f88e01b47e39431c4";
 const NUTSHELL: &str = "18539020b4fa473ad8ad440e210720d2aaf8401a";
 const COCO_PR: &str = "https://github.com/cashubtc/coco/pull/460";
@@ -73,7 +73,7 @@ fn startup_diagnostics(
 }
 
 /// Reassemble the public, digest-bound resource pages, including archived logs.
-fn resource(client: &mut McpClient, initial: &str) -> Result<Value> {
+pub(super) fn resource(client: &mut McpClient, initial: &str) -> Result<Value> {
     let mut uri = initial.to_owned();
     let mut text = String::new();
     let mut digest = None;

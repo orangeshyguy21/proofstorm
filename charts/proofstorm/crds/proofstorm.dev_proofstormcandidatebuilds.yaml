@@ -129,9 +129,17 @@ spec:
                     type: string
                   requested_source:
                     properties:
+                      commit:
+                        type: string
+                      prerequisites:
+                        items:
+                          type: string
+                        type: array
                       repository:
                         type: string
                       sha:
+                        type: string
+                      sha256:
                         type: string
                       tag:
                         type: string
@@ -140,6 +148,7 @@ spec:
                         - pull_request
                         - commit
                         - tag
+                        - bundle
                         type: string
                       url:
                         type: string

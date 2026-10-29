@@ -51,6 +51,11 @@ use proofstorm_core::{CellInstance, ComponentStatus, ExperimentPhase};
 use proofstorm_kube::ActionPhase;
 use std::collections::{BTreeMap, BTreeSet};
 
+use k8s_openapi::{
+    ByteString,
+    api::core::v1::Secret,
+    apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference},
+};
 use kube::{
     Api, Client,
     api::{Patch, PatchParams},
@@ -213,6 +218,21 @@ pub struct CandidateWaitRequest {
 #[serde(deny_unknown_fields)]
 pub struct CandidateCancelRequest {
     pub candidate_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateRemoveRequest {
+    pub candidate_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateRemoveReceipt {
+    pub candidate_id: String,
+    /// The built image, which stays in the local registry until teardown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_image: Option<String>,
 }
 
 pub use proofstorm_view::{CandidateBuildReceipt, CandidateCatalogSelector};
@@ -1104,13 +1124,14 @@ impl ProofstormMcp {
 
     #[tool(
         name = "candidate_build",
-        description = "Build a durable candidate mint or wallet from a public GitHub PR, release tag or full commit SHA (a commit may be in a public fork: set source.repository); then wait. Uses container toolchains and inherits an unverified baseline contract. On success, copy a returned catalog_entries selector into a cell_plan component; catalog_entry is the requested preset"
+        description = "Build a durable candidate mint or wallet from a public GitHub PR, release tag or full commit SHA (a commit may be in a public fork: set source.repository), or from a local git bundle of private commits on public history (source.type bundle); then wait. Uses container toolchains and inherits an unverified baseline contract. On success, copy a returned catalog_entries selector into a cell_plan component; catalog_entry is the requested preset"
     )]
     async fn proofstorm_candidate_build(
         &self,
-        Parameters(request): Parameters<CandidateBuildRequest>,
+        Parameters(mut request): Parameters<CandidateBuildRequest>,
     ) -> Result<Json<CandidateBuildReceipt>, ErrorData> {
         let runtime = self.runtime()?;
+        let bundle = proofstorm_app::candidate::load_bundle(&mut request).map_err(app_error)?;
         let candidate = proofstorm_app::candidate::admit(
             &self.store,
             &self.workspace,
@@ -1120,7 +1141,9 @@ impl ProofstormMcp {
         .await
         .map_err(app_error)?;
         if !candidate.phase.terminal() {
-            runtime.apply_candidate_build(&candidate).await?;
+            runtime
+                .apply_candidate_build(&candidate, bundle.as_deref())
+                .await?;
         }
         Ok(Json(compact_candidate_build(&candidate, false)))
     }
@@ -1190,6 +1213,51 @@ impl ProofstormMcp {
         }
         let candidate = self.sync_candidate_build(candidate).await?;
         Ok(Json(compact_candidate_build(&candidate, false)))
+    }
+
+    #[tool(
+        name = "candidate_remove",
+        description = "Delete a finished candidate build's record, logs and build resources, including a bundle Secret. Refused while building (cancel first) or while a cell runs it (remove the cell first). The image stays in the local registry until teardown."
+    )]
+    async fn proofstorm_candidate_remove(
+        &self,
+        Parameters(request): Parameters<CandidateRemoveRequest>,
+    ) -> Result<Json<CandidateRemoveReceipt>, ErrorData> {
+        self.authorize_all(&[Capability::CandidateCancel, Capability::CandidateRead])?;
+        let candidate = self
+            .store
+            .candidate_build(&self.workspace, &self.principal, &request.candidate_id)
+            .map_err(store_error)?;
+        let candidate = self.sync_candidate_build(candidate).await?;
+        if !candidate.phase.terminal() {
+            return Err(coded_invalid_request(
+                "candidate_active",
+                "cancel the build with candidate_cancel and wait until it finishes",
+            ));
+        }
+        let users = self
+            .store
+            .candidate_build_users(&self.workspace, &self.principal, &candidate.id)
+            .map_err(store_error)?;
+        if !users.is_empty() {
+            return Err(coded_invalid_request(
+                "candidate_in_use",
+                format!("remove the cells that run it first: {}", users.join(", ")),
+            ));
+        }
+        // A finished build's resource only holds what the record already archived;
+        // deleting it also deletes its Job and any bundle Secret it owns.
+        self.runtime()?
+            .delete_candidate_build_resource(&candidate)
+            .await?;
+        let removed = self
+            .store
+            .remove_candidate_build(&self.workspace, &self.principal, &candidate.id)
+            .map_err(store_error)?;
+        Ok(Json(CandidateRemoveReceipt {
+            candidate_id: removed.id,
+            retained_image: removed.image,
+        }))
     }
 
     #[tool(
@@ -2903,7 +2971,11 @@ impl KubernetesRuntime {
         self.shared.private_access(grant).await.map_err(app_error)
     }
 
-    async fn apply_candidate_build(&self, candidate: &CandidateBuild) -> Result<(), ErrorData> {
+    async fn apply_candidate_build(
+        &self,
+        candidate: &CandidateBuild,
+        bundle: Option<&[u8]>,
+    ) -> Result<(), ErrorData> {
         let builds = Api::<ProofstormCandidateBuild>::namespaced(
             self.shared.client.clone(),
             &self.shared.control_namespace,
@@ -2913,7 +2985,7 @@ impl KubernetesRuntime {
             &self.shared.control_namespace,
             &self.candidate_registry,
         )?;
-        if let Some(existing) = builds
+        let applied = if let Some(existing) = builds
             .get_opt(&candidate.resource_name)
             .await
             .map_err(kube_error)?
@@ -2924,17 +2996,84 @@ impl KubernetesRuntime {
                     "candidate build resource exists with a different immutable request",
                 ));
             }
+            existing
+        } else {
+            builds
+                .patch(
+                    &candidate.resource_name,
+                    &PatchParams::apply("proofstorm-mcp").force(),
+                    &Patch::Apply(&resource),
+                )
+                .await
+                .map_err(kube_error)?
+        };
+        let Some(source @ proofstorm_core::CandidateInput::Bundle { commit, .. }) =
+            candidate.provenance.as_ref().map(|p| &p.requested_source)
+        else {
             return Ok(());
-        }
-        builds
+        };
+        // The pod waits for this Secret; owning it lets removal of the build delete it.
+        let bytes = bundle
+            .filter(|bytes| {
+                proofstorm_core::CandidateInput::from_bundle(bytes, commit).as_ref() == Ok(source)
+            })
+            .ok_or_else(|| {
+                coded_invalid_request(
+                    "candidate_bundle_required",
+                    "supply the same bundle file to start this build",
+                )
+            })?;
+        let secret = Secret {
+            metadata: ObjectMeta {
+                name: Some(proofstorm_kube::candidate_bundle_secret(
+                    &candidate.resource_name,
+                )),
+                namespace: Some(self.shared.control_namespace.clone()),
+                owner_references: Some(vec![OwnerReference {
+                    api_version: "proofstorm.dev/v1alpha1".into(),
+                    kind: "ProofstormCandidateBuild".into(),
+                    name: candidate.resource_name.clone(),
+                    uid: applied.metadata.uid.clone().unwrap_or_default(),
+                    ..OwnerReference::default()
+                }]),
+                ..ObjectMeta::default()
+            },
+            data: Some(BTreeMap::from([(
+                proofstorm_kube::CANDIDATE_BUNDLE_KEY.into(),
+                ByteString(bytes.to_vec()),
+            )])),
+            ..Secret::default()
+        };
+        Api::<Secret>::namespaced(self.shared.client.clone(), &self.shared.control_namespace)
             .patch(
-                &candidate.resource_name,
+                &proofstorm_kube::candidate_bundle_secret(&candidate.resource_name),
                 &PatchParams::apply("proofstorm-mcp").force(),
-                &Patch::Apply(&resource),
+                &Patch::Apply(&secret),
             )
             .await
             .map_err(kube_error)?;
         Ok(())
+    }
+
+    async fn delete_candidate_build_resource(
+        &self,
+        candidate: &CandidateBuild,
+    ) -> Result<(), ErrorData> {
+        let builds = Api::<ProofstormCandidateBuild>::namespaced(
+            self.shared.client.clone(),
+            &self.shared.control_namespace,
+        );
+        match builds
+            .delete(
+                &candidate.resource_name,
+                &kube::api::DeleteParams::background(),
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(kube::Error::Api(error)) if error.code == 404 => Ok(()),
+            Err(error) => Err(kube_error(error)),
+        }
     }
 
     async fn request_candidate_cancellation(
@@ -4122,13 +4261,24 @@ mod tests {
         assert_eq!(source["anyOf"][1], serde_json::json!({"type":"null"}));
         let variants = &source["anyOf"][0];
         let branches = variants["anyOf"].as_array().unwrap();
-        assert_eq!(branches.len(), 3);
+        assert_eq!(branches.len(), 4);
         for branch in branches {
             assert_eq!(branch["additionalProperties"], false);
             let expected = match branch["properties"]["type"]["const"].as_str().unwrap() {
                 "pull_request" => serde_json::json!(["type", "url"]),
                 "commit" => serde_json::json!(["type"]),
                 "tag" => serde_json::json!(["type", "tag"]),
+                "bundle" => {
+                    // Admission derives the bundle's identity; agents supply only these.
+                    let mut fields = branch["properties"]
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .collect::<Vec<_>>();
+                    fields.sort();
+                    assert_eq!(fields, ["commit", "path", "type"]);
+                    serde_json::json!(["type", "commit"])
+                }
                 other => panic!("unexpected source variant {other}"),
             };
             assert_eq!(branch["required"], expected);
@@ -4154,7 +4304,7 @@ mod tests {
             service.tool_names().into_iter().collect::<BTreeSet<_>>(),
             expected
         );
-        assert_eq!(expected.len(), 47);
+        assert_eq!(expected.len(), 48);
         assert_optional_tracking(&service);
         let wire=serde_json::to_vec(&serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"tools":service.tool_router.list_all()}})).unwrap();
         eprintln!(
@@ -4194,6 +4344,75 @@ mod tests {
                 .map(|tool| tool.name.to_owned())
                 .collect()
         );
+    }
+
+    #[tokio::test]
+    async fn candidate_remove_deletes_the_build_resource_before_the_record() {
+        let store = seeded_store();
+        proofstorm_app::developer::configure(&store, "alpha", "designer").unwrap();
+        let pending: CandidateBuild = serde_json::from_value(serde_json::json!({
+            "api_version": proofstorm_core::CANDIDATE_BUILD_API_VERSION, "id": "fix",
+            "workspace_id": "alpha", "principal_id": "designer", "implementation": "nutshell",
+            "base_version": "0.20.3", "pull_request_url": "https://github.com/cashubtc/nutshell/pull/1",
+            "resource_name": "candidate-fix", "request_digest": "sha256:request", "phase": "pending",
+            "accepted_at_unix": 1, "repository": "https://github.com/cashubtc/nutshell.git",
+            "commit_sha": "a".repeat(40), "version": "candidate-fix"
+        }))
+        .unwrap();
+        store
+            .create_candidate_build("alpha", "designer", &pending, "build")
+            .unwrap();
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        let client = kube::Client::new(
+            tower::service_fn(move |request: http::Request<kube::client::Body>| {
+                seen.lock()
+                    .unwrap()
+                    .push(format!("{} {}", request.method(), request.uri().path()));
+                let response = if request.method() == http::Method::DELETE {
+                    http::Response::new(kube::client::Body::from(
+                        br#"{"apiVersion":"v1","kind":"Status","status":"Success","code":200}"#
+                            .to_vec(),
+                    ))
+                } else {
+                    http::Response::builder().status(404).body(kube::client::Body::from(
+                        br#"{"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","code":404}"#.to_vec(),
+                    )).unwrap()
+                };
+                async move { Ok::<_, std::io::Error>(response) }
+            }),
+            "system",
+        );
+        let service = ProofstormMcp::new(store.clone(), "alpha", "designer")
+            .unwrap()
+            .with_kubernetes(client, "system");
+        let remove = || {
+            service.proofstorm_candidate_remove(Parameters(CandidateRemoveRequest {
+                candidate_id: "fix".into(),
+            }))
+        };
+        let active = remove().await.err().unwrap();
+        assert_eq!(active.data.unwrap()["code"], "candidate_active");
+        assert!(
+            !requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request.starts_with("DELETE"))
+        );
+
+        let mut finished = pending;
+        finished.phase = proofstorm_core::CandidateBuildPhase::Failed;
+        finished.completed_at_unix = Some(2);
+        store.update_candidate_build("alpha", &finished).unwrap();
+        let receipt = remove().await.unwrap().0;
+        assert_eq!(receipt.candidate_id, "fix");
+        assert_eq!(receipt.retained_image, None);
+        assert!(requests.lock().unwrap().iter().any(|request| request
+            == "DELETE /apis/proofstorm.dev/v1alpha1/namespaces/system/proofstormcandidatebuilds/candidate-fix"));
+        assert!(store.candidate_build("alpha", "designer", "fix").is_err());
+        let missing = remove().await.err().unwrap();
+        assert_eq!(missing.code, rmcp::model::ErrorCode::RESOURCE_NOT_FOUND);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use k8s_openapi::api::batch::v1::Job;
+use proofstorm_core::CandidateInput;
 use serde_json::json;
 
 #[cfg(test)]
@@ -10,6 +11,15 @@ use crate::ProofstormCandidateBuild;
 
 pub const CANDIDATE_BUILD_LABEL: &str = "proofstorm.dev/candidate-build";
 pub const CANDIDATE_CANCEL_ANNOTATION: &str = "proofstorm.dev/cancel-token";
+/// Secret key holding a bundle source's bytes; see [`candidate_bundle_secret`].
+pub const CANDIDATE_BUNDLE_KEY: &str = "source.bundle";
+
+/// The Secret, owned by the candidate build, that carries a bundle source.
+/// Only the `source` init container mounts it.
+#[must_use]
+pub fn candidate_bundle_secret(resource_name: &str) -> String {
+    format!("{resource_name}-bundle")
+}
 
 use crate::images::{BUILDKIT_IMAGE, GIT_IMAGE};
 
@@ -96,10 +106,68 @@ pub fn render_candidate_build_job(
             _ => "true".to_owned(),
         }
     };
-    let fetch = format!(
-        "git init /workspace && cd /workspace && git remote add origin '{}' && git fetch --depth=1 origin '{}' && git checkout --detach FETCH_HEAD && test \"$(git rev-parse HEAD)\" = '{}' && {prepare}",
-        build.spec.repository, build.spec.commit_sha, build.spec.commit_sha
+    let bundle = match build
+        .spec
+        .provenance
+        .as_ref()
+        .map(|p| (p, &p.requested_source))
+    {
+        Some((
+            provenance,
+            source @ CandidateInput::Bundle {
+                commit,
+                prerequisites,
+                ..
+            },
+        )) => {
+            if source.normalized(&provenance.profile.repository).as_ref() != Ok(source)
+                || *commit != build.spec.commit_sha
+            {
+                return Err(CandidateBuildRenderError::InvalidProvenance);
+            }
+            Some(prerequisites)
+        }
+        _ => None,
+    };
+    // Bundle sources fetch only their public prerequisites; the private commits
+    // come from the mounted bundle, which git verifies before checkout.
+    let fetch_commit = bundle.map_or_else(
+        || format!("git fetch --depth=1 origin '{}'", build.spec.commit_sha),
+        |prerequisites| {
+            let mut steps = Vec::new();
+            if !prerequisites.is_empty() {
+                let shas = prerequisites.iter().map(|sha| format!("'{sha}'"));
+                steps.push(format!(
+                    "git fetch --depth=1 origin {}",
+                    shas.collect::<Vec<_>>().join(" ")
+                ));
+            }
+            steps.push(format!(
+                "git bundle verify --quiet /bundle/{CANDIDATE_BUNDLE_KEY}"
+            ));
+            steps.push(format!(
+                "git fetch /bundle/{CANDIDATE_BUNDLE_KEY} '{}'",
+                build.spec.commit_sha
+            ));
+            steps.join(" && ")
+        },
     );
+    let fetch = format!(
+        "git init /workspace && cd /workspace && git remote add origin '{}' && {fetch_commit} && git checkout --detach FETCH_HEAD && test \"$(git rev-parse HEAD)\" = '{}' && {prepare}",
+        build.spec.repository, build.spec.commit_sha
+    );
+    let mut source_mounts = vec![json!({"name": "workspace", "mountPath": "/workspace"})];
+    let mut volumes = vec![
+        json!({"name": "workspace", "emptyDir": {}}),
+        json!({"name": "buildkit-state", "emptyDir": {}}),
+    ];
+    if bundle.is_some() {
+        source_mounts.push(json!({"name": "bundle", "mountPath": "/bundle", "readOnly": true}));
+        volumes.push(json!({"name": "bundle", "secret": {
+            "secretName": candidate_bundle_secret(resource_name),
+            "defaultMode": 0o444
+        }}));
+    }
     let platform = build
         .spec
         .provenance
@@ -161,7 +229,7 @@ pub fn render_candidate_build_job(
                         "image": source_image,
                         "imagePullPolicy": "IfNotPresent",
                         "command": ["/bin/sh", "-ec", fetch],
-                        "volumeMounts": [{"name": "workspace", "mountPath": "/workspace"}],
+                        "volumeMounts": source_mounts,
                         "securityContext": {
                             "allowPrivilegeEscalation": false,
                             "capabilities": {"drop": ["ALL"]}
@@ -194,10 +262,7 @@ pub fn render_candidate_build_job(
                             "limits": {"cpu": format!("{}m",provenance.map_or(2000, |p| p.profile.cpu_limit_millicores)), "memory": format!("{}Mi",provenance.map_or(4096, |p| p.profile.memory_limit_mib))}
                         }
                     }],
-                    "volumes": [
-                        {"name": "workspace", "emptyDir": {}},
-                        {"name": "buildkit-state", "emptyDir": {}}
-                    ]
+                    "volumes": volumes
                 }
             }
         }
@@ -343,6 +408,104 @@ mod tests {
                     Err(CandidateBuildRenderError::InvalidProvenance)
                 ));
             }
+        }
+    }
+
+    #[test]
+    fn bundle_sources_reach_only_the_source_container_and_never_fetch_the_tip() {
+        let entry = proofstorm_core::default_catalog()
+            .entries
+            .iter()
+            .find(|entry| entry.id == "cdk")
+            .unwrap();
+        let profile = proofstorm_core::candidate_build_profile("cdk").unwrap();
+        let (commit, base) = ("c".repeat(40), "b".repeat(40));
+        let render = |source: proofstorm_core::CandidateInput, commit_sha: &str| {
+            let mut build = ProofstormCandidateBuild::new(
+                "candidate-test",
+                ProofstormCandidateBuildSpec {
+                    workspace_id: "workspace".into(),
+                    candidate_id: "test".into(),
+                    principal_id: "agent".into(),
+                    implementation: "cdk".into(),
+                    base_version: entry.version.clone(),
+                    pull_request_url: String::new(),
+                    repository: format!("https://github.com/{}.git", profile.repository),
+                    commit_sha: commit_sha.into(),
+                    version: "candidate-test".into(),
+                    request_digest: "request".into(),
+                    accepted_at_unix: 1,
+                    provenance: Some(proofstorm_core::CandidateProvenance {
+                        schema_version: 1,
+                        input_digest: "input".into(),
+                        requested_source: source,
+                        platform: "linux/arm64".into(),
+                        source_image: GIT_IMAGE.into(),
+                        builder_image: BUILDKIT_IMAGE.into(),
+                        baseline_digest: proofstorm_core::digest_json(entry),
+                        profile_digest: profile.digest(),
+                        profile: profile.clone(),
+                    }),
+                    image_repository: "registry:5000/candidates/cdk".into(),
+                    dockerfile: profile.dockerfile.clone(),
+                },
+            );
+            build.meta_mut().uid = Some("uid".into());
+            render_candidate_build_job(&build).map(|job| serde_json::to_value(job).unwrap())
+        };
+        let bundle = |prerequisites: Vec<String>| proofstorm_core::CandidateInput::Bundle {
+            path: None,
+            commit: commit.clone(),
+            sha256: Some("d".repeat(64)),
+            prerequisites,
+        };
+        let job = render(bundle(vec![base.clone()]), &commit).unwrap();
+        let pod = &job["spec"]["template"]["spec"];
+        assert_eq!(
+            pod["initContainers"][0]["volumeMounts"][1],
+            json!({"name": "bundle", "mountPath": "/bundle", "readOnly": true})
+        );
+        assert!(
+            !pod["containers"][0]["volumeMounts"]
+                .to_string()
+                .contains("bundle"),
+            "BuildKit must never see the bundle"
+        );
+        assert_eq!(
+            pod["volumes"][2]["secret"]["secretName"],
+            candidate_bundle_secret("candidate-test")
+        );
+        let fetch = pod["initContainers"][0]["command"][2].as_str().unwrap();
+        assert!(fetch.contains(&format!("git fetch --depth=1 origin '{base}' && ")));
+        assert!(fetch.contains(&format!(
+            "git bundle verify --quiet /bundle/source.bundle && git fetch /bundle/source.bundle '{commit}'"
+        )));
+        assert!(!fetch.contains(&format!("origin '{commit}'")));
+        assert!(fetch.contains(&format!("test \"$(git rev-parse HEAD)\" = '{commit}'")));
+
+        // A complete bundle never contacts GitHub for source.
+        let job = render(bundle(Vec::new()), &commit).unwrap();
+        let fetch = job["spec"]["template"]["spec"]["initContainers"][0]["command"][2]
+            .as_str()
+            .unwrap();
+        assert!(!fetch.contains("git fetch --depth=1 origin"));
+
+        let public = proofstorm_core::CandidateInput::Commit {
+            sha: Some(commit.clone()),
+            url: None,
+            repository: None,
+        };
+        let job = render(public, &commit).unwrap();
+        assert!(!job.to_string().contains("bundle"));
+
+        for (source, commit_sha) in [
+            (bundle(vec![base.clone()]), base.clone()),
+            (bundle(vec![base.to_ascii_uppercase()]), commit.clone()),
+        ] {
+            assert!(matches!(
+                render(source, &commit_sha),
+                Err(CandidateBuildRenderError::InvalidProvenance)
+            ));
         }
     }
 

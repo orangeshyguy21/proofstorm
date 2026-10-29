@@ -42,28 +42,30 @@ fn invalid(message: impl Into<String>) -> Error {
     Error::problem("workspace_upload_refused", message)
 }
 
-fn read_source(path: &Path) -> Result<(Vec<u8>, bool), Error> {
+/// Read a local regular file of at most `max` bytes, and whether it is executable.
+pub(crate) fn read_local_file(path: &Path, max: u64) -> Result<(Vec<u8>, bool), String> {
+    let too_large = || format!("source file exceeds {} KiB", max / 1024);
     // Nonblocking open prevents special files such as FIFOs from hanging a tool call.
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_NONBLOCK)
         .open(path)
-        .map_err(|_| invalid("source file is not readable by the MCP server"))?;
+        .map_err(|_| "source file is not readable by the MCP server".to_owned())?;
     let metadata = file
         .metadata()
-        .map_err(|_| invalid("source metadata unavailable"))?;
+        .map_err(|_| "source metadata unavailable".to_owned())?;
     if !metadata.is_file() {
-        return Err(invalid("upload source must be a regular file"));
+        return Err("source must be a regular file".into());
     }
-    if metadata.len() > MAX_UPLOAD_BYTES {
-        return Err(invalid("workspace upload exceeds 16 MiB"));
+    if metadata.len() > max {
+        return Err(too_large());
     }
     let mut bytes = Vec::new();
-    file.take(MAX_UPLOAD_BYTES + 1)
+    file.take(max + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| invalid("source file read failed"))?;
-    if bytes.len() as u64 > MAX_UPLOAD_BYTES {
-        return Err(invalid("workspace upload exceeds 16 MiB"));
+        .map_err(|_| "source file read failed".to_owned())?;
+    if bytes.len() as u64 > max {
+        return Err(too_large());
     }
     Ok((bytes, metadata.permissions().mode() & 0o111 != 0))
 }
@@ -155,7 +157,8 @@ impl Cells {
         if request.source_path.is_empty() || request.source_path.len() > 4096 {
             return Err(invalid("source_path must contain 1..4096 bytes"));
         }
-        let (bytes, executable) = read_source(Path::new(&request.source_path))?;
+        let (bytes, executable) =
+            read_local_file(Path::new(&request.source_path), MAX_UPLOAD_BYTES).map_err(invalid)?;
         let manifest = UploadRequest {
             upload_id: proofstorm_core::digest_json(&(
                 &self.workspace,

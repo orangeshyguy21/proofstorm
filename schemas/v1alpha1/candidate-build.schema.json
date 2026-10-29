@@ -162,10 +162,22 @@
         "requested_source": {
           "additionalProperties": false,
           "properties": {
+            "commit": {
+              "type": "string"
+            },
+            "prerequisites": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "repository": {
               "type": "string"
             },
             "sha": {
+              "type": "string"
+            },
+            "sha256": {
               "type": "string"
             },
             "tag": {
@@ -175,7 +187,8 @@
               "enum": [
                 "pull_request",
                 "commit",
-                "tag"
+                "tag",
+                "bundle"
               ],
               "type": "string"
             },

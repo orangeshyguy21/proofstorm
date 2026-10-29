@@ -47,6 +47,11 @@ where
             && record["version"] == receipt["catalog_entry"]["version"],
         "candidate source record does not match the built image receipt"
     );
+    // A bundle's tip is unpublished; asking GitHub for it would disclose its SHA.
+    ensure!(
+        record["provenance"]["requested_source"]["type"] != "bundle",
+        "bundle candidates have no public source to read"
+    );
     let commit = record["commit_sha"]
         .as_str()
         .filter(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -148,6 +153,7 @@ mod tests {
             ("image", json!("different")),
             ("repository", json!("https://github.com/../cdk.git")),
             ("phase", json!("failed")),
+            ("provenance", json!({"requested_source":{"type":"bundle"}})),
         ] {
             let mut changed = record.clone();
             changed[field] = value;

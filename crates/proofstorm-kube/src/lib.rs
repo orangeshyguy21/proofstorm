@@ -42,8 +42,8 @@ pub use api::{
     ProofstormCellStatus, ReachabilityOracleAction, TeardownReceipt,
 };
 pub use candidate::{
-    CANDIDATE_BUILD_LABEL, CANDIDATE_CANCEL_ANNOTATION, CandidateBuildRenderError,
-    render_candidate_build_job,
+    CANDIDATE_BUILD_LABEL, CANDIDATE_BUNDLE_KEY, CANDIDATE_CANCEL_ANNOTATION,
+    CandidateBuildRenderError, candidate_bundle_secret, render_candidate_build_job,
 };
 pub use operation::{
     ActionAdmissionError, ActionRenderError, AuthenticationConformanceJobSpec,
