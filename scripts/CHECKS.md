@@ -29,6 +29,13 @@ a sandbox denying these cannot run the complete suite.
 
 Python, Node, Docker, Helm, and Trunk are not code-check dependencies. Checks use
 `target/check`, separate from registered development binaries and GUI assets.
+Cargo never deletes files from older toolchains, dependency versions or feature
+sets. Before compiling, checks drop cargo's intermediate files from `target/check`
+and `target/`, and `just dev-build` from its own target directory, when the pinned
+toolchain has changed or a directory holds over 2,000 build units (a fresh check
+leaves about 900). Final binaries stay, deletion finishes in the background and
+the next build starts cold. Nothing is dropped while a cargo process is running.
+`just clean-cache` drops them from every checkout target directory at once.
 The workspace lint/test gate explicitly enables `proofstorm-prober/runtime`, so
 the shipped worker and its DNS/TCP/HTTP regressions are included in local and CI
 checks. Library-only consumers can still omit the worker runtime dependencies.

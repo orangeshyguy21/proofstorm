@@ -25,6 +25,8 @@ export PROOFSTORM_WEB_DIST="$root/target/check/no-web-assets"
 unset PROOFSTORM_REQUIRE_WEB_ASSETS PROOFSTORM_BUILD_REVISION PROOFSTORM_BUILD_SOURCE_SHA256
 unset PROOFSTORM_CONTROLLER_RECEIPT
 unset PROOFSTORM_HOME PROOFSTORM_KUBECONFIG
+# Bound this cache and the default one that plain cargo commands fill.
+bash scripts/cargo-cache.sh prune "$CARGO_TARGET_DIR" "$root/target"
 
 check_fmt() {
   require cargo
@@ -43,6 +45,7 @@ check_fmt() {
   bash scripts/test-bark-image-build.sh
   bash scripts/test-bark-qualification.sh
   bash scripts/test-controller-cache.sh
+  bash scripts/test-cargo-cache.sh
   printf '\nChecking Rust formatting\n'
   cargo fmt --all -- --check
 }
@@ -75,6 +78,7 @@ check_shell() {
   shellcheck --external-sources scripts/release.sh scripts/test-release-shortcuts.sh
   shellcheck --external-sources scripts/controller-build.sh scripts/test-controller-build.sh
   shellcheck scripts/test-controller-cache.sh
+  shellcheck scripts/cargo-cache.sh scripts/test-cargo-cache.sh
   shellcheck scripts/catalog-image.sh scripts/test-catalog-image.sh
   shellcheck --external-sources scripts/bark-image-build.sh scripts/test-bark-image-build.sh
   shellcheck --external-sources scripts/bark-qualification.sh scripts/test-bark-qualification.sh

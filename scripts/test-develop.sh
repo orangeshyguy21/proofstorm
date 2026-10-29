@@ -10,6 +10,7 @@ fixture="$scratch/checkout's directory"
 mkdir -p "$fixture/scripts" "$fixture/.tools/bin" "$fixture/target/maintainer/debug" \
   "$fixture/cache/debug/examples" "$fixture/charts/proofstorm/crds"
 cp "$root/scripts/develop.sh" "$fixture/scripts/develop.sh"
+cp "$root/scripts/cargo-cache.sh" "$fixture/scripts/cargo-cache.sh"
 cp "$helper" "$fixture/target/maintainer/debug/proofstorm-xtask"
 printf 'fixture\n' > "$fixture/Cargo.toml"
 printf 'fixture chart\n' > "$fixture/charts/proofstorm/Chart.yaml"

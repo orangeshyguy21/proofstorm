@@ -32,6 +32,7 @@ for tool in rustup sh cargo; do
 done
 ln -s "$scratch/stub" "$fixture/.proofstorm-dev/bin/proofstorm"
 ln -s "$scratch/stub" "$fixture/scripts/check.sh"
+ln -s "$scratch/stub" "$fixture/scripts/cargo-cache.sh"
 ln -s "$scratch/stub" "$fixture/scripts/test-component-driver.sh"
 ln -s "$scratch/stub" "$fixture/scripts/develop.sh"
 ln -s "$scratch/stub" "$fixture/scripts/acceptance.sh"
@@ -128,6 +129,8 @@ run gui-stop
 expect proofstorm "$fixture" unset unset gui stop
 run dev-reset --yes --json
 expect proofstorm "$fixture" unset unset dev reset --yes --json
+run clean-cache
+expect cargo-cache.sh "$fixture" unset unset clean
 run check-quick
 expect check.sh "$fixture" unset unset quick
 run check-rust
