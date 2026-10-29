@@ -7,6 +7,7 @@ use crate::GateContext;
 pub mod agents;
 mod authentication;
 pub mod bark;
+mod candidate_bundle;
 mod candidate_isolation;
 mod candidate_source;
 pub mod candidates;
@@ -63,6 +64,7 @@ pub const NAMES: &[&str] = &[
     "runtime-lifecycle",
     "mcp-surface",
     "candidate-build-isolation",
+    "candidate-bundle",
     "candidate-coco",
     "candidate-cdk-cli",
     "candidate-nutshell-wallet",
@@ -144,6 +146,7 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "runtime-lifecycle" => runtime_lifecycle::run(context),
         "mcp-surface" => surface::run(context),
         "candidate-build-isolation" => candidate_isolation::run(context),
+        "candidate-bundle" => candidate_bundle::run(context),
         "candidate-coco" => candidates::run(context, "cocod-wallet"),
         "candidate-cdk-cli" => candidates::run(context, "cdk-cli-wallet"),
         "candidate-nutshell-wallet" => candidates::run(context, "nutshell-wallet"),
