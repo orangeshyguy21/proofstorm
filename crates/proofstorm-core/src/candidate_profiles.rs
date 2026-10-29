@@ -7,6 +7,9 @@ use std::collections::BTreeSet;
 pub const CANDIDATE_BUILD_MAX_CPU_MILLICORES: u32 = 4000;
 pub const CANDIDATE_BUILD_MAX_DEADLINE_SECONDS: u32 = 3600;
 pub const CDK_MINT_IMPLEMENTATIONS: [&str; 1] = ["cdk"];
+/// One Dockerfile line inserted before Nutshell's `poetry install`. It must
+/// contain no single quote or backslash, since `sed` inserts it verbatim.
+const NUTSHELL_BREEZ_STEP: &str = r#"RUN locked=$(poetry show breez-sdk-spark 2>/dev/null | sed -n "s/^ *version *: *//p" | tr -d " "); if [ -n "$locked" ] && ! pip download --quiet --no-deps --only-binary=:all: --dest /tmp/breez "breez-sdk-spark==$locked"; then echo "breez-sdk-spark $locked is no longer published; installing 0.18.0"; poetry remove breez-sdk-spark --lock && pip install --no-cache-dir breez-sdk-spark==0.18.0; fi"#;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -68,7 +71,9 @@ pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildPro
             let recipe = if implementation == "cdk-cli-wallet" { include_str!("candidate_profiles/cdk-wallet-v1.Dockerfile") } else { include_str!("candidate_profiles/coco-wallet-v1.Dockerfile") };
             (format!("cat > /workspace/{dockerfile} <<'PROOFSTORM_RECIPE_EOF'\n{recipe}\nPROOFSTORM_RECIPE_EOF\n"), vec!["Compiles the native wallet from the frozen source with its lockfile; checks command version and help. Build success does not establish runtime compatibility.".into()])
         }
-        "nutshell" | "nutshell-wallet" => (format!("sed -i '/RUN poetry install --without dev --no-root/i RUN poetry remove breez-sdk-spark --lock && pip install --no-cache-dir breez-sdk-spark==0.17.0' /workspace/Dockerfile\ncat >> /workspace/Dockerfile <<'PROOFSTORM_MANAGEMENT_EOF'\n{}\nPROOFSTORM_MANAGEMENT_EOF\n", include_str!("candidate_profiles/nutshell-management-v1.Dockerfile")), vec!["Removes breez-sdk-spark from the Poetry lock and installs 0.17.0 separately for historical platform wheels. Installs source console commands and checks cashu/mint-cli help.".into()]),
+        // Nutshell imports the Spark backend unconditionally, so some Breez SDK
+        // must install. PyPI deleted every 0.17.x release that 0.21.0-era locks pin.
+        "nutshell" | "nutshell-wallet" => (format!("sed -i '/RUN poetry install --without dev --no-root/i {NUTSHELL_BREEZ_STEP}' /workspace/Dockerfile\ncat >> /workspace/Dockerfile <<'PROOFSTORM_MANAGEMENT_EOF'\n{}\nPROOFSTORM_MANAGEMENT_EOF\n", include_str!("candidate_profiles/nutshell-management-v1.Dockerfile")), vec!["Keeps the source's locked breez-sdk-spark while PyPI still publishes it. Otherwise removes it from the Poetry lock and installs 0.18.0, the oldest published release, and says so in the build log; Proofstorm does not use the Spark backend. Installs source console commands and checks cashu/mint-cli help.".into()]),
         _ => (format!("cat > /workspace/{dockerfile} <<'PROOFSTORM_RECIPE_EOF'\n{}\nPROOFSTORM_RECIPE_EOF\n", include_str!("candidate_profiles/cdk-mint-v2.Dockerfile")), vec!["Builds cdk-mintd and cdk-mint-cli in one Cargo command from the frozen workspace and lockfiles, as static musl binaries with the workspace's release-static profile like CDK's release binaries (LTO off and 16 codegen units to fit the 4 GiB build limit), on the Alpine runtime of its published image. Enables LDK, PostgreSQL and Prometheus alongside the default backends; cell links and configuration select linked and embedded backends. Compiles with the Rust version pinned in CDK's rust-toolchain.toml, installed without its extra targets in Proofstorm's pinned Rust image instead of CDK's Nix toolchain, with two Cargo jobs within the 4 GiB build limit. Checks both commands and wget before publishing.".into()]),
     };
     // A cold ARM64 release build of the baseline CDK CLI exceeded the original
@@ -99,8 +104,7 @@ pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildPro
         },
         version: match implementation {
             "cdk" => 11,
-            "cdk-cli-wallet" => 3,
-            "nutshell" | "nutshell-wallet" => 2,
+            "cdk-cli-wallet" | "nutshell" | "nutshell-wallet" => 3,
             _ => 1,
         },
         repository: repository.into(),
@@ -111,4 +115,25 @@ pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildPro
         notes,
         prepare,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nutshell_breez_step_is_sed_safe_and_replaces_only_unpublished_locks() {
+        assert!(!NUTSHELL_BREEZ_STEP.contains(['\'', '\\']));
+        for implementation in ["nutshell", "nutshell-wallet"] {
+            let prepare = candidate_build_profile(implementation).unwrap().prepare;
+            assert!(prepare.contains(&format!(
+                "/RUN poetry install --without dev --no-root/i {NUTSHELL_BREEZ_STEP}'"
+            )));
+        }
+        // The lock is rewritten only when its pinned release cannot be downloaded.
+        let (check, substitute) = NUTSHELL_BREEZ_STEP.split_once("; then ").unwrap();
+        assert!(check.contains("! pip download") && check.contains("breez-sdk-spark==$locked"));
+        assert!(substitute.contains("poetry remove breez-sdk-spark --lock"));
+        assert!(substitute.contains("breez-sdk-spark==0.18.0"));
+    }
 }
