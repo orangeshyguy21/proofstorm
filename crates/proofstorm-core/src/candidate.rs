@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
@@ -25,7 +26,26 @@ pub enum CandidateInput {
     Tag {
         tag: String,
     },
+    // Private commits on public history, such as an embargoed security fix.
+    Bundle {
+        /// Local file readable by the MCP server, made with git bundle create <file> <public-base>..HEAD.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        /// Full SHA of the bundle head to build.
+        commit: String,
+        // Admission derives these from the file; requests never supply them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(skip)]
+        sha256: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[schemars(skip)]
+        prerequisites: Vec<String>,
+    },
 }
+
+/// A bundle travels to its build in one Kubernetes Secret, which is limited to 1 MiB.
+pub const CANDIDATE_BUNDLE_MAX_BYTES: usize = 700 * 1024;
+const CANDIDATE_BUNDLE_MAX_PREREQUISITES: usize = 64;
 
 impl CandidateInput {
     /// Normalize author input before checking immutable request identity or resolving GitHub.
@@ -100,7 +120,98 @@ impl CandidateInput {
                 }
                 Ok(self.clone())
             }
+            Self::Bundle {
+                path: None,
+                commit,
+                sha256: Some(sha256),
+                prerequisites,
+            } => {
+                let commit = full_sha(commit)
+                    .ok_or("candidate_sha_invalid: full 40-character commit SHA required")?;
+                if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err("candidate_bundle_invalid: sha256 must be 64 hex digits".into());
+                }
+                let prerequisites = prerequisites
+                    .iter()
+                    .map(String::as_str)
+                    .map(full_sha)
+                    .collect::<Option<BTreeSet<_>>>()
+                    .filter(|set| set.len() <= CANDIDATE_BUNDLE_MAX_PREREQUISITES)
+                    .ok_or("candidate_bundle_invalid: prerequisites must be full commit SHAs")?;
+                Ok(Self::Bundle {
+                    path: None,
+                    commit,
+                    sha256: Some(sha256.to_ascii_lowercase()),
+                    prerequisites: prerequisites.into_iter().collect(),
+                })
+            }
+            Self::Bundle { .. } => Err(
+                "candidate_bundle_unread: supply only path and commit; the MCP server reads the bundle"
+                    .into(),
+            ),
         }
+    }
+
+    /// Identify a git bundle by its bytes. Only the header is read here; git
+    /// checks the pack against the public prerequisites during the build.
+    ///
+    /// # Errors
+    /// Rejects oversized or malformed bundles, partial or SHA-256 bundles, and
+    /// a `commit` that is not one of the bundle's heads.
+    pub fn from_bundle(bytes: &[u8], commit: &str) -> Result<Self, String> {
+        if bytes.len() > CANDIDATE_BUNDLE_MAX_BYTES {
+            return Err(format!(
+                "candidate_bundle_too_large: bundles are limited to {} KiB; bundle only the private commits with git bundle create <file> <public-base>..HEAD",
+                CANDIDATE_BUNDLE_MAX_BYTES / 1024
+            ));
+        }
+        let invalid = |detail: &str| format!("candidate_bundle_invalid: {detail}");
+        let end = bytes
+            .windows(2)
+            .take(64 * 1024)
+            .position(|pair| pair == b"\n\n")
+            .ok_or_else(|| invalid("expected a git bundle header"))?;
+        if !bytes[end + 2..].starts_with(b"PACK") {
+            return Err(invalid("expected pack data after the header"));
+        }
+        let header =
+            std::str::from_utf8(&bytes[..end]).map_err(|_| invalid("header is not UTF-8"))?;
+        let mut lines = header.lines();
+        let version = match lines.next() {
+            Some("# v2 git bundle") => 2,
+            Some("# v3 git bundle") => 3,
+            _ => return Err(invalid("expected a v2 or v3 git bundle")),
+        };
+        let mut prerequisites = BTreeSet::new();
+        let mut heads = BTreeSet::new();
+        for line in lines {
+            if let Some(capability) = line.strip_prefix('@') {
+                if version != 3 || capability != "object-format=sha1" {
+                    return Err(invalid("only complete SHA-1 bundles are supported"));
+                }
+            } else if let Some(rest) = line.strip_prefix('-') {
+                let sha = rest.split(' ').next().and_then(full_sha);
+                prerequisites.insert(sha.ok_or_else(|| invalid("malformed prerequisite"))?);
+            } else {
+                let sha = line
+                    .split_once(' ')
+                    .filter(|(_, name)| !name.is_empty())
+                    .and_then(|(sha, _)| full_sha(sha));
+                heads.insert(sha.ok_or_else(|| invalid("malformed head"))?);
+            }
+        }
+        let commit = full_sha(commit)
+            .ok_or("candidate_sha_invalid: full 40-character commit SHA required")?;
+        if !heads.contains(&commit) {
+            return Err(invalid("commit is not a head of this bundle"));
+        }
+        Self::Bundle {
+            path: None,
+            commit,
+            sha256: Some(format!("{:x}", Sha256::digest(bytes))),
+            prerequisites: prerequisites.into_iter().collect(),
+        }
+        .normalized("")
     }
 
     /// Human-readable source; fork commits name their repository.
@@ -119,8 +230,18 @@ impl CandidateInput {
                     .map_or(commit.into(), |fork| format!("{fork}@{commit}").into())
             }
             Self::Tag { tag } => tag.into(),
+            Self::Bundle { commit, sha256, .. } => format!(
+                "bundle:{}@{commit}",
+                sha256.as_deref().map_or("", |s| &s[..s.len().min(12)])
+            )
+            .into(),
         }
     }
+}
+
+fn full_sha(value: &str) -> Option<String> {
+    (value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| value.to_ascii_lowercase())
 }
 
 /// Whether `name` is a well-formed GitHub `owner/repository` path. Network
@@ -200,9 +321,10 @@ fn candidate_input_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema
     schemars::json_schema!({
         "type":"object", "additionalProperties":false, "required":["type"],
         "properties": {
-            "type":{"type":"string","enum":["pull_request","commit","tag"]},
+            "type":{"type":"string","enum":["pull_request","commit","tag","bundle"]},
             "url":{"type":"string"},"sha":{"type":"string"},"tag":{"type":"string"},
-            "repository":{"type":"string"}
+            "repository":{"type":"string"},"commit":{"type":"string"},
+            "sha256":{"type":"string"},"prerequisites":{"type":"array","items":{"type":"string"}}
         }
     })
 }
@@ -623,6 +745,94 @@ mod tests {
             .normalized("cashubtc/cdk")
             .is_err()
         );
+    }
+
+    #[test]
+    fn bundle_sources_are_identified_by_their_bytes_and_heads() {
+        let (base, commit) = ("b".repeat(40), "c".repeat(40));
+        let bundle = |lines: &[&str]| {
+            let mut bytes = lines.join("\n").into_bytes();
+            bytes.extend_from_slice(b"\n\nPACK\0\0\0\x02");
+            bytes
+        };
+        let v2 = bundle(&[
+            "# v2 git bundle",
+            &format!("-{base} public base"),
+            &format!("{commit} refs/heads/fix"),
+        ]);
+        let source = CandidateInput::from_bundle(&v2, &commit.to_ascii_uppercase()).unwrap();
+        assert_eq!(
+            source,
+            CandidateInput::Bundle {
+                path: None,
+                commit: commit.clone(),
+                sha256: Some(format!("{:x}", Sha256::digest(&v2))),
+                prerequisites: vec![base.clone()],
+            }
+        );
+        assert_eq!(source.normalized("cashubtc/cdk").as_ref(), Ok(&source));
+        assert!(source.label().starts_with("bundle:"));
+        assert!(source.label().ends_with(&commit));
+        // Identity follows the bytes, not where the file was read from.
+        let mut other = v2.clone();
+        other.push(0);
+        assert_ne!(
+            CandidateInput::from_bundle(&other, &commit).unwrap(),
+            source
+        );
+        let v3 = bundle(&[
+            "# v3 git bundle",
+            "@object-format=sha1",
+            &format!("{commit} HEAD"),
+        ]);
+        assert!(CandidateInput::from_bundle(&v3, &commit).is_ok());
+
+        let mut oversized = v2.clone();
+        oversized.resize(CANDIDATE_BUNDLE_MAX_BYTES + 1, 0);
+        assert!(
+            CandidateInput::from_bundle(&oversized, &commit)
+                .unwrap_err()
+                .starts_with("candidate_bundle_too_large")
+        );
+        let head = format!("{commit} refs/heads/fix");
+        for invalid in [
+            bundle(&["# v3 git bundle", "@filter=blob:none", &head]),
+            bundle(&["# v3 git bundle", "@object-format=sha256", &head]),
+            bundle(&["# v2 git bundle", "@object-format=sha1", &head]),
+            bundle(&["# v2 git bundle", &format!("{base} refs/heads/other")]),
+            bundle(&["# v2 git bundle", &commit]),
+            bundle(&["# v2 git bundle", "-abc123", &head]),
+            bundle(&[
+                "# v2 git bundle",
+                &format!("{} refs/heads/fix", "c".repeat(64)),
+            ]),
+            bundle(&["# v4 git bundle", &head]),
+            format!("# v2 git bundle\n{head}\n\nnot a pack").into_bytes(),
+            format!("# v2 git bundle\n{head}\n").into_bytes(),
+        ] {
+            assert!(
+                CandidateInput::from_bundle(&invalid, &commit).is_err(),
+                "{}",
+                String::from_utf8_lossy(&invalid)
+            );
+        }
+        // Requests carry only path and commit; admission derives the rest.
+        for unread in [
+            CandidateInput::Bundle {
+                path: Some("fix.bundle".into()),
+                commit: commit.clone(),
+                sha256: None,
+                prerequisites: Vec::new(),
+            },
+            CandidateInput::Bundle {
+                path: Some("fix.bundle".into()),
+                commit: commit.clone(),
+                sha256: Some("d".repeat(64)),
+                prerequisites: Vec::new(),
+            },
+        ] {
+            assert!(unread.normalized("cashubtc/cdk").is_err());
+        }
     }
 
     #[test]

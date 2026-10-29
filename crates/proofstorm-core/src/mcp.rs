@@ -26,6 +26,7 @@ pub const TOOLS: &[PublicTool] = &[
     tool!("candidate_wait", true, [CandidateRead]),
     tool!("candidate_list", false, [CandidateRead]),
     tool!("candidate_cancel", true, [CandidateCancel, CandidateRead]),
+    tool!("candidate_remove", true, [CandidateCancel, CandidateRead]),
     tool!(
         "cell_plan",
         false,

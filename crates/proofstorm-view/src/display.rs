@@ -67,6 +67,7 @@ pub fn tool_title(name: &str) -> Option<&'static str> {
         "candidate_wait" => "Wait for build",
         "candidate_list" => "List builds",
         "candidate_cancel" => "Cancel build",
+        "candidate_remove" => "Remove build",
         "cell_plan" => "Plan cell",
         "cell_up" => "Start cell",
         "cell_inspect" => "Inspect cell",

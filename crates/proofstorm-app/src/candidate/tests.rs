@@ -575,3 +575,92 @@ async fn candidate_cdk_build_publishes_the_one_cdk_entry() {
     invalid.profile_digest = invalid.profile.digest();
     assert!(invalid.validate().is_err());
 }
+
+#[tokio::test]
+async fn bundle_requests_are_identified_by_bytes_not_path() {
+    let (base, tip) = ("b".repeat(40), "c".repeat(40));
+    let directory = tempfile::tempdir().unwrap();
+    let bundle = format!("# v2 git bundle\n-{base} base\n{tip} refs/heads/fix\n\nPACK\0\0\0\x02");
+    let write = |name: &str, bytes: &[u8]| {
+        let path = directory.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path.to_str().unwrap().to_owned()
+    };
+    let bundle_request = |id: &str, request_id: &str, path: &str| -> CandidateBuildRequest {
+        serde_json::from_value(
+            json!({"implementation":"cdk","candidate_id":id,"request_id":request_id,
+            "source":{"type":"bundle","path":path,"commit":tip}}),
+        )
+        .unwrap()
+    };
+    let store = store();
+    let resolve = |source: CandidateInput, repository: String| async move {
+        let CandidateInput::Bundle {
+            path: None,
+            commit,
+            prerequisites,
+            ..
+        } = source
+        else {
+            panic!("admission must see the read bundle: {source:?}")
+        };
+        assert_eq!(prerequisites, ["b".repeat(40)]);
+        Ok((format!("https://github.com/{repository}.git"), commit))
+    };
+    let mut request = bundle_request("fix", "fix", &write("first.bundle", bundle.as_bytes()));
+    let bytes = load_bundle(&mut request).unwrap().unwrap();
+    assert_eq!(bytes, bundle.as_bytes());
+    let candidate = admit_with_resolver(&store, "workspace", "agent", &request, resolve)
+        .await
+        .unwrap();
+    assert_eq!(candidate.phase, CandidateBuildPhase::Pending);
+    assert_eq!(
+        candidate.repository.as_deref(),
+        Some("https://github.com/cashubtc/cdk.git")
+    );
+    assert_eq!(candidate.commit_sha.as_deref(), Some(tip.as_str()));
+    let recorded = serde_json::to_string(&candidate).unwrap();
+    assert!(!recorded.contains(directory.path().to_str().unwrap()));
+
+    // The same bytes under another path replay the same build.
+    let mut replay = bundle_request("fix", "fix", &write("copy.bundle", bundle.as_bytes()));
+    load_bundle(&mut replay).unwrap();
+    let replayed = admit_with_resolver(&store, "workspace", "agent", &replay, resolve)
+        .await
+        .unwrap();
+    assert_eq!(replayed.request_digest, candidate.request_digest);
+
+    // Different bytes under the same candidate ID are a different request.
+    let changed = format!("{bundle}\0");
+    let mut conflict = bundle_request("fix", "fix-2", &write("changed.bundle", changed.as_bytes()));
+    load_bundle(&mut conflict).unwrap();
+    let error = admit_with_resolver(&store, "workspace", "agent", &conflict, resolve)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.details.unwrap()["code"],
+        "candidate_identity_conflict"
+    );
+
+    for refused in [
+        json!({"type":"bundle","path":directory.path().join("missing").to_str().unwrap(),"commit":tip}),
+        json!({"type":"bundle","path":directory.path().to_str().unwrap(),"commit":tip}),
+        json!({"type":"bundle","commit":tip}),
+        json!({"type":"bundle","path":write("derived.bundle", bundle.as_bytes()),"commit":tip,"sha256":"d".repeat(64)}),
+    ] {
+        let mut request: CandidateBuildRequest = serde_json::from_value(json!({
+            "implementation":"cdk","candidate_id":"refused","request_id":"refused","source":refused
+        }))
+        .unwrap();
+        let error = load_bundle(&mut request).unwrap_err();
+        assert_eq!(error.details.unwrap()["code"], "candidate_bundle_refused");
+    }
+    // The named commit must be one of the bundle's heads, not its public base.
+    let mut wrong_head: CandidateBuildRequest = serde_json::from_value(json!({
+        "implementation":"cdk","candidate_id":"wrong","request_id":"wrong",
+        "source":{"type":"bundle","path":write("wrong.bundle", bundle.as_bytes()),"commit":base}
+    }))
+    .unwrap();
+    let error = load_bundle(&mut wrong_head).unwrap_err();
+    assert_eq!(error.details.unwrap()["code"], "candidate_source_invalid");
+}

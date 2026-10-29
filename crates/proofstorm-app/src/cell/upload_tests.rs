@@ -200,14 +200,17 @@ fn upload_source_is_bounded_and_special_files_cannot_block_it() {
     let path = directory.path().join("file");
     let file = fs::File::create(&path).unwrap();
     file.set_len(MAX_UPLOAD_BYTES).unwrap();
-    assert_eq!(read_source(&path).unwrap().0.len() as u64, MAX_UPLOAD_BYTES);
+    assert_eq!(
+        read_local_file(&path, MAX_UPLOAD_BYTES).unwrap().0.len() as u64,
+        MAX_UPLOAD_BYTES
+    );
     file.set_len(MAX_UPLOAD_BYTES + 1).unwrap();
-    assert!(read_source(&path).is_err());
-    assert!(read_source(directory.path()).is_err());
-    assert!(read_source(&directory.path().join("missing")).is_err());
+    assert!(read_local_file(&path, MAX_UPLOAD_BYTES).is_err());
+    assert!(read_local_file(directory.path(), MAX_UPLOAD_BYTES).is_err());
+    assert!(read_local_file(&directory.path().join("missing"), MAX_UPLOAD_BYTES).is_err());
     let fifo = directory.path().join("fifo");
     nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRUSR).unwrap();
-    assert!(read_source(&fifo).is_err());
+    assert!(read_local_file(&fifo, MAX_UPLOAD_BYTES).is_err());
 }
 
 #[tokio::test]

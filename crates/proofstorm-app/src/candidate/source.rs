@@ -97,11 +97,58 @@ where
                 "Annotated tag nesting exceeds eight objects",
             ))
         }
-        CandidateInput::Commit { .. } => Err(Error::problem(
+        CandidateInput::Bundle {
+            path: None,
+            commit,
+            sha256: Some(_),
+            prerequisites,
+        } => resolve_bundle(repository, commit, prerequisites, get).await,
+        CandidateInput::Commit { .. } | CandidateInput::Bundle { .. } => Err(Error::problem(
             "candidate_source_invalid",
             "Source was not normalized",
         )),
     }
+}
+
+/// Check only a bundle's public prerequisites; its private tip never reaches GitHub.
+async fn resolve_bundle<F, Fut>(
+    repository: &str,
+    commit: &str,
+    prerequisites: &[String],
+    get: F,
+) -> Result<(String, String), Error>
+where
+    F: Fn(String, Vec<String>) -> Fut,
+    Fut: std::future::Future<Output = Result<Value, Error>>,
+{
+    for prerequisite in prerequisites {
+        let object = get(
+            repository.into(),
+            vec!["git".into(), "commits".into(), prerequisite.clone()],
+        )
+        .await
+        .map_err(|error| {
+            if !error.message.contains("404") {
+                return error;
+            }
+            Error::problem(
+                "candidate_bundle_base_missing",
+                format!(
+                    "Bundle prerequisite {prerequisite} is not a public commit of {repository}; base the bundle on pushed public history"
+                ),
+            )
+        })?;
+        if sha(&object["sha"])? != *prerequisite {
+            return Err(Error::problem(
+                "candidate_source_invalid",
+                "GitHub returned a different commit",
+            ));
+        }
+    }
+    Ok((
+        format!("https://github.com/{repository}.git"),
+        commit.into(),
+    ))
 }
 
 /// Accept a commit only from a public fork whose parent or network root is the
@@ -388,6 +435,77 @@ mod tests {
             resolve_with(&source, "cashubtc/cdk", |_, _| std::future::ready(Err(
                 Error::problem("candidate_source_resolution_failed", "GitHub returned 404")
             )))
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn bundle_sources_check_only_public_prerequisites_on_the_canonical_repository() {
+        let (first, second, tip) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
+        let source = CandidateInput::Bundle {
+            path: None,
+            commit: tip.clone(),
+            sha256: Some("d".repeat(64)),
+            prerequisites: vec![first.clone(), second.clone()],
+        };
+        let paths = Mutex::new(Vec::new());
+        let resolved = resolve_with(&source, "cashubtc/cdk", |repository, path| {
+            assert_eq!(repository, "cashubtc/cdk");
+            let sha = path[2].clone();
+            paths.lock().unwrap().push(path);
+            std::future::ready(Ok(json!({ "sha": sha })))
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            resolved,
+            ("https://github.com/cashubtc/cdk.git".into(), tip.clone())
+        );
+        let paths = paths.into_inner().unwrap();
+        assert_eq!(
+            paths,
+            [first, second].map(|sha| vec!["git".to_owned(), "commits".into(), sha])
+        );
+        assert!(
+            !paths.concat().contains(&tip),
+            "the private tip never reaches GitHub"
+        );
+
+        let missing = resolve_with(&source, "cashubtc/cdk", |_, _| {
+            std::future::ready(Err(Error::problem(
+                "candidate_source_resolution_failed",
+                "GitHub returned 404 Not Found",
+            )))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(
+            missing.details.unwrap()["code"],
+            "candidate_bundle_base_missing"
+        );
+        let limited = resolve_with(&source, "cashubtc/cdk", |_, _| {
+            std::future::ready(Err(Error::problem(
+                "candidate_source_resolution_failed",
+                "GitHub returned 403 Forbidden",
+            )))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(
+            limited.details.unwrap()["code"],
+            "candidate_source_resolution_failed"
+        );
+        let unread = CandidateInput::Bundle {
+            path: Some("fix.bundle".into()),
+            commit: tip,
+            sha256: None,
+            prerequisites: Vec::new(),
+        };
+        assert!(
+            resolve_with(&unread, "cashubtc/cdk", |_, _| async {
+                panic!("an unread bundle must not reach GitHub")
+            })
             .await
             .is_err()
         );

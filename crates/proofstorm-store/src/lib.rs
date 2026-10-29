@@ -11,6 +11,9 @@ mod previews;
 mod runs;
 mod workspace_evidence;
 pub use previews::CellPreview;
+#[cfg(test)]
+#[path = "candidate_tests.rs"]
+mod candidate_tests;
 mod session_directory;
 #[cfg(test)]
 mod session_tests;
@@ -220,6 +223,9 @@ impl Store {
              END;
              CREATE TRIGGER IF NOT EXISTS candidate_directory_update AFTER UPDATE ON candidate_builds BEGIN
                INSERT INTO candidate_directory_versions VALUES (NEW.workspace_id,1) ON CONFLICT(workspace_id) DO UPDATE SET generation=generation+1;
+             END;
+             CREATE TRIGGER IF NOT EXISTS candidate_directory_delete AFTER DELETE ON candidate_builds BEGIN
+               INSERT INTO candidate_directory_versions VALUES (OLD.workspace_id,1) ON CONFLICT(workspace_id) DO UPDATE SET generation=generation+1;
              END;
              CREATE TABLE IF NOT EXISTS revisions (
                digest TEXT PRIMARY KEY,
@@ -639,6 +645,59 @@ impl Store {
             return self.candidate_build_unchecked(workspace, &candidate.id);
         }
         Ok(candidate.clone())
+    }
+
+    /// Cells whose current revision runs this candidate, in name order.
+    pub fn candidate_build_users(
+        &self,
+        workspace: &str,
+        principal: &str,
+        id: &str,
+    ) -> Result<Vec<String>, StoreError> {
+        self.authorize(workspace, principal, Capability::CandidateRead)?;
+        candidate_users(&*self.lock()?, workspace, id)
+    }
+
+    /// Delete a terminal candidate's record, archived diagnostics and request
+    /// replays. Sealed runs keep their own revisions; live cells must go first.
+    pub fn remove_candidate_build(
+        &self,
+        workspace: &str,
+        principal: &str,
+        id: &str,
+    ) -> Result<CandidateBuild, StoreError> {
+        self.authorize(workspace, principal, Capability::CandidateCancel)?;
+        let mut connection = self.lock()?;
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let encoded: String = transaction
+            .query_row(
+                "SELECT build_json FROM candidate_builds WHERE workspace_id=?1 AND id=?2",
+                params![workspace, id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::NotFound {
+                resource: "candidate build",
+                id: id.into(),
+            })?;
+        let candidate = decode_candidate_build(&encoded)?;
+        if !candidate.phase.terminal() || !candidate_users(&transaction, workspace, id)?.is_empty()
+        {
+            return Err(StoreError::Validation(
+                "only a finished candidate that no cell uses can be removed".into(),
+            ));
+        }
+        transaction.execute(
+            "DELETE FROM idempotency WHERE workspace_id=?1 AND operation='candidate.build' AND json_extract(response_json,'$.id')=?2",
+            params![workspace, id],
+        )?;
+        transaction.execute(
+            "DELETE FROM candidate_builds WHERE workspace_id=?1 AND id=?2",
+            params![workspace, id],
+        )?;
+        transaction.commit()?;
+        Ok(candidate)
     }
 
     pub fn effective_catalog(
@@ -2328,6 +2387,22 @@ fn is_slug(value: &str) -> bool {
 
 fn candidate_request_identity(candidate: &CandidateBuild) -> serde_json::Value {
     candidate.provenance.as_ref().map_or_else(|| serde_json::json!({"candidateId":candidate.id,"implementation":candidate.implementation,"baseVersion":candidate.base_version,"pullRequestUrl":candidate.pull_request_url}), |p| serde_json::json!(p.input_digest))
+}
+
+fn candidate_users(
+    connection: &Connection,
+    workspace: &str,
+    id: &str,
+) -> Result<Vec<String>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT COALESCE(h.name,i.id) AS cell FROM instances i JOIN revisions r ON r.digest=i.revision_digest
+         LEFT JOIN cell_handles h ON h.workspace_id=i.workspace_id AND h.instance_id=i.id
+         WHERE i.workspace_id=?1 AND EXISTS(SELECT 1 FROM json_each(r.revision_json,'$.lock.entries') e
+           WHERE json_extract(e.value,'$.source.candidate_id')=?2)
+         ORDER BY cell",
+    )?;
+    let users = statement.query_map(params![workspace, id], |row| row.get(0))?;
+    Ok(users.collect::<Result<_, _>>()?)
 }
 
 fn bind_candidate_request(

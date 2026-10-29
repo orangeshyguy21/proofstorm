@@ -41,6 +41,7 @@ pub use execute::NativeExecutionRequest;
 mod upload;
 pub use capture::{WorkspaceCaptureReceipt, WorkspaceCaptureRequest};
 pub use upload::WorkspaceUploadRequest;
+pub(crate) use upload::read_local_file;
 mod identity;
 mod observe;
 mod preview;
