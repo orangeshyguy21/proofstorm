@@ -198,6 +198,10 @@ catalog-image *args:
 clean-tools:
     rm -rf -- .tools
 
+# Drop cargo build files from every checkout target directory; final binaries stay.
+clean-cache:
+    bash scripts/cargo-cache.sh clean
+
 # Run named live gates in a disposable installation; default is one Bitcoin smoke.
 e2e *gates: dev-build
     bash scripts/acceptance.sh "$@"

@@ -61,6 +61,8 @@ if [[ "$mode" == --watch-web ]]; then
   printf 'Watching web assets for the managed GUI. Refresh its browser tab after a build.\n'
   exec "$trunk" watch "${web_args[@]}"
 fi
+# Bound the build cache; launchers keep their binaries until this build replaces them.
+bash "$root/scripts/cargo-cache.sh" prune "$target"
 printf 'Building checkout assets (no release archive or runtime changes)\n'
 build_web() (
   # Trunk fetches tools such as wasm-bindgen during the build. Retry only
