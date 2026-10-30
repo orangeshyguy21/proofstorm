@@ -1,6 +1,7 @@
 //! Live acceptance gates sharing the installation-aware runner and MCP client.
 
 use anyhow::{Result, bail};
+use serde_json::Value;
 
 use crate::GateContext;
 
@@ -47,6 +48,8 @@ pub mod slice2;
 pub mod slice4;
 pub mod slice5;
 pub mod smoke;
+pub mod spark;
+mod stack;
 pub mod surface;
 
 /// Every gate name the binary accepts, in the plan's port order.
@@ -96,6 +99,7 @@ pub const NAMES: &[&str] = &[
     "cdk-ldk",
     "ldk-server-processor",
     "bark-processor",
+    "spark-processor",
     "cdk-ldk-postgres",
     "cdk-bdk",
     "cdk-bdk-postgres-stress",
@@ -117,6 +121,30 @@ pub const NAMES: &[&str] = &[
     "nutshell-oidc",
     "keycloak",
 ];
+
+/// Managed payment-stack gates whose exact images can be cached before a runtime exists.
+pub const IMAGE_CACHE_GATES: &[&str] = &["bark-processor", "spark-processor"];
+
+/// The exact catalog images a managed payment-stack gate's cell resolves to.
+pub(crate) fn images(
+    name: &str,
+    catalog: &proofstorm_core::CatalogResponse,
+) -> Result<Vec<String>> {
+    match name {
+        "bark-processor" => bark::images(catalog),
+        "spark-processor" => spark::images(catalog),
+        other => bail!("{other} has no prepared image cache"),
+    }
+}
+
+/// Exact inputs for preparing a gate's owned image cache, without a runtime.
+///
+/// # Errors
+/// Fails for other gates, or if this platform's catalog cannot resolve the
+/// gate's complete managed topology.
+pub fn image_cache_inputs(name: &str) -> Result<Value> {
+    stack::image_cache_inputs(images(name, proofstorm_core::default_catalog())?)
+}
 
 /// Dispatch a gate by the name passed to `just e2e`.
 pub fn run(name: &str, context: &GateContext) -> Result<()> {
@@ -178,6 +206,7 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "cdk-ldk" => cdk_ldk::run(context, crate::postgres::enabled()),
         "ldk-server-processor" => ldk_server::run(context),
         "bark-processor" => bark::run(context),
+        "spark-processor" => spark::run(context),
         "cdk-ldk-postgres" => cdk_ldk::run(context, true),
         "cdk-bdk" => cdk_bdk_stress::run(context, false, false),
         "cdk-bdk-stress" => cdk_bdk_stress::run(context, crate::postgres::enabled(), true),

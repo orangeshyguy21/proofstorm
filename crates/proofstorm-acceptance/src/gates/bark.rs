@@ -3,6 +3,10 @@ use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{thread::sleep, time::Duration};
 
+use super::stack::{
+    self, Stack, quote_state, quote_states,
+    transport::{Credentials, Target},
+};
 use crate::{GateContext, McpClient, cell, http, json as expect, native};
 
 mod funding;
@@ -11,7 +15,6 @@ mod payments;
 mod recovery;
 #[cfg(test)]
 mod tests;
-mod transport;
 
 const INSTANCE: &str = "bark-instance";
 const RUN: &str = "bark-payments";
@@ -21,6 +24,12 @@ const PEER: &str =
 const ARK: &str = "captaind --config /usr/local/share/bark/captaind.default.toml rpc";
 const WALLET: &str = "cdk-cli --work-dir /wallet/cdk --unit sat --non-interactive";
 const MINT: &str = "http://mint:3338";
+const STACK: Stack = Stack {
+    instance: INSTANCE,
+    run: RUN,
+    prefix: "bark",
+    name: "Bark",
+};
 
 fn document() -> Result<Value> {
     let mut document: Value = serde_json::from_str(include_str!(
@@ -54,101 +63,48 @@ pub(crate) fn images(catalog: &proofstorm_core::CatalogResponse) -> Result<Vec<S
     Ok(lock.entries.into_iter().map(|entry| entry.image).collect())
 }
 
-/// Exact inputs for preparing the Bark gate's owned image cache, without a runtime.
-///
-/// # Errors
-/// Fails if this platform's catalog cannot resolve the complete managed topology.
-pub fn image_cache_inputs() -> Result<Value> {
-    let mut images = images(proofstorm_core::default_catalog())?;
-    images.push(proofstorm_kube::images::PROBE_IMAGE.into());
-    images.sort();
-    images.dedup();
-    let inputs = images
-        .into_iter()
-        .map(|image| {
-            let source =
-                proofstorm_core::catalog_image_source(&image).map_err(anyhow::Error::msg)?;
-            Ok(json!({"image":image,"source":source}))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(json!(inputs))
-}
-
 pub fn run(context: &GateContext) -> Result<()> {
-    let mut client = context.default_session("bark-managed", "designer")?;
-    let document = context.document(document()?)?;
-    // Planning is deliberately ordinary catalog resolution. Missing image
-    // entries must fail here, before any cell is materialized.
-    let preview = client.call(
-        "cell_plan",
-        json!({"name":INSTANCE,"cell":document,"request_id":"bark-plan"}),
+    STACK.run(
+        context,
+        document()?,
+        &["cdk-bark-processor", "bark-server", "cln-hold"],
+        |client, namespace| exercise(context, client, namespace),
     )?;
-    let published = cell::review(&mut client, &preview)?;
-    context.record("bark-plan.json", &published)?;
-    for implementation in ["cdk-bark-processor", "bark-server", "cln-hold"] {
-        let entry = cell::lock_entry(&published, implementation)?;
-        ensure!(
-            expect::string(entry, "/image")?.contains("@sha256:"),
-            "Bark requires immutable catalog images"
-        );
-        ensure!(
-            entry["build_provenance"].is_object(),
-            "Bark requires source provenance"
-        );
-    }
-    let result = (|| {
-        cell::apply(&mut client, &preview)?;
-        let ready = cell::wait_ready_recorded(context, &mut client, INSTANCE)?;
-        context.record("bark-ready.json", &ready)?;
-        let namespace = expect::string(&ready, "/instance_namespace")?;
-        client.call(
-            "run_start",
-            json!({"name":INSTANCE,"run_id":RUN,"request_id":"bark-run"}),
-        )?;
-        exercise(context, &mut client, namespace)
-    })();
-    let _ = client.call(
-        "run_finish",
-        json!({"run_id":RUN,"request_id":"bark-finish"}),
-    );
-    let cleanup = cleanup(context, &mut client);
-    context.record("bark-result.json", &json!({"passed":result.is_ok() && cleanup.is_ok(),"exercise_error":result.as_ref().err().map(|e|format!("{e:#}")),"cleanup_error":cleanup.as_ref().err().map(|e|format!("{e:#}"))}))?;
-    cleanup?;
-    result?;
     println!(
         "Managed Bark: rail registration, settlement, unpaid and interrupted payment recovery, on-chain boarding, TLS refusal and cleanup passed"
     );
     Ok(())
 }
 
-fn cleanup(context: &GateContext, client: &mut McpClient) -> Result<()> {
-    // A failed preliminary read must not prevent the removal attempt.
-    let status = cell::status(client, INSTANCE);
-    client.call("cell_remove", json!({"name":INSTANCE}))?;
-    let closed = cell::wait_closed(client, INSTANCE)?;
-    context.record("bark-cleanup.json", &closed)?;
-    // This runner owns a disposable cluster. These reads never touch or demand
-    // that unrelated Docker/Orchard installations be empty.
-    context.kubectl.assert_no_instance_namespaces()?;
-    context.kubectl.assert_no_cell_actions()?;
-    let status = status.context("could not establish the namespace for storage verification")?;
-    let namespace = expect::string(&status, "/instance_namespace")?;
-    // PersistentVolumes outlive their namespace while reclamation is in
-    // progress. Check only claims belonging to this removed instance.
-    for _ in 0..60 {
-        let volumes = context.kubectl.get_json(&["get", "persistentvolumes"])?;
-        if !expect::array(&volumes, "/items")?
-            .iter()
-            .any(|v| v["spec"]["claimRef"]["namespace"] == namespace)
-        {
-            return context.record(
-                "bark-storage-cleanup.json",
-                &json!({"namespace":namespace,"remaining_volumes":0}),
-            );
-        }
-        sleep(Duration::from_secs(1));
-    }
-    anyhow::bail!("owned Bark volumes remain after namespace removal")
+/// Bark's three mutually authenticated gRPC services, each probed with
+/// another service's client identity.
+fn transport_targets() -> [Target; 3] {
+    [
+        Target::service(
+            "processor",
+            "processor",
+            50051,
+            "/cdk_payment_processor.CdkPaymentProcessor/GetSettings",
+            Credentials::mutual("processor-payment-tls"),
+            Credentials::mutual("cln-cln-tls"),
+        ),
+        Target::service(
+            "cln",
+            "cln",
+            9988,
+            "/cln.Node/Getinfo",
+            Credentials::mutual("cln-cln-tls"),
+            Credentials::mutual("cln-hold-tls"),
+        ),
+        Target::service(
+            "hold",
+            "cln",
+            9292,
+            "/hold.Hold/GetInfo",
+            Credentials::mutual("cln-hold-tls"),
+            Credentials::mutual("cln-cln-tls"),
+        ),
+    ]
 }
 
 fn exercise(context: &GateContext, client: &mut McpClient, namespace: &str) -> Result<()> {
@@ -166,8 +122,8 @@ fn exercise(context: &GateContext, client: &mut McpClient, namespace: &str) -> R
     )?;
     context.record("bark-settings.json", &settings)?;
     onchain::check_settings(&settings)?;
-    onchain::registered(context, namespace)?;
-    transport::verify(context, namespace)?;
+    STACK.registered(context, namespace, onchain::METHODS)?;
+    stack::transport::verify(context, namespace, STACK.prefix, &transport_targets())?;
     context.qualification_stage("bark-funding")?;
     funding::run(context, client)?;
     native::execute(
@@ -196,61 +152,9 @@ fn exercise(context: &GateContext, client: &mut McpClient, namespace: &str) -> R
 }
 
 fn balance(context: &GateContext, client: &mut McpClient, id: &str, expected: u64) -> Result<()> {
-    let state = native::observe_wallet(
-        client,
-        "cdk-cli-wallet",
-        &json!({"name":INSTANCE,"run_id":RUN,"request_id":id,"wallet":"wallet","mint":"mint"}),
-    )?;
-    check_balance(&state, expected)?;
-    context.record(&format!("{id}.json"), &state)
-}
-
-fn check_balance(state: &Value, expected: u64) -> Result<()> {
-    ensure!(
-        state["balance_sat"] == expected
-            && state["reserved_sat"] == 0
-            && state["pending_sat"] == 0
-            && state["pending_spent_sat"] == 0,
-        "wallet does not conserve settled funds"
-    );
-    Ok(())
+    STACK.balance(context, client, id, expected)
 }
 
 fn control(client: &mut McpClient, tool: &str, component: &str, id: &str) -> Result<()> {
-    client.call(
-        tool,
-        json!({"name":INSTANCE,"run_id":RUN,"request_id":id,"component":component}),
-    )?;
-    cell::wait_succeeded(client, id)?;
-    Ok(())
-}
-
-fn quote_state(
-    context: &GateContext,
-    namespace: &str,
-    kind: &str,
-    id: &str,
-    expected: &str,
-) -> Result<Value> {
-    quote_states(context, namespace, kind, id, &[expected])
-}
-
-fn quote_states(
-    context: &GateContext,
-    namespace: &str,
-    kind: &str,
-    id: &str,
-    expected: &[&str],
-) -> Result<Value> {
-    let mut forward = http::PortForward::open(&context.kubectl, namespace, "service/mint", 3338)?;
-    for _ in 0..90 {
-        let state =
-            http::get_json_retrying(&mut forward, &format!("/v1/{kind}/quote/bolt11/{id}"), 3)?;
-        ensure!(state["quote"] == id, "quote identity changed");
-        if expected.contains(&expect::string(&state, "/state")?) {
-            return Ok(state);
-        }
-        sleep(Duration::from_secs(1));
-    }
-    anyhow::bail!("original {kind} quote did not reach {expected:?}")
+    STACK.control(client, tool, component, id)
 }

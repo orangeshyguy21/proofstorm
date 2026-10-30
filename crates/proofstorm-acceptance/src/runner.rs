@@ -509,8 +509,10 @@ fn seed_qualification_images(
                 .iter()
                 .map(|component| component.image.clone()),
         );
-    } else if names == ["bark-processor"] {
-        images.extend(gates::bark::images(proofstorm_core::default_catalog())?);
+    } else if let [name] = names
+        && gates::IMAGE_CACHE_GATES.contains(&name.as_str())
+    {
+        images.extend(gates::images(name, proofstorm_core::default_catalog())?);
     } else {
         // The native preflight runs only the default Bitcoin smoke scenario.
         images.insert(
@@ -588,8 +590,10 @@ pub fn run(
     if let Some(cache) = &selection.qualification_image_cache {
         proofstorm_qualification::validate_cache_endpoint(cache)?;
         ensure!(
-            selection.qualification.is_some() || names == ["smoke"] || names == ["bark-processor"],
-            "prepared image cache requires qualification, the native smoke preflight or Bark"
+            selection.qualification.is_some()
+                || names == ["smoke"]
+                || matches!(names, [name] if gates::IMAGE_CACHE_GATES.contains(&name.as_str())),
+            "prepared image cache requires qualification, the native smoke preflight or a managed payment-stack gate"
         );
     }
     let qualification = if let Some((path, id)) = &selection.qualification {

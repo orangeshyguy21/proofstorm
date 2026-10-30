@@ -79,6 +79,7 @@ async fn real_mtls_probe_rejects_plaintext_missing_and_foreign_clients() {
         .client_ca_root(Certificate::from_pem(ca.pem()));
     let valid = identity(vec![], ExtendedKeyUsagePurpose::ClientAuth);
     let foreign = rcgen::generate_simple_self_signed(vec!["foreign-client".into()]).unwrap();
+    let foreign_authority = Certificate::from_pem(foreign.cert.pem());
     let foreign = Identity::from_pem(foreign.cert.pem(), foreign.key_pair.serialize_pem());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -105,6 +106,12 @@ async fn real_mtls_probe_rejects_plaintext_missing_and_foreign_clients() {
         (plain.as_str(), None, None),
         (secure.as_str(), Some(ca.clone()), None),
         (secure.as_str(), Some(ca.clone()), Some(foreign)),
+        // The server's certificate does not verify under another authority.
+        (
+            secure.as_str(),
+            Some(foreign_authority),
+            Some(valid.clone()),
+        ),
     ] {
         assert!(probe(address, authority, identity, path).await.is_err());
         probe(&secure, Some(ca.clone()), Some(valid.clone()), path)
@@ -113,9 +120,21 @@ async fn real_mtls_probe_rejects_plaintext_missing_and_foreign_clients() {
     }
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        4,
+        5,
         "only authenticated controls reach the RPC"
     );
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();
+}
+
+#[test]
+fn mutual_tls_refuses_clients_and_server_tls_refuses_foreign_authorities() {
+    let names = |mutual| {
+        Case::all(mutual)
+            .iter()
+            .map(|case| case.name())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(true), ["plaintext", "missing-client", "wrong-client"]);
+    assert_eq!(names(false), ["plaintext", "wrong-ca"]);
 }

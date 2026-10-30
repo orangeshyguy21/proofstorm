@@ -1,6 +1,7 @@
 use super::{
-    CLN, Context, GateContext, INSTANCE, MINT, McpClient, PEER, RUN, Result, Value, WALLET,
-    balance, cell, control, ensure, expect, json, native, quote_state, quote_states,
+    CLN, GateContext, INSTANCE, MINT, McpClient, PEER, RUN, Result, Value, WALLET, balance, cell,
+    control, ensure, expect, json, native, quote_state, quote_states,
+    stack::{capture_log, melt_quote_id, melt_remaining},
 };
 
 pub(super) fn mint(
@@ -201,16 +202,7 @@ pub(super) fn melt(
         balance(context, client, &format!("{label}-balance"), remaining)?;
         Ok(remaining)
     })();
-    // Keep native failure details before the gate removes the owned wallet/PVC.
-    // Diagnostic capture does not replace or turn an execution failure into success.
-    let diagnostic = match context
-        .kubectl
-        .exec(namespace, "deployment/wallet", &["cat", &log])
-    {
-        Ok(output) => json!({"output":output}),
-        Err(error) => json!({"capture_error":format!("{error:#}")}),
-    };
-    context.record(&format!("{label}-native-log.private.json"), &diagnostic)?;
+    capture_log(context, namespace, &label, &log)?;
     result
 }
 
@@ -233,18 +225,6 @@ fn recipient_paid(received: &Value, hash: &str, amount: u64) -> Result<bool> {
     }
 }
 
-fn melt_quote_id(output: &str) -> Result<&str> {
-    let quotes = output
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("Quote ID: "))
-        .collect::<Vec<_>>();
-    ensure!(
-        quotes.len() == 1 && !quotes[0].is_empty(),
-        "missing or ambiguous native melt quote"
-    );
-    Ok(quotes[0])
-}
-
 fn check_melt(
     receipt: &Value,
     quote: &Value,
@@ -254,25 +234,10 @@ fn check_melt(
     before: u64,
 ) -> Result<u64> {
     ensure!(
-        receipt["state"] == "PAID"
-            && receipt["amount_sat"] == amount
-            && quote["state"] == "PAID"
-            && quote["amount"] == amount,
-        "melt receipt and quote disagree"
-    );
-    ensure!(
         recipient_paid(received, hash, amount)?,
         "recipient settlement does not match the melt"
     );
-    let fee = expect::integer(receipt, "/fee_paid_sat")?;
-    ensure!(
-        fee <= expect::integer(quote, "/fee_reserve")?,
-        "melt exceeded its fee reserve"
-    );
-    before
-        .checked_sub(amount)
-        .and_then(|n| n.checked_sub(fee))
-        .context("melt exceeded the wallet balance")
+    melt_remaining(receipt, quote, amount, before)
 }
 
 #[cfg(test)]

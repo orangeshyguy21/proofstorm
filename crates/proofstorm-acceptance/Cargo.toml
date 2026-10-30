@@ -30,6 +30,7 @@ tonic-prost = "=0.14.6"
 prost = "=0.14.4"
 
 [dev-dependencies]
+proofstorm-core = { path = "../proofstorm-core", features = ["test-catalogs"] }
 rusqlite.workspace = true
 rcgen = "0.13.2"
 tokio-stream = { version = "0.1", features = ["net"] }
