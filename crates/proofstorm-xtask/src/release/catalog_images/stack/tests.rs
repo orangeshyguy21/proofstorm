@@ -116,11 +116,18 @@ fn fixture(base: &Path, stack: &Stack, platform: &str, host: (&str, &str)) -> St
         let receipt = bundle::read_json(&work.join("image.json")).unwrap();
         let config = json!({"os":"linux","architecture":arch,"config":{"User":"1000:1000","Labels":{"dev.proofstorm.source-sha256":receipt["input"]["source"]["sha256"]}},"rootfs":{"diff_ids":[]}});
         put(&work.join("config.json"), &config);
-        let id = format!("sha256:{}", digest(&work.join("config.json")).unwrap());
+        let config_id = format!("sha256:{}", digest(&work.join("config.json")).unwrap());
         put(
             &work.join("manifest.json"),
-            &json!({"schemaVersion":2,"config":{"digest":id},"layers":[]}),
+            &json!({"schemaVersion":2,"config":{"digest":config_id},"layers":[]}),
         );
+        // Docker Desktop's containerd store names an image by its manifest digest;
+        // a Linux runner's classic store names it by its config digest.
+        let id = if host.0 == "Linux" {
+            config_id
+        } else {
+            format!("sha256:{}", digest(&work.join("manifest.json")).unwrap())
+        };
         put(
             &work.join("inspect.json"),
             &json!([{"Id":id,"Os":"linux","Architecture":arch,"Config":config["config"],"RootFS":{"Layers":[]}}]),

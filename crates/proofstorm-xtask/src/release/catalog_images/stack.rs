@@ -457,13 +457,18 @@ pub(super) fn restore(
     Ok(())
 }
 
-fn manifest(work: &Path, receipt: &Receipt) -> Result<String> {
+fn manifest(work: &Path, receipt: &Receipt, hosts: Hosts) -> Result<String> {
     let manifest = bundle::read_json(&work.join("manifest.json"))?;
     let config_digest = format!("sha256:{}", digest(&work.join("config.json"))?);
+    let manifest_digest = format!("sha256:{}", digest(&work.join("manifest.json"))?);
+    // Docker's classic store names an image by its config digest. Docker Desktop's
+    // containerd store names it by its manifest digest, which commits to that config.
+    let local_id = receipt.local_image_id.as_deref();
     ensure!(
         manifest["schemaVersion"] == 2
             && manifest["config"]["digest"] == config_digest
-            && receipt.local_image_id.as_deref() == Some(&config_digest),
+            && (local_id == Some(&config_digest)
+                || (hosts == Hosts::Local && local_id == Some(&manifest_digest))),
         "registry config differs from the native candidate image"
     );
     let config = bundle::read_json(&work.join("config.json"))?;
@@ -475,7 +480,7 @@ fn manifest(work: &Path, receipt: &Receipt) -> Result<String> {
             && config["rootfs"]["diff_ids"] == inspected[0]["RootFS"]["Layers"],
         "registry platform/root filesystem mismatch"
     );
-    Ok(format!("sha256:{}", digest(&work.join("manifest.json"))?))
+    Ok(manifest_digest)
 }
 
 /// Write the stack's pins file for `platform` from verified loopback manifests.
@@ -497,7 +502,7 @@ pub(super) fn stage(
         let (name, version) = (image.repository, image.version);
         let work = candidates.join(name);
         let receipt = candidate(stack, root, &work, image, platform, hosts)?;
-        let manifest = manifest(&work, &receipt)?;
+        let manifest = manifest(&work, &receipt, hosts)?;
         let Input::Build { source, .. } = &receipt.input else {
             unreachable!()
         };
