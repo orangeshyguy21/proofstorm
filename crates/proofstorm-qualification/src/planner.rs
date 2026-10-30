@@ -40,6 +40,9 @@ fn selected(entry: &CatalogEntry) -> bool {
                 | "cdk-bark-processor"
                 | "bark-server"
                 | "cln-hold"
+                | "cdk-spark-processor"
+                | "open-ssp"
+                | "spark-operators"
         )
 }
 
@@ -246,7 +249,7 @@ impl Builder<'_> {
         for binding in &mint.support_matrix.payment_bindings {
             if matches!(
                 binding.backend.implementation.as_str(),
-                "cdk-ldk-server-processor" | "cdk-bark-processor"
+                "cdk-ldk-server-processor" | "cdk-bark-processor" | "cdk-spark-processor"
             ) {
                 continue; // Explicit experimental scenario below, never hidden by the mint lifecycle.
             }
@@ -626,6 +629,43 @@ impl Builder<'_> {
             claims,
             false,
         )?;
+        // Spark entries ship only for platforms pinned in spark_images.json, so
+        // its managed gate is scheduled exactly where they exist.
+        if self
+            .catalog
+            .entries
+            .iter()
+            .any(|entry| entry.id == "cdk-spark-processor")
+        {
+            let processor = entry(self.catalog, "cdk-spark-processor", "0.1.0-d7244e2")?;
+            let ssp = entry(self.catalog, "open-ssp", "0.1.0-9c25f69")?;
+            let operators = entry(self.catalog, "spark-operators", "0.0.0-5e0c879")?;
+            // The SSP's node, its channel peer and the unreachable island.
+            let lightning = entry(self.catalog, "ldk-server", "0.1.0-762bc47")?;
+            let mut claims = behavioral(processor);
+            claims.extend(behavioral(ssp));
+            claims.extend(behavioral(operators));
+            claims.extend(behavioral(lightning));
+            claims.extend(dependencies(mint, &[component(processor)?]));
+            for binding in &mint.support_matrix.payment_bindings {
+                if binding.backend.implementation == processor.id {
+                    for version in &binding.backend.versions {
+                        claims.insert(claim(
+                            mint,
+                            "payment",
+                            &(&binding.method, &binding.unit, &processor.id, version),
+                        ));
+                    }
+                }
+            }
+            self.gate(
+                "spark-processor",
+                &[mint, processor, ssp, operators, lightning],
+                &["bitcoin-core", "postgresql", "cdk-cli-wallet"],
+                claims,
+                false,
+            )?;
+        }
         for (gate, components, baseline) in [
             ("smoke", vec!["bitcoin-core"], true),
             ("runtime-lifecycle", vec!["bitcoin-core"], true),
@@ -668,6 +708,15 @@ impl Builder<'_> {
 /// # Errors
 /// Rejects invalid identities and catalog claims without an explicit scenario.
 pub fn plan(identity: Identity, mode: Mode) -> Result<Plan> {
+    plan_for(identity, mode, catalog)
+}
+
+/// [`plan`] over an explicit catalog source, so tests can pin unpublished stacks.
+fn plan_for(
+    identity: Identity,
+    mode: Mode,
+    source: impl Fn(&str) -> Result<CatalogResponse>,
+) -> Result<Plan> {
     identity.validate()?;
     let mut plan = Plan {
         format_version: 2,
@@ -678,7 +727,7 @@ pub fn plan(identity: Identity, mode: Mode) -> Result<Plan> {
         cases: vec![],
     };
     for platform in ["linux/amd64", "linux/arm64"] {
-        let catalog = catalog(platform)?;
+        let catalog = source(platform)?;
         let required: BTreeSet<_> = catalog
             .entries
             .iter()
@@ -731,4 +780,146 @@ pub fn plan(identity: Identity, mode: Mode) -> Result<Plan> {
         "duplicate qualification case identity"
     );
     Ok(plan)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SPARK: [&str; 4] = [
+        "cdk-spark-processor",
+        "open-ssp",
+        "spark-operators",
+        "ldk-server@0.1.0-762bc47",
+    ];
+
+    fn identity() -> Identity {
+        Identity {
+            revision: "a".repeat(40),
+            run_id: "1".into(),
+            attempt: 1,
+        }
+    }
+
+    fn spark_gates(plan: &Plan, platform: &str) -> Vec<Case> {
+        plan.cases
+            .iter()
+            .filter(|case| {
+                case.platform == platform
+                    && matches!(&case.scenario, Scenario::Gate { name, .. } if name == "spark-processor")
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn spark_component(component: &Component) -> bool {
+        let selection = format!("{}@{}", component.implementation, component.version);
+        SPARK.contains(&component.implementation.as_str()) || SPARK.contains(&selection.as_str())
+    }
+
+    #[test]
+    fn unpinned_spark_adds_no_case_component_or_obligation() {
+        for mode in [
+            Mode::Pull,
+            Mode::Documentation,
+            Mode::Compatibility,
+            Mode::Full,
+        ] {
+            let plan = plan(identity(), mode).unwrap();
+            for platform in ["linux/amd64", "linux/arm64"] {
+                let pinned = catalog(platform)
+                    .unwrap()
+                    .entries
+                    .iter()
+                    .any(|entry| entry.id == "cdk-spark-processor");
+                assert_eq!(spark_gates(&plan, platform).len(), usize::from(pinned));
+                if !pinned {
+                    assert!(
+                        plan.cases
+                            .iter()
+                            .filter(|case| case.platform == platform)
+                            .all(|case| !case.components.iter().any(spark_component))
+                    );
+                    assert!(
+                        plan.obligations[platform]
+                            .iter()
+                            .all(|claim| !claim.contains("spark") && !claim.contains("762bc47"))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pinned_spark_images_schedule_one_native_gate_per_architecture() {
+        let source = |platform: &str| {
+            Ok(proofstorm_core::catalog_with_spark_test_images(
+                platform == "linux/amd64",
+            ))
+        };
+        for mode in [
+            Mode::Pull,
+            Mode::Documentation,
+            Mode::Compatibility,
+            Mode::Full,
+        ] {
+            let plan = plan_for(identity(), mode, source).unwrap();
+            for platform in ["linux/amd64", "linux/arm64"] {
+                let gates = spark_gates(&plan, platform);
+                assert_eq!(gates.len(), 1);
+                let gate = &gates[0];
+                assert_eq!(
+                    gate.required,
+                    matches!(mode, Mode::Compatibility | Mode::Full)
+                );
+                // Mint, processor, SSP, operators and the macaroon LDK Server, plus
+                // Bitcoin, PostgreSQL and the CDK wallet.
+                assert_eq!(gate.components.len(), 8);
+                assert_eq!(
+                    gate.components
+                        .iter()
+                        .filter(|c| spark_component(c))
+                        .count(),
+                    4
+                );
+                let claim = "cdk@0.18.2:payment:[\"bolt11\",\"sat\",\"cdk-spark-processor\",\"0.1.0-d7244e2\"]";
+                assert!(gate.claims.contains(claim), "{claim}");
+                // Every Spark obligation is covered by the gate or its image case.
+                let claims = &plan.obligations[platform];
+                for prefix in [
+                    "cdk-spark-processor@",
+                    "open-ssp@",
+                    "spark-operators@",
+                    "ldk-server@0.1.0-762bc47:",
+                ] {
+                    let obligations: BTreeSet<_> = claims
+                        .iter()
+                        .filter(|claim| claim.starts_with(prefix))
+                        .collect();
+                    assert!(!obligations.is_empty(), "{prefix}");
+                    for claim in obligations {
+                        assert!(
+                            gate.claims.contains(claim)
+                                || plan.cases.iter().any(|case| case.platform == platform
+                                    && matches!(case.scenario, Scenario::Image { .. })
+                                    && case.claims.contains(claim)),
+                            "{claim}"
+                        );
+                    }
+                }
+                // The LDK Server processor keeps its own 50fe752 node.
+                let ldk: Vec<_> = plan
+                    .cases
+                    .iter()
+                    .filter(|case| case.platform == platform
+                        && matches!(&case.scenario, Scenario::Gate { name, .. } if name == "ldk-server-processor"))
+                    .collect();
+                assert_eq!(ldk.len(), 1);
+                assert!(ldk[0].components.iter().any(|component| {
+                    component.implementation == "ldk-server" && component.version == "0.1.0-50fe752"
+                }));
+                assert!(!ldk[0].components.iter().any(spark_component));
+            }
+        }
+    }
 }

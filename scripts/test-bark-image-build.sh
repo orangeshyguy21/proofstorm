@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Exercise native/receipt/export refusals without Docker, network, or real builds.
+# Covers the shared stack-image-build.sh through Bark's entry point and for Spark.
 set -Eeuo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT
 fixture="$scratch/checkout with spaces"
 mkdir -p "$fixture/scripts" "$scratch/bin"
-cp "$root/scripts/bark-image-build.sh" "$root/scripts/qualification-docker.sh" "$fixture/scripts/"
+cp "$root/scripts/bark-image-build.sh" "$root/scripts/stack-image-build.sh" \
+  "$root/scripts/qualification-docker.sh" "$fixture/scripts/"
 export BARK_TEST_TRACE="$scratch/trace" BARK_TEST_BIN="$scratch/bin"
 export BARK_TEST_MACHINE=x86_64 BARK_TEST_ENGINE=linux/amd64 BARK_TEST_OS=Linux
 export BARK_TEST_ENDPOINT=unix:///fixture/docker.sock
@@ -91,7 +93,9 @@ chmod +x "$scratch/bin/"* "$fixture/scripts/catalog-image.sh"
 export PATH="$scratch/bin:$PATH"
 export DOCKER_CONTEXT=desktop DOCKER_AUTH_CONFIG=unused BUILDX_BUILDER=remote
 run() { bash "$fixture/scripts/bark-image-build.sh" "$@" > "$scratch/output" 2>&1; }
+stack_run() { bash "$fixture/scripts/stack-image-build.sh" "$@" > "$scratch/output" 2>&1; }
 selection=bark-server@0.7.0-6188e2d
+spark=open-ssp@0.1.0-9c25f69
 : > "$BARK_TEST_TRACE"
 if run invalid linux/amd64 "$scratch/invalid"; then exit 1; fi
 if run "$selection" linux/foreign "$scratch/invalid"; then exit 1; fi
@@ -103,6 +107,21 @@ mkdir "$scratch/existing"
 if run "$selection" linux/amd64 "$scratch/existing"; then exit 1; fi
 if run "$selection" linux/amd64 "$fixture/work"; then exit 1; fi
 [[ ! -s "$BARK_TEST_TRACE" && ! -e "$scratch/emulated" && ! -e "$fixture/work" ]]
+# Each stack builds only its own reviewed recipes; unknown stacks are refused.
+if stack_run lnd "$selection" linux/amd64 "$scratch/unknown-stack"; then exit 1; fi
+if stack_run spark "$selection" linux/amd64 "$scratch/cross-stack"; then exit 1; fi
+if stack_run bark "$spark" linux/amd64 "$scratch/cross-stack"; then exit 1; fi
+if stack_run spark ldk-server@0.1.0-50fe752 linux/amd64 "$scratch/cross-stack"; then exit 1; fi
+if stack_run spark "$spark" linux/arm64 "$scratch/cross-stack"; then exit 1; fi
+# Apple silicon is a native ARM64 builder only for an explicit local build.
+export BARK_TEST_OS=Darwin BARK_TEST_MACHINE=arm64 BARK_TEST_ENGINE=linux/aarch64
+if stack_run spark "$spark" linux/arm64 "$scratch/apple-ci"; then exit 1; fi
+if stack_run spark --local "$spark" linux/amd64 "$scratch/apple-amd64"; then exit 1; fi
+if run --local "$selection" linux/amd64 "$scratch/apple-amd64"; then exit 1; fi
+export BARK_TEST_MACHINE=x86_64
+if stack_run spark --local "$spark" linux/arm64 "$scratch/intel-mac"; then exit 1; fi
+export BARK_TEST_OS=Linux BARK_TEST_ENGINE=linux/amd64
+[[ ! -s "$BARK_TEST_TRACE" && ! -e "$scratch/cross-stack" && ! -e "$scratch/apple-ci" ]]
 export BARK_TEST_ENDPOINT=tcp://remote.invalid:2375
 if run "$selection" linux/amd64 "$scratch/remote"; then exit 1; fi
 export BARK_TEST_ENDPOINT=unix:///fixture/docker.sock BARK_TEST_ENGINE=linux/arm64
@@ -124,12 +143,25 @@ for arch in amd64 arm64; do
     work="$scratch/$arch-$selection"
     run "$selection" "linux/$arch" "$work"
     (cd "$work/artifacts"; sha256sum --check SHA256SUMS >/dev/null)
-    jq -e --arg platform "linux/$arch" '.platform==$platform and .managed_qualification==false and .published==false' "$work/artifacts/native.json" >/dev/null
+    jq -e --arg platform "linux/$arch" --arg machine "$BARK_TEST_MACHINE" '.platform==$platform and .host=={os:"Linux",machine:$machine} and .managed_qualification==false and .published==false' "$work/artifacts/native.json" >/dev/null
     mkdir "$work/restored"
     tar -C "$work/restored" -xzf "$work/artifacts/work.tar.gz"
     cmp "$work/build/image.json" "$work/restored/image.json"
     cmp "$work/build/source/fixture" "$work/restored/source/fixture"
     [[ ! -e "$work/restored/docker-config" ]]
   done
+  for selection in spark-operator@0.0.0-5e0c879 open-ssp@0.1.0-9c25f69 cdk-spark-processor@0.1.0-d7244e2 ldk-server@0.1.0-762bc47; do
+    work="$scratch/$arch-$selection"
+    stack_run spark "$selection" "linux/$arch" "$work"
+    (cd "$work/artifacts"; sha256sum --check SHA256SUMS >/dev/null)
+    jq -e --arg platform "linux/$arch" --arg machine "$BARK_TEST_MACHINE" '.platform==$platform and .host=={os:"Linux",machine:$machine}' "$work/artifacts/native.json" >/dev/null
+    jq -e --arg selection "$selection" '(.repository+"@"+.input.version)==$selection' "$work/artifacts/image.json" >/dev/null
+  done
 done
-echo 'Native Bark build, isolated Docker, receipt and partial export guards passed'
+# A local build on Apple silicon records the real host, never a Linux runner.
+export BARK_TEST_OS=Darwin BARK_TEST_MACHINE=arm64 BARK_TEST_ENGINE=linux/aarch64
+work="$scratch/apple-$spark"
+stack_run spark --local "$spark" linux/arm64 "$work"
+(cd "$work/artifacts"; sha256sum --check SHA256SUMS >/dev/null)
+jq -e '.platform=="linux/arm64" and .host=={os:"Darwin",machine:"arm64"} and .docker.engine=="linux/aarch64"' "$work/artifacts/native.json" >/dev/null
+echo 'Native Bark and Spark builds, isolated Docker, receipt and partial export guards passed'

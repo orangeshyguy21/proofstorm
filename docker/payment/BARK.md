@@ -311,6 +311,13 @@ This requires a clean committed checkout, Rust, Git, jq, GNU coreutils, tar and
 Docker with Buildx. Work must be new and outside the checkout. The images are
 candidates until their matching managed settlement/recovery/cleanup gate passes.
 
+`scripts/bark-image-build.sh` and `scripts/bark-qualification.sh` are Bark's entry
+points to the shared `scripts/stack-image-build.sh` and
+`scripts/stack-qualification.sh`, which Spark uses too. Their arguments, artifacts,
+receipts and xtask `bark-restore`/`bark-stage`/`bark-evidence` commands are unchanged.
+The shared steps and the `--local` path for a native ARM64 Mac are described in
+[SPARK.md](SPARK.md#build-and-validation).
+
 ### Managed gate
 
 The maintainer image workflow recognizes `cdk-bark-processor@0.1.0-fe468ca`,
