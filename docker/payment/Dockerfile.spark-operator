@@ -1,0 +1,40 @@
+# Spark operator and FROST signer from the operator fork open-ssp requires, with atlas migrations.
+FROM golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS source
+RUN curl -fsSL https://codeload.github.com/benthecarman/spark/tar.gz/5e0c879de2775f6a34aea6d3b0c455d065a3a70f -o /tmp/source.tar.gz \
+    && echo 'af3ba2444547440572b7e0a92916a66c5f4efb769438d7bd6815e5b9fb2fe1f3  /tmp/source.tar.gz' | sha256sum -c - \
+    && mkdir /src && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /src \
+    && echo '5548fcfe84cfcdd72be485256d5cd72c32603f5188e2b2869c8a42b84f14d777  /src/spark/go.sum' | sha256sum -c - \
+    && echo '1c952c42c6fce1793433ffb41e1dcf374f98933f938968af0e974b9599bd4d12  /src/signer/Cargo.lock' | sha256sum -c -
+
+FROM golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS operator
+RUN apt-get update && apt-get install -y --no-install-recommends libzmq3-dev && rm -rf /var/lib/apt/lists/*
+COPY --from=source /src/spark /src/spark
+WORKDIR /src/spark
+RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
+    CGO_ENABLED=1 go build -o /usr/local/bin/spark-operator ./bin/operator
+
+# The signer's rust-toolchain.toml selects Rust 1.92.0, which rustup installs here.
+FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS signer
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev && rm -rf /var/lib/apt/lists/*
+COPY --from=source /src/protos /protos
+COPY --from=source /src/signer /signer
+WORKDIR /signer
+ENV CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked --mount=type=cache,target=/usr/local/cargo/git,sharing=locked --mount=type=cache,id=spark-signer-target,target=/signer/target,sharing=locked \
+    cargo build --locked --release --jobs 2 -p spark-frost-signer \
+    && cp target/release/spark-frost-signer /usr/local/bin/
+
+FROM arigaio/atlas:1.0.0-community@sha256:1359edfa7d3cf0e84f9d7be1d38a7b19a65245e812c1d4dbc8eef5e2e5547e43 AS atlas
+
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+RUN apt-get update && apt-get install -y --no-install-recommends libzmq5 ca-certificates && rm -rf /var/lib/apt/lists/*
+# The upstream amd64 atlas binary is not world-executable.
+COPY --from=atlas /atlas /usr/local/bin/atlas
+RUN chmod 0755 /usr/local/bin/atlas
+COPY --from=operator /usr/local/bin/spark-operator /usr/local/bin/
+COPY --from=signer /usr/local/bin/spark-frost-signer /usr/local/bin/
+COPY --from=source /src/spark/so/ent/migrate/migrations /opt/spark/migrations
+COPY --from=source /src/spark/so/entephemeral/migrate/migrations /opt/spark/ephemeral_migrations
+RUN printf '%s\n' '5e0c879de2775f6a34aea6d3b0c455d065a3a70f' > /usr/local/share/spark-revision
+USER 1000:1000
+CMD ["spark-operator"]

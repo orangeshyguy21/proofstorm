@@ -1,0 +1,11 @@
+--- a/crates/spark/src/backend.rs
++++ b/crates/spark/src/backend.rs
+@@ -123,7 +123,7 @@
+             Arc::new(SparkSignerAdapter::new(Arc::new(signer)));
+ 
+         let mut wallet_config = Self::build_wallet_config(&config, network)?;
+-        wallet_config.leaf_auto_optimize_enabled = true;
++        wallet_config.leaf_auto_optimize_enabled = false;
+         wallet_config.leaf_optimization_options.multiplicity = 5;
+         wallet_config.max_concurrent_claims = 5;
+ 

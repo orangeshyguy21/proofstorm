@@ -65,6 +65,10 @@ jobs:
         selection:
           - ldk-server@0.1.0-50fe752
           - cdk-ldk-server-processor@0.1.0-fe468ca
+          - ldk-server@0.1.0-762bc47
+          - spark-operator@0.0.0-5e0c879
+          - open-ssp@0.1.0-9c25f69
+          - cdk-spark-processor@0.1.0-d7244e2
         include:
           - arch: amd64
             runner: ubuntu-24.04
@@ -93,7 +97,7 @@ jobs:
         run: |
           set -o pipefail
           # Protocol readiness and payment behavior are covered by the separate
-          # ldk-server-processor live acceptance gate.
+          # live acceptance gates. The Spark stack has none yet; see docker/payment/SPARK.md.
           bash scripts/catalog-image.sh build "$SELECTION" "linux/$ARCH" \
             "$RUNNER_TEMP/payment-component" \
             2>&1 | tee "$RUNNER_TEMP/payment-component-build.log"

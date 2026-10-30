@@ -1,0 +1,28 @@
+# open-ssp with the operator and SDK fork revisions its submodules record.
+FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS build
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN curl -fsSL https://codeload.github.com/benthecarman/open-ssp/tar.gz/9c25f69924490c22a66f03a98e5840015383dc79 -o /tmp/source.tar.gz \
+    && curl -fsSL https://codeload.github.com/benthecarman/spark-sdk/tar.gz/2472fdc0e136868eb10e5ad9f501a7e740080f04 -o /tmp/spark-sdk.tar.gz \
+    && curl -fsSL https://codeload.github.com/benthecarman/spark/tar.gz/5e0c879de2775f6a34aea6d3b0c455d065a3a70f -o /tmp/spark.tar.gz \
+    && echo '57e8b0b71374bc70bb9dde2044ebf07146ea273d67907a7a99f4e1a48618bd85  /tmp/source.tar.gz' | sha256sum -c - \
+    && echo '72b009bc48ee723ed44886317b96d49081f90c0df0215a52a6f3297b22442b41  /tmp/spark-sdk.tar.gz' | sha256sum -c - \
+    && echo 'af3ba2444547440572b7e0a92916a66c5f4efb769438d7bd6815e5b9fb2fe1f3  /tmp/spark.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /src \
+    && mkdir -p /src/vendor/breez-sdk /src/vendor/spark \
+    && tar -xzf /tmp/spark-sdk.tar.gz --strip-components=1 -C /src/vendor/breez-sdk \
+    && tar -xzf /tmp/spark.tar.gz --strip-components=1 -C /src/vendor/spark \
+    && rm /tmp/*.tar.gz \
+    && echo '52bc990afd39506ed3d9e18c22390616460f360a47386d6c8cdb1b1ac85c8835  Cargo.lock' | sha256sum -c -
+ENV CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked --mount=type=cache,target=/usr/local/cargo/git,sharing=locked --mount=type=cache,id=open-ssp-target,target=/src/target,sharing=locked \
+    cargo build --locked --release --jobs 2 --bin open-ssp \
+    && cp target/release/open-ssp /usr/local/bin/
+
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+# curl reaches the SSP's own admin endpoints for funding recipes.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bin/open-ssp /usr/local/bin/
+RUN printf '%s\n' '9c25f69924490c22a66f03a98e5840015383dc79' > /usr/local/share/open-ssp-revision
+USER 1000:1000
+CMD ["open-ssp"]

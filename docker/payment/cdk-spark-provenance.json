@@ -1,0 +1,17 @@
+{
+  "repository": "https://github.com/cashubtc/cdk-payment-processors",
+  "commit_sha": "d7244e261506b51d5b309a558bf19cd4ffc32f13",
+  "artifact_url": "https://codeload.github.com/cashubtc/cdk-payment-processors/tar.gz/d7244e261506b51d5b309a558bf19cd4ffc32f13",
+  "artifact_sha256": "54cd1fbaddf6b264f403a429319e3ba54f09a01950b7f25eeadabad0c2f75792",
+  "platform": "linux/amd64,linux/arm64",
+  "runtime_image": "docker.io/library/debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+  "recipe_digest": "sha256:35a8947f04b75cc1d49d6718bcc2fe0c84de6ed2eb53f16d7a052255cadadc46",
+  "package_path": "crates/spark",
+  "dependency_lock_digest": "sha256:3cb313756bd391deaaee4cd80327cf79d6a3e8414ab7525d81fde0d70070a0e4",
+  "build_image": "docker.io/library/rust@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e",
+  "transformations": [
+    "Apply docker/payment/patches/cdk-spark-no-auto-optimize.patch (sha256:5c2bdd606e691c48adb31fd621081aeecf53d5550ee5fa1c3e1262c1afb053a6) with zero fuzz. It turns off automatic leaf optimization, whose swaps exceed open-ssp's 32-target limit and lock the change.",
+    "Apply docker/payment/patches/cdk-spark-wait-for-send.patch (sha256:499a3baa6e432020bf71ecf0656fdc4c3cb91acae89adaa6c5ae7032fe7c280d) with zero fuzz. make_payment waits up to 30 s for the SSP's final Lightning state, because the processor emits no outgoing-payment events.",
+    "Run the library tests, then build with the unchanged Cargo.lock and release LTO disabled. Record the source revision and both patch identities in the image."
+  ]
+}

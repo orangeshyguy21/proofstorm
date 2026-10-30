@@ -1,0 +1,17 @@
+{
+  "repository": "https://github.com/benthecarman/spark",
+  "commit_sha": "5e0c879de2775f6a34aea6d3b0c455d065a3a70f",
+  "artifact_url": "https://codeload.github.com/benthecarman/spark/tar.gz/5e0c879de2775f6a34aea6d3b0c455d065a3a70f",
+  "artifact_sha256": "af3ba2444547440572b7e0a92916a66c5f4efb769438d7bd6815e5b9fb2fe1f3",
+  "platform": "linux/amd64,linux/arm64",
+  "runtime_image": "docker.io/library/debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+  "recipe_digest": "sha256:c3b6e6339a3ec291015b097ff0efbbe9d9f5d589c3fc548160050c7b8e4ce4d1",
+  "package_path": "spark/bin/operator",
+  "dependency_lock_digest": "sha256:5548fcfe84cfcdd72be485256d5cd72c32603f5188e2b2869c8a42b84f14d777",
+  "build_image": "docker.io/library/golang@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9",
+  "transformations": [
+    "Build the operator from the pinned open-ssp operator fork (branch open-ssp) with its unchanged go.sum and CGO for libzmq; no application source patches.",
+    "Build spark-frost-signer from the same archive in docker.io/library/rust@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e with its unchanged Cargo.lock (sha256:1c952c42c6fce1793433ffb41e1dcf374f98933f938968af0e974b9599bd4d12) and the Rust 1.92.0 toolchain its rust-toolchain.toml selects; release LTO disabled.",
+    "Copy atlas from docker.io/arigaio/atlas@sha256:1359edfa7d3cf0e84f9d7be1d38a7b19a65245e812c1d4dbc8eef5e2e5547e43 and both operator migration directories; record the source revision in the image."
+  ]
+}

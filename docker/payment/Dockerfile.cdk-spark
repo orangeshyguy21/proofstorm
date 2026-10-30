@@ -1,0 +1,26 @@
+# Experimental processor build with two open-ssp compatibility patches; see SPARK.md.
+FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS build
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev patch && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN curl -fsSL https://codeload.github.com/cashubtc/cdk-payment-processors/tar.gz/d7244e261506b51d5b309a558bf19cd4ffc32f13 -o /tmp/source.tar.gz \
+    && echo '54cd1fbaddf6b264f403a429319e3ba54f09a01950b7f25eeadabad0c2f75792  /tmp/source.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /src
+COPY docker/payment/patches/cdk-spark-no-auto-optimize.patch docker/payment/patches/cdk-spark-wait-for-send.patch /tmp/
+RUN echo '5c2bdd606e691c48adb31fd621081aeecf53d5550ee5fa1c3e1262c1afb053a6  /tmp/cdk-spark-no-auto-optimize.patch' | sha256sum -c - \
+    && echo '499a3baa6e432020bf71ecf0656fdc4c3cb91acae89adaa6c5ae7032fe7c280d  /tmp/cdk-spark-wait-for-send.patch' | sha256sum -c - \
+    && patch --batch --fuzz=0 -p1 < /tmp/cdk-spark-no-auto-optimize.patch \
+    && patch --batch --fuzz=0 -p1 < /tmp/cdk-spark-wait-for-send.patch \
+    && echo '3cb313756bd391deaaee4cd80327cf79d6a3e8414ab7525d81fde0d70070a0e4  crates/spark/Cargo.lock' | sha256sum -c -
+ENV CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked --mount=type=cache,target=/usr/local/cargo/git,sharing=locked --mount=type=cache,id=cdk-spark-target,target=/src/crates/spark/target,sharing=locked \
+    cargo test --locked --release --jobs 2 --manifest-path crates/spark/Cargo.toml --lib \
+    && cargo build --locked --release --jobs 2 --manifest-path crates/spark/Cargo.toml \
+    && cp crates/spark/target/release/cdk-payment-processor-spark /usr/local/bin/
+
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bin/cdk-payment-processor-spark /usr/local/bin/
+RUN printf '%s\n' 'd7244e261506b51d5b309a558bf19cd4ffc32f13' > /usr/local/share/processor-revision \
+    && printf '%s\n' '5c2bdd606e691c48adb31fd621081aeecf53d5550ee5fa1c3e1262c1afb053a6' '499a3baa6e432020bf71ecf0656fdc4c3cb91acae89adaa6c5ae7032fe7c280d' > /usr/local/share/processor-patch-sha256
+USER 1000:1000
+CMD ["cdk-payment-processor-spark"]
