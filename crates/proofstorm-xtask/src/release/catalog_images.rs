@@ -27,6 +27,9 @@ const RECIPES: &[&str] = &[
     "cdk-bark-processor",
     "bark-server",
     "cln-hold",
+    "spark-operator",
+    "open-ssp",
+    "cdk-spark-processor",
 ];
 
 fn recipe(name: &str) -> Result<&'static str> {
@@ -43,6 +46,9 @@ fn recipe(name: &str) -> Result<&'static str> {
         "cdk-bark-processor" => "docker/payment/Dockerfile.cdk-bark",
         "bark-server" => "docker/payment/Dockerfile.bark-server",
         "cln-hold" => "docker/payment/Dockerfile.cln-hold",
+        "spark-operator" => "docker/payment/Dockerfile.spark-operator",
+        "open-ssp" => "docker/payment/Dockerfile.open-ssp",
+        "cdk-spark-processor" => "docker/payment/Dockerfile.cdk-spark",
         _ => bail!("unknown catalog image; controller builds use release-controller-build"),
     })
 }
@@ -61,6 +67,9 @@ fn legacy_version(name: &str) -> Result<&'static str> {
         "cdk-ldk-server-processor" | "cdk-bark-processor" => "0.1.0-fe468ca",
         "bark-server" => "0.7.0-6188e2d",
         "cln-hold" => "26.06.7-hold.0.3.3",
+        "spark-operator" => "0.0.0-5e0c879",
+        "open-ssp" => "0.1.0-9c25f69",
+        "cdk-spark-processor" => "0.1.0-d7244e2",
         _ => bail!("unknown catalog image version"),
     })
 }
@@ -85,6 +94,12 @@ const VERSIONED_RECIPES: &[(&str, &str, &str)] = &[
         "cdk-cli-wallet",
         "0.18.2",
         "docker/wallet/Dockerfile.cdk-0.18.2",
+    ),
+    // Macaroon authentication for open-ssp; the LDK Server processor keeps 50fe752.
+    (
+        "ldk-server",
+        "0.1.0-762bc47",
+        "docker/payment/Dockerfile.ldk-server-762bc47",
     ),
 ];
 
@@ -129,17 +144,43 @@ fn selector(value: &str) -> Result<(&str, &str)> {
     Ok((name, version))
 }
 
-fn verify_bark_inputs(source: &Path, name: &str, recipe_sha256: &str) -> Result<()> {
-    let stem = match name {
-        "cdk-bark-processor" => "cdk-bark",
-        "bark-server" => "bark-server",
-        "cln-hold" => "cln-hold",
-        _ => return Ok(()),
+/// Provenance record and source patches that a payment-stack recipe must match exactly.
+fn bound_inputs(name: &str, version: &str) -> Option<(&'static str, &'static [&'static str])> {
+    Some(match (name, version) {
+        ("cdk-bark-processor", _) => (
+            "docker/payment/cdk-bark-provenance.json",
+            &["docker/payment/patches/bark-regtest-rpc.patch"],
+        ),
+        ("bark-server", _) => ("docker/payment/bark-server-provenance.json", &[]),
+        ("cln-hold", _) => ("docker/payment/cln-hold-provenance.json", &[]),
+        ("spark-operator", _) => ("docker/payment/spark-operator-provenance.json", &[]),
+        ("open-ssp", _) => ("docker/payment/open-ssp-provenance.json", &[]),
+        ("cdk-spark-processor", _) => (
+            "docker/payment/cdk-spark-provenance.json",
+            &[
+                "docker/payment/patches/cdk-spark-no-auto-optimize.patch",
+                "docker/payment/patches/cdk-spark-wait-for-send.patch",
+            ],
+        ),
+        ("ldk-server", "0.1.0-762bc47") => {
+            ("docker/payment/ldk-server-762bc47-provenance.json", &[])
+        }
+        _ => return None,
+    })
+}
+
+fn verify_build_inputs(
+    source: &Path,
+    name: &str,
+    version: &str,
+    recipe_sha256: &str,
+) -> Result<()> {
+    let Some((provenance, patches)) = bound_inputs(name, version) else {
+        return Ok(());
     };
-    let record: proofstorm_core::BuildProvenance = serde_json::from_slice(&fs::read(
-        source.join(format!("docker/payment/{stem}-provenance.json")),
-    )?)?;
-    let recipe = fs::read_to_string(source.join(recipe(name)?))?;
+    let record: proofstorm_core::BuildProvenance =
+        serde_json::from_slice(&fs::read(source.join(provenance))?)?;
+    let recipe = fs::read_to_string(source.join(versioned_recipe(name, version)?))?;
     ensure!(
         record.recipe_digest == format!("sha256:{recipe_sha256}")
             && record.platform == "linux/amd64,linux/arm64"
@@ -166,22 +207,31 @@ fn verify_bark_inputs(source: &Path, name: &str, recipe_sha256: &str) -> Result<
                 .is_some_and(
                     |(_, digest)| super::pinned(&record.runtime_image) && recipe.contains(digest)
                 ),
-        "Bark provenance does not match the frozen recipe"
+        "{name} provenance does not match the frozen recipe"
     );
-    if name == "cdk-bark-processor" {
-        let digest = format!(
-            "{:x}",
-            Sha256::digest(fs::read(
-                source.join("docker/payment/patches/bark-regtest-rpc.patch")
-            )?)
-        );
+    // Secondary inputs (vendor archives, extra lockfiles, base images) are named
+    // by digest in the transformations; each one must be checked by the recipe.
+    ensure!(
+        record
+            .transformations
+            .iter()
+            .flat_map(|entry| entry
+                .match_indices("sha256:")
+                .map(|(at, _)| &entry[at + 7..]))
+            .all(|rest| rest
+                .get(..64)
+                .is_some_and(|hash| sha256(hash) && recipe.contains(hash))),
+        "{name} provenance names an input its recipe does not check"
+    );
+    for patch in patches {
+        let digest = format!("{:x}", Sha256::digest(fs::read(source.join(patch))?));
         ensure!(
             recipe.contains(&digest)
                 && record
                     .transformations
                     .iter()
                     .any(|entry| entry.contains(&format!("sha256:{digest}"))),
-            "Bark processor patch identity differs from its provenance"
+            "{name} patch identity differs from its provenance: {patch}"
         );
     }
     Ok(())
@@ -200,7 +250,10 @@ fn probe(name: &str) -> Result<&'static str> {
         }
         "cdk-cli-wallet" => "cdk-cli --version",
         "cocod-wallet" => "cocod --version",
-        "ldk-server" => "ldk-server --version && ldk-server-cli --version",
+        // Only images built from 762bc47 onwards record their revision.
+        "ldk-server" => {
+            "ldk-server --version && ldk-server-cli --version && if test -f /usr/local/share/ldk-server-revision; then cat /usr/local/share/ldk-server-revision; fi"
+        }
         // Upstream has no version-only command. Verify the executable and pinned
         // build identity offline; the live gate separately exercises GetSettings.
         "cdk-ldk-server-processor" => {
@@ -214,6 +267,15 @@ fn probe(name: &str) -> Result<&'static str> {
         }
         "cln-hold" => {
             "lightningd --version && test -x /usr/local/bin/hold && cat /usr/local/share/hold-revision"
+        }
+        // The operator has no version command and atlas may reach the network.
+        "spark-operator" => {
+            "spark-frost-signer --version && test -x /usr/local/bin/spark-operator && test -x /usr/local/bin/atlas && test -s /opt/spark/migrations/atlas.sum && test -s /opt/spark/ephemeral_migrations/atlas.sum && cat /usr/local/share/spark-revision"
+        }
+        // open-ssp has no version command; any invocation starts the service.
+        "open-ssp" => "test -x /usr/local/bin/open-ssp && cat /usr/local/share/open-ssp-revision",
+        "cdk-spark-processor" => {
+            "test -x /usr/local/bin/cdk-payment-processor-spark && cat /usr/local/share/processor-revision /usr/local/share/processor-patch-sha256"
         }
         _ => bail!("unknown catalog probe"),
     })
@@ -497,7 +559,12 @@ fn prepare(root: &Path, work: &Path, name: &str, platform: &str, copy: Option<&s
             "{:x}",
             Sha256::digest(fs::read(staging.path().join("source").join(recipe))?)
         );
-        verify_bark_inputs(&staging.path().join("source"), name, &recipe_sha256)?;
+        verify_build_inputs(
+            &staging.path().join("source"),
+            name,
+            version,
+            &recipe_sha256,
+        )?;
         if name == "cocod-wallet" {
             prepare_cocod(staging.path(), &recipe_sha256)?;
         }
@@ -593,6 +660,10 @@ fn valid_probe_version(repository: &str, version: &str, output: &str) -> bool {
         }),
         "cdk-cli-wallet" => output.trim() == format!("cdk-cli {version}"),
         "cocod-wallet" => output.trim() == "0.0.17",
+        "ldk-server" if version == "0.1.0-762bc47" => {
+            output.trim()
+                == "ldk-server 0.1.0 (unknown)\nldk-server-cli 0.1.0 (unknown)\n762bc473342c8f945475785ec6743a9b26f56aff"
+        }
         "ldk-server" => output.trim() == "ldk-server 0.1.0\nldk-server-cli 0.1.0",
         "cdk-ldk-server-processor" => output.trim() == "fe468cad486157683eddbc0df4ff87ba71b6c0a3",
         "cdk-bark-processor" => {
@@ -604,6 +675,14 @@ fn valid_probe_version(repository: &str, version: &str, output: &str) -> bool {
                 == "captaind 0.7.0-dev+6188e2d809f193716b2e571274179f069d9c19ca\n6188e2d809f193716b2e571274179f069d9c19ca"
         }
         "cln-hold" => output.trim() == "v26.06.7\naf0055b132f3b9f24d0b1d478a15005fcf8f014f",
+        "spark-operator" => {
+            output.trim() == "spark-frost-signer 0.1.0\n5e0c879de2775f6a34aea6d3b0c455d065a3a70f"
+        }
+        "open-ssp" => output.trim() == "9c25f69924490c22a66f03a98e5840015383dc79",
+        "cdk-spark-processor" => {
+            output.trim()
+                == "d7244e261506b51d5b309a558bf19cd4ffc32f13\n5c2bdd606e691c48adb31fd621081aeecf53d5550ee5fa1c3e1262c1afb053a6\n499a3baa6e432020bf71ecf0656fdc4c3cb91acae89adaa6c5ae7032fe7c280d"
+        }
         "cdk-mint" | "cdk-mint-management" | "cdk-ldk-mint-management" => {
             let lines: Vec<_> = output.lines().filter(|line| !line.is_empty()).collect();
             lines

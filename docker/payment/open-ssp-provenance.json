@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/benthecarman/open-ssp",
+  "commit_sha": "9c25f69924490c22a66f03a98e5840015383dc79",
+  "artifact_url": "https://codeload.github.com/benthecarman/open-ssp/tar.gz/9c25f69924490c22a66f03a98e5840015383dc79",
+  "artifact_sha256": "57e8b0b71374bc70bb9dde2044ebf07146ea273d67907a7a99f4e1a48618bd85",
+  "platform": "linux/amd64,linux/arm64",
+  "runtime_image": "docker.io/library/debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+  "recipe_digest": "sha256:4243dbaf06831c6e4e19d604caae56743856821d7ec1bc5294dd804c86e4d16e",
+  "package_path": ".",
+  "dependency_lock_digest": "sha256:52bc990afd39506ed3d9e18c22390616460f360a47386d6c8cdb1b1ac85c8835",
+  "build_image": "docker.io/library/rust@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e",
+  "transformations": [
+    "Place the submodule revisions open-ssp records as source archives: benthecarman/spark-sdk 2472fdc0e136868eb10e5ad9f501a7e740080f04 (sha256:72b009bc48ee723ed44886317b96d49081f90c0df0215a52a6f3297b22442b41) at vendor/breez-sdk and benthecarman/spark 5e0c879de2775f6a34aea6d3b0c455d065a3a70f (sha256:af3ba2444547440572b7e0a92916a66c5f4efb769438d7bd6815e5b9fb2fe1f3) at vendor/spark.",
+    "Build only the open-ssp binary with the unchanged Cargo.lock and release LTO disabled; no application source patches. Install curl for admin-endpoint recipes and record the source revision in the image."
+  ]
+}

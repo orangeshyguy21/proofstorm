@@ -1,0 +1,20 @@
+# LDK Server with macaroon authentication, the revision open-ssp's client requires.
+FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS build
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler clang cmake && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN curl -fsSL https://codeload.github.com/lightningdevkit/ldk-server/tar.gz/762bc473342c8f945475785ec6743a9b26f56aff -o /tmp/source.tar.gz \
+    && echo 'b3cb9756d17a60384c940f209b0987fde0162bfd41561f743047fa3d983045ed  /tmp/source.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /src \
+    && echo '0ae4d42100a5f62050c546b5ca74eae9ddcbfd32d93d94dceb00e3f53f03a9ab  Cargo.lock' | sha256sum -c -
+ENV CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked --mount=type=cache,target=/usr/local/cargo/git,sharing=locked --mount=type=cache,id=ldk-server-762bc47-target,target=/src/target,sharing=locked \
+    cargo build --locked --release --jobs 2 -p ldk-server -p ldk-server-cli \
+    && cp target/release/ldk-server target/release/ldk-server-cli /usr/local/bin/
+
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bin/ldk-server /usr/local/bin/ldk-server-cli /usr/local/bin/
+RUN printf '%s\n' '762bc473342c8f945475785ec6743a9b26f56aff' > /usr/local/share/ldk-server-revision
+ENV HOME=/data
+USER 1000:1000
+CMD ["ldk-server", "/config/config.toml"]

@@ -1,0 +1,28 @@
+--- a/crates/spark/src/backend.rs
++++ b/crates/spark/src/backend.rs
+@@ -589,6 +589,25 @@
+             .insert_melt_payment_id(&payment_hash, &payment.id)
+             .map_err(|e| Error::Custom(e.to_string()))?;
+ 
++        // The SSP settles Lightning asynchronously and this processor emits no
++        // outgoing-payment events, so wait briefly for the final state.
++        let mut payment = payment;
++        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
++        while Self::send_status(payment.status, payment.payment_preimage.is_some())
++            == MeltQuoteState::Pending
++            && tokio::time::Instant::now() < deadline
++        {
++            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
++            if let Some(latest) = self
++                .wallet
++                .fetch_lightning_send_payment(&payment.id)
++                .await
++                .map_err(|e| Error::Backend(Box::new(e)))?
++            {
++                payment = latest;
++            }
++        }
++
+         Ok(Self::outgoing_response(
+             payment_identifier,
+             amount_sats,

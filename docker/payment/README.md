@@ -2,6 +2,8 @@
 
 The separate [Bark build foundation](BARK.md) documents the pinned RPC patch and
 capability checks under development; it is not yet an installed component.
+The [Spark images](SPARK.md) and their open-ssp compatibility patches are built from
+pinned sources but are not yet catalog components.
 
 The first external CDK payment processor profile uses three independently
 controlled components:

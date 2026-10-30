@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/lightningdevkit/ldk-server",
+  "commit_sha": "762bc473342c8f945475785ec6743a9b26f56aff",
+  "artifact_url": "https://codeload.github.com/lightningdevkit/ldk-server/tar.gz/762bc473342c8f945475785ec6743a9b26f56aff",
+  "artifact_sha256": "b3cb9756d17a60384c940f209b0987fde0162bfd41561f743047fa3d983045ed",
+  "platform": "linux/amd64,linux/arm64",
+  "runtime_image": "docker.io/library/debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+  "recipe_digest": "sha256:cf0c2a6f5c9a2df9240b3c3b95f51918cdd04697dbf4e85230c381274559ad28",
+  "package_path": "ldk-server",
+  "dependency_lock_digest": "sha256:0ae4d42100a5f62050c546b5ca74eae9ddcbfd32d93d94dceb00e3f53f03a9ab",
+  "build_image": "docker.io/library/rust@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e",
+  "transformations": [
+    "Build the pinned upstream source with its unchanged Cargo.lock; no application source patches. This revision authenticates with macaroons, as open-ssp requires.",
+    "Disable release LTO, retain the native CLI, and record the source revision in the image."
+  ]
+}

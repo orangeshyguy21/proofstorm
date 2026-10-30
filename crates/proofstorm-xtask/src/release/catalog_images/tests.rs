@@ -60,83 +60,110 @@ fn explicit_versions_bind_recipes_receipts_and_exact_probe_output() {
     );
 }
 
+/// Recipe, version, provenance record and exact native probe output.
+const ADDED_VERSIONS: &[(&str, &str, &str, &str)] = &[
+    (
+        "cdk-bark-processor",
+        "0.1.0-fe468ca",
+        "docker/payment/cdk-bark-provenance.json",
+        "fe468cad486157683eddbc0df4ff87ba71b6c0a3\nabc3f967d754cdf5e484bf434ef52fa216dfb37cdcbb8fd896477e5c7b40321c\n",
+    ),
+    (
+        "bark-server",
+        "0.7.0-6188e2d",
+        "docker/payment/bark-server-provenance.json",
+        "captaind 0.7.0-dev+6188e2d809f193716b2e571274179f069d9c19ca\n6188e2d809f193716b2e571274179f069d9c19ca\n",
+    ),
+    (
+        "cln-hold",
+        "26.06.7-hold.0.3.3",
+        "docker/payment/cln-hold-provenance.json",
+        "v26.06.7\naf0055b132f3b9f24d0b1d478a15005fcf8f014f\n",
+    ),
+    (
+        "ldk-server",
+        "0.1.0-50fe752",
+        "docker/payment/ldk-server-provenance.json",
+        "ldk-server 0.1.0\nldk-server-cli 0.1.0\n",
+    ),
+    (
+        "cdk-ldk-server-processor",
+        "0.1.0-fe468ca",
+        "docker/payment/cdk-ldk-server-provenance.json",
+        "fe468cad486157683eddbc0df4ff87ba71b6c0a3\n",
+    ),
+    (
+        "cdk-mint",
+        "0.18.1",
+        "docker/mint/cdk-0.18.1-provenance.json",
+        "cdk-mint-rpc 0.18.1\ncdk-mintd 0.18.1\n",
+    ),
+    (
+        "cdk-cli-wallet",
+        "0.18.1",
+        "docker/wallet/cdk-cli-0.18.1-provenance.json",
+        "cdk-cli 0.18.1\n",
+    ),
+    (
+        "cdk-mint",
+        "0.18.2",
+        "docker/mint/cdk-0.18.2-provenance.json",
+        "cdk-mint-rpc 0.18.2\ncdk-mintd 0.18.2\n",
+    ),
+    (
+        "cdk-cli-wallet",
+        "0.18.2",
+        "docker/wallet/cdk-cli-0.18.2-provenance.json",
+        "cdk-cli 0.18.2\n",
+    ),
+    (
+        "bitcoin-core",
+        "29.4",
+        "docker/bitcoin/bitcoin-29.4-provenance.json",
+        "Bitcoin Core daemon version v29.4.0\n",
+    ),
+    (
+        "bitcoin-core",
+        "30.3",
+        "docker/bitcoin/bitcoin-30.3-provenance.json",
+        "Bitcoin Core daemon version v30.3.0 bitcoind\n",
+    ),
+    (
+        "nutshell-mint",
+        "0.21.0",
+        "docker/mint/nutshell-0.21.0-provenance.json",
+        "Nutshell, version 0.21.0\nUsage: cashu [OPTIONS] COMMAND [ARGS]...\nUsage: mint-cli [OPTIONS] COMMAND [ARGS]...\n",
+    ),
+    (
+        "ldk-server",
+        "0.1.0-762bc47",
+        "docker/payment/ldk-server-762bc47-provenance.json",
+        "ldk-server 0.1.0 (unknown)\nldk-server-cli 0.1.0 (unknown)\n762bc473342c8f945475785ec6743a9b26f56aff\n",
+    ),
+    (
+        "spark-operator",
+        "0.0.0-5e0c879",
+        "docker/payment/spark-operator-provenance.json",
+        "spark-frost-signer 0.1.0\n5e0c879de2775f6a34aea6d3b0c455d065a3a70f\n",
+    ),
+    (
+        "open-ssp",
+        "0.1.0-9c25f69",
+        "docker/payment/open-ssp-provenance.json",
+        "9c25f69924490c22a66f03a98e5840015383dc79\n",
+    ),
+    (
+        "cdk-spark-processor",
+        "0.1.0-d7244e2",
+        "docker/payment/cdk-spark-provenance.json",
+        "d7244e261506b51d5b309a558bf19cd4ffc32f13\n5c2bdd606e691c48adb31fd621081aeecf53d5550ee5fa1c3e1262c1afb053a6\n499a3baa6e432020bf71ecf0656fdc4c3cb91acae89adaa6c5ae7032fe7c280d\n",
+    ),
+];
+
 #[test]
 fn added_version_recipes_match_their_provenance_and_native_versions() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for (name, version, provenance, output) in [
-        (
-            "cdk-bark-processor",
-            "0.1.0-fe468ca",
-            "docker/payment/cdk-bark-provenance.json",
-            "fe468cad486157683eddbc0df4ff87ba71b6c0a3\nabc3f967d754cdf5e484bf434ef52fa216dfb37cdcbb8fd896477e5c7b40321c\n",
-        ),
-        (
-            "bark-server",
-            "0.7.0-6188e2d",
-            "docker/payment/bark-server-provenance.json",
-            "captaind 0.7.0-dev+6188e2d809f193716b2e571274179f069d9c19ca\n6188e2d809f193716b2e571274179f069d9c19ca\n",
-        ),
-        (
-            "cln-hold",
-            "26.06.7-hold.0.3.3",
-            "docker/payment/cln-hold-provenance.json",
-            "v26.06.7\naf0055b132f3b9f24d0b1d478a15005fcf8f014f\n",
-        ),
-        (
-            "ldk-server",
-            "0.1.0-50fe752",
-            "docker/payment/ldk-server-provenance.json",
-            "ldk-server 0.1.0\nldk-server-cli 0.1.0\n",
-        ),
-        (
-            "cdk-ldk-server-processor",
-            "0.1.0-fe468ca",
-            "docker/payment/cdk-ldk-server-provenance.json",
-            "fe468cad486157683eddbc0df4ff87ba71b6c0a3\n",
-        ),
-        (
-            "cdk-mint",
-            "0.18.1",
-            "docker/mint/cdk-0.18.1-provenance.json",
-            "cdk-mint-rpc 0.18.1\ncdk-mintd 0.18.1\n",
-        ),
-        (
-            "cdk-cli-wallet",
-            "0.18.1",
-            "docker/wallet/cdk-cli-0.18.1-provenance.json",
-            "cdk-cli 0.18.1\n",
-        ),
-        (
-            "cdk-mint",
-            "0.18.2",
-            "docker/mint/cdk-0.18.2-provenance.json",
-            "cdk-mint-rpc 0.18.2\ncdk-mintd 0.18.2\n",
-        ),
-        (
-            "cdk-cli-wallet",
-            "0.18.2",
-            "docker/wallet/cdk-cli-0.18.2-provenance.json",
-            "cdk-cli 0.18.2\n",
-        ),
-        (
-            "bitcoin-core",
-            "29.4",
-            "docker/bitcoin/bitcoin-29.4-provenance.json",
-            "Bitcoin Core daemon version v29.4.0\n",
-        ),
-        (
-            "bitcoin-core",
-            "30.3",
-            "docker/bitcoin/bitcoin-30.3-provenance.json",
-            "Bitcoin Core daemon version v30.3.0 bitcoind\n",
-        ),
-        (
-            "nutshell-mint",
-            "0.21.0",
-            "docker/mint/nutshell-0.21.0-provenance.json",
-            "Nutshell, version 0.21.0\nUsage: cashu [OPTIONS] COMMAND [ARGS]...\nUsage: mint-cli [OPTIONS] COMMAND [ARGS]...\n",
-        ),
-    ] {
+    for &(name, version, provenance, output) in ADDED_VERSIONS {
         let recipe = versioned_recipe(name, version).unwrap();
         let record: proofstorm_core::BuildProvenance =
             serde_json::from_slice(&fs::read(root.join(provenance)).unwrap()).unwrap();
@@ -180,19 +207,39 @@ fn current_catalog_has_one_cdk_mint_recipe_and_old_receipts_remain_readable() {
 }
 
 #[test]
-fn bark_build_inputs_and_probes_bind_every_source_identity() {
+fn payment_stack_build_inputs_and_probes_bind_every_source_identity() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for name in ["cdk-bark-processor", "bark-server", "cln-hold"] {
-        let recipe_path = recipe(name).unwrap();
+    for (name, version) in [
+        ("cdk-bark-processor", "0.1.0-fe468ca"),
+        ("bark-server", "0.7.0-6188e2d"),
+        ("cln-hold", "26.06.7-hold.0.3.3"),
+        ("spark-operator", "0.0.0-5e0c879"),
+        ("open-ssp", "0.1.0-9c25f69"),
+        ("cdk-spark-processor", "0.1.0-d7244e2"),
+        ("ldk-server", "0.1.0-762bc47"),
+    ] {
+        assert!(bound_inputs(name, version).is_some(), "{name}@{version}");
+        let recipe_path = versioned_recipe(name, version).unwrap();
         let hash = format!(
             "{:x}",
             Sha256::digest(fs::read(root.join(recipe_path)).unwrap())
         );
-        verify_bark_inputs(&root, name, &hash).unwrap();
-        assert!(verify_bark_inputs(&root, name, &"0".repeat(64)).is_err());
+        verify_build_inputs(&root, name, version, &hash).unwrap();
+        assert!(verify_build_inputs(&root, name, version, &"0".repeat(64)).is_err());
         assert!(selector(&format!("{name}@latest")).is_err());
-        assert!(!valid_probe(name, "wrong revision"));
+        assert!(!valid_probe_version(name, version, "wrong revision"));
     }
+    // The legacy LDK Server recipe predates bound provenance and stays unbound.
+    assert!(bound_inputs("ldk-server", "0.1.0-50fe752").is_none());
+    assert!(!valid_probe_version(
+        "ldk-server",
+        "0.1.0-762bc47",
+        "ldk-server 0.1.0\nldk-server-cli 0.1.0\n"
+    ));
+    assert!(!valid_probe(
+        "cdk-spark-processor",
+        "d7244e261506b51d5b309a558bf19cd4ffc32f13\n5c2bdd606e691c48adb31fd621081aeecf53d5550ee5fa1c3e1262c1afb053a6"
+    ));
     assert!(!valid_probe(
         "cdk-bark-processor",
         "fe468cad486157683eddbc0df4ff87ba71b6c0a3"
@@ -202,25 +249,48 @@ fn bark_build_inputs_and_probes_bind_every_source_identity() {
         "bark-server",
         "captaind 0.7.0-dev+wrong\n6188e2d809f193716b2e571274179f069d9c19ca"
     ));
-    let work = tempfile::tempdir().unwrap();
-    fs::create_dir_all(work.path().join("docker/payment/patches")).unwrap();
-    for path in [
-        "docker/payment/Dockerfile.cdk-bark",
-        "docker/payment/cdk-bark-provenance.json",
+    for (name, version) in [
+        ("cdk-bark-processor", "0.1.0-fe468ca"),
+        ("cdk-spark-processor", "0.1.0-d7244e2"),
     ] {
-        fs::copy(root.join(path), work.path().join(path)).unwrap();
+        let (provenance, patches) = bound_inputs(name, version).unwrap();
+        let recipe_path = recipe(name).unwrap();
+        let hash = format!(
+            "{:x}",
+            Sha256::digest(fs::read(root.join(recipe_path)).unwrap())
+        );
+        for drifted in patches {
+            let work = tempfile::tempdir().unwrap();
+            fs::create_dir_all(work.path().join("docker/payment/patches")).unwrap();
+            for path in patches.iter().chain([&recipe_path, &provenance]) {
+                fs::copy(root.join(path), work.path().join(path)).unwrap();
+            }
+            verify_build_inputs(work.path(), name, version, &hash).unwrap();
+            fs::write(work.path().join(drifted), "drifted patch").unwrap();
+            assert!(verify_build_inputs(work.path(), name, version, &hash).is_err());
+        }
     }
-    fs::write(
-        work.path()
-            .join("docker/payment/patches/bark-regtest-rpc.patch"),
-        "drifted patch",
+    // A secondary input named in the provenance must be checked by the recipe.
+    let work = tempfile::tempdir().unwrap();
+    fs::create_dir_all(work.path().join("docker/payment")).unwrap();
+    let (provenance, _) = bound_inputs("open-ssp", "0.1.0-9c25f69").unwrap();
+    fs::copy(
+        root.join("docker/payment/Dockerfile.open-ssp"),
+        work.path().join("docker/payment/Dockerfile.open-ssp"),
     )
     .unwrap();
+    let mut record: Value =
+        serde_json::from_slice(&fs::read(root.join(provenance)).unwrap()).unwrap();
+    record["transformations"]
+        .as_array_mut()
+        .unwrap()
+        .push(format!("Unchecked vendor archive sha256:{}", "1".repeat(64)).into());
+    fs::write(work.path().join(provenance), record.to_string()).unwrap();
     let hash = format!(
         "{:x}",
-        Sha256::digest(fs::read(root.join(recipe("cdk-bark-processor").unwrap())).unwrap())
+        Sha256::digest(fs::read(root.join("docker/payment/Dockerfile.open-ssp")).unwrap())
     );
-    assert!(verify_bark_inputs(work.path(), "cdk-bark-processor", &hash).is_err());
+    assert!(verify_build_inputs(work.path(), "open-ssp", "0.1.0-9c25f69", &hash).is_err());
 }
 
 #[test]

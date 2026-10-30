@@ -1,6 +1,6 @@
 //! Offline candidate handoff for the managed Bark gate. Never publishes images.
 use super::{
-    Input, Publication, Receipt, bundle, inspect, load, recipe, sha256, text, verify_bark_inputs,
+    Input, Publication, Receipt, bundle, inspect, load, recipe, sha256, text, verify_build_inputs,
 };
 use anyhow::{Context, Result, ensure};
 use flate2::read::GzDecoder;
@@ -165,8 +165,8 @@ fn candidate(
             && native["published"] == false,
         "candidate was not built on the matching native Linux runner"
     );
-    verify_bark_inputs(&work.join("source"), name, recipe_sha256)?;
-    verify_bark_inputs(root, name, recipe_sha256)?;
+    verify_build_inputs(&work.join("source"), name, version, recipe_sha256)?;
+    verify_build_inputs(root, name, version, recipe_sha256)?;
     // Reuse is allowed across application-only changes, never changed build inputs.
     let stem = if name == "cdk-bark-processor" {
         "cdk-bark"
