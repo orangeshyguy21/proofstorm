@@ -119,7 +119,7 @@ pub fn render_node(plan: &ComponentPlanContract) -> Result<RenderedComponent, Ad
         chain.component_id
     );
     let mut rendered = RenderedComponent::default();
-    rendered.config_maps.push(resource(json!({"apiVersion":"v1","kind":"ConfigMap","metadata":metadata(&name,&plan.instance_key,&namespace,Some(id)),"data":{"config.toml":native}}))?);
+    rendered.config_maps.push(resource(json!({"apiVersion":"v1","kind":"ConfigMap","metadata":metadata(&name,&plan.instance_key,&namespace,Some(id)),"data":{"config.toml":native,"rpc.cookie":format!("{RPC_USER}:{RPC_PASSWORD}\n")}}))?);
     rendered.services.push(resource(service_from_plan(plan))?);
     let mut workload = stateful_set(
         &plan.instance_key,
@@ -139,7 +139,15 @@ pub fn render_node(plan: &ComponentPlanContract) -> Result<RenderedComponent, Ad
         .expect("node mounts")
         .push(json!({"name":"config","mountPath":"/config","readOnly":true}));
     pod["volumes"] = json!([{"name":"config","configMap":{"name":name}}]);
+    // LDK Server 0.1.0-762bc47 aborts its first start when the chain is unreachable.
+    pod["initContainers"] = json!([super::bark_stack::wait_chain(
+        plan,
+        &format!("http://{}:{rpc}", chain.component_id),
+        "/config/rpc.cookie",
+        "/config"
+    )]);
     rendered.stateful_sets.push(resource(workload)?);
+    install_component_driver(&mut rendered)?;
     Ok(rendered)
 }
 

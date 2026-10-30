@@ -226,7 +226,8 @@
       {
         "apiVersion": "v1",
         "data": {
-          "config.toml": "[node]\nnetwork = \"regtest\"\nalias = \"ldk\"\nlistening_addresses = [\"0.0.0.0:9735\"]\nannouncement_addresses = [\"ldk:9735\"]\ngrpc_service_address = \"0.0.0.0:3536\"\n\n[storage.disk]\ndir_path = \"/data\"\n\n[tls]\nhosts = [\"ldk\"]\n\n[bitcoind]\nrpc_address = \"chain:18443\"\nrpc_user = \"proofstorm\"\nrpc_password = \"proofstorm-regtest-only\"\n"
+          "config.toml": "[node]\nnetwork = \"regtest\"\nalias = \"ldk\"\nlistening_addresses = [\"0.0.0.0:9735\"]\nannouncement_addresses = [\"ldk:9735\"]\ngrpc_service_address = \"0.0.0.0:3536\"\n\n[storage.disk]\ndir_path = \"/data\"\n\n[tls]\nhosts = [\"ldk\"]\n\n[bitcoind]\nrpc_address = \"chain:18443\"\nrpc_user = \"proofstorm\"\nrpc_password = \"proofstorm-regtest-only\"\n",
+          "rpc.cookie": "proofstorm:proofstorm-regtest-only\n"
         },
         "kind": "ConfigMap",
         "metadata": {
@@ -387,11 +388,83 @@
                       "mountPath": "/config",
                       "name": "config",
                       "readOnly": true
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
                     }
                   ]
                 }
               ],
               "enableServiceLinks": false,
+              "initContainers": [
+                {
+                  "command": [
+                    "/usr/local/lib/proofstorm-driver",
+                    "install"
+                  ],
+                  "image": "proofstorm-controller:driver-image-required",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "proofstorm-driver",
+                  "resources": {
+                    "limits": {
+                      "cpu": "200m",
+                      "memory": "128Mi"
+                    },
+                    "requests": {
+                      "cpu": "10m",
+                      "memory": "16Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    },
+                    "readOnlyRootFilesystem": true,
+                    "runAsNonRoot": true
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver"
+                    }
+                  ]
+                },
+                {
+                  "command": [
+                    "/opt/proofstorm/driver",
+                    "wait-bark-chain",
+                    "http://chain:18443",
+                    "/config/rpc.cookie"
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/ldk-server@sha256:1a21ea3bdd9a73ce04e3e8159ebcd66fcfec25a649b71798d1f9bb3c454d94a3",
+                  "name": "wait-for-bitcoin",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/config",
+                      "name": "config",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
               "securityContext": {
                 "fsGroup": 1000,
                 "runAsGroup": 1000,
@@ -408,6 +481,10 @@
                     "name": "ldk-config"
                   },
                   "name": "config"
+                },
+                {
+                  "emptyDir": {},
+                  "name": "proofstorm-driver"
                 }
               ]
             }
