@@ -6,8 +6,19 @@ The images build from pinned sources with recorded patches. Proofstorm models,
 validates and renders the stack, but its catalog entries appear only for platforms
 pinned in `crates/proofstorm-core/src/spark_images.json`, which stays empty until the
 images are published. The managed `spark-processor` gate and its native image
-pipeline are described under [Build and validation](#build-and-validation); no
-managed qualification has passed yet.
+pipeline are described under [Build and validation](#build-and-validation).
+
+The gate passed a local managed qualification on native ARM64 (Docker Desktop on Apple
+silicon) on 2026-10-30, at commit `692da71`. It covered:
+- settings and transport refusals
+- SSP funding and the channel
+- an unpaid quote, a mint paid while the processor was stopped, and two melts, across
+  two full-stack restarts with every identity unchanged
+- an unreachable melt that was never paid
+- cleanup
+
+Melts carried no payment preimage, as documented. AMD64 qualification needs a native
+AMD64 runner.
 
 A Docker Compose probe (2026-10-29, native ARM64) passed:
 - a real BOLT11 mint and melt through a CDK 0.18.2 mint, this processor, three Spark
