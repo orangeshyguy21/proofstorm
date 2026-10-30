@@ -1,29 +1,161 @@
 //! Explicitly opt-in tests using an installed CLI, with no model account/Docker.
 use super::*;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
+#[derive(Clone, Copy, PartialEq)]
+enum ModelScript {
+    Complete,
+    Denied,
+    Stall,
+}
+
+/// Loopback OpenAI-compatible model. Like an HTTP/1.0 server it handles one
+/// connection at a time, so a stalled response holds back any later request.
+struct FixtureModel {
+    port: u16,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl FixtureModel {
+    fn start(script: ModelScript, work: &Path) -> Result<Self> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        let port = listener.local_addr()?.port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (work, stopping) = (work.to_owned(), Arc::clone(&stop));
+        let thread = std::thread::spawn(move || {
+            let mut calls = 0;
+            for stream in listener.incoming() {
+                if stopping.load(Ordering::SeqCst) {
+                    break;
+                }
+                // A failed exchange shows up as missing requests.jsonl records.
+                if let Ok(stream) = stream {
+                    let _ = serve_model_request(stream, script, &work, &mut calls, &stopping);
+                }
+            }
+        });
+        Ok(Self {
+            port,
+            stop,
+            thread: Some(thread),
+        })
+    }
+}
+
+impl Drop for FixtureModel {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // Wake the blocking accept so the thread sees the stop flag.
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn serve_model_request(
+    mut stream: TcpStream,
+    script: ModelScript,
+    work: &Path,
+    calls: &mut usize,
+    stop: &AtomicBool,
+) -> Result<()> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let post = line.starts_with("POST ");
+    let (mut length, mut plugin) = (0, None);
+    loop {
+        line.clear();
+        reader.read_line(&mut line)?;
+        let Some((name, value)) = line.trim_end().split_once(':') else {
+            break;
+        };
+        match name.trim().to_ascii_lowercase().as_str() {
+            "content-length" => length = value.trim().parse()?,
+            "x-proofstorm-fixture" => plugin = Some(value.trim().to_owned()),
+            _ => {}
+        }
+    }
+    if !post {
+        stream.write_all(b"HTTP/1.0 501 Unsupported method\r\n\r\n")?;
+        return Ok(());
+    }
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body)?;
+    let mut request: Value = serde_json::from_slice(&body)?;
+    request["fixture_plugin"] = json!(plugin);
+    let mut requests = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(work.join("requests.jsonl"))?;
+    writeln!(requests, "{request}")?;
+    *calls += 1;
+    let call = *calls;
+    let (delta, finish) = match (call, script) {
+        (1, _) => (
+            json!({"role":"assistant","tool_calls":[{"index":0,"id":"fixture-call","type":"function","function":{"name":"proofstorm_catalog_list","arguments":"{}"}}]}),
+            "tool_calls",
+        ),
+        (2, ModelScript::Denied) => (
+            json!({"role":"assistant","tool_calls":[{"index":0,"id":"forbidden-call","type":"function","function":{"name":"shell","arguments":"{\"command\":\"echo forbidden\"}"}}]}),
+            "tool_calls",
+        ),
+        _ => (
+            json!({"role":"assistant","content":"fixture complete"}),
+            "stop",
+        ),
+    };
+    let chunks = [
+        json!({"id":format!("fixture-{call}"),"object":"chat.completion.chunk","model":"model","choices":[{"index":0,"delta":delta,"finish_reason":null}]}),
+        json!({"id":format!("fixture-{call}"),"object":"chat.completion.chunk","model":"model","choices":[{"index":0,"delta":{},"finish_reason":finish}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}),
+    ];
+    let head = format!(
+        "HTTP/1.0 200 OK\r\nContent-Type: text/event-stream\r\nx-request-id: http-fixture-{call}\r\nset-cookie: fixture-secret-cookie\r\n"
+    );
+    if script == ModelScript::Stall && call == 2 {
+        stream.write_all(format!("{head}\r\ndata: {}\n\n", chunks[0]).as_bytes())?;
+        stream.flush()?;
+        fs::write(work.join("stalled"), "ready")?;
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(60) && !stop.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        return Ok(());
+    }
+    let payload: String = chunks
+        .iter()
+        .map(|chunk| format!("data: {chunk}\n\n"))
+        .chain(["data: [DONE]\n\n".to_owned()])
+        .collect();
+    stream.write_all(
+        format!("{head}Content-Length: {}\r\n\r\n{payload}", payload.len()).as_bytes(),
+    )?;
+    Ok(())
+}
 
 fn contract(denied: bool, timeout: bool) -> Result<()> {
     let temporary = tempfile::tempdir()?;
     let work = std::env::var_os("PROOFSTORM_OPENCODE_TEST_WORK")
         .map_or_else(|| temporary.path().join("run"), std::path::PathBuf::from);
     fs::create_dir(&work)?;
-    let fixture = work.join("fixture.py");
-    fs::write(&fixture, include_str!("fixture.py"))?;
-    let mut model = Command::new("python3")
-        .arg(&fixture)
-        .arg(if timeout {
-            "stall"
-        } else if denied {
-            "denied"
-        } else {
-            "model"
-        })
-        .arg(&work)
-        .stdout(Stdio::piped())
-        .spawn()?;
+    let script = if timeout {
+        ModelScript::Stall
+    } else if denied {
+        ModelScript::Denied
+    } else {
+        ModelScript::Complete
+    };
+    let model = FixtureModel::start(script, &work)?;
+    let mcp = work.join("fixture-mcp.sh");
+    fs::write(&mcp, include_str!("fixture-mcp.sh"))?;
     let result = (|| -> Result<()> {
-        let mut port = String::new();
-        BufReader::new(model.stdout.take().context("model port")?).read_line(&mut port)?;
         let mut context = Context {
             root: std::env::current_dir()?,
             work: work.clone(),
@@ -60,13 +192,12 @@ export default Plugin.define({ id: "fixture.compat", async setup(ctx) {
         save(&work.join("benchmark-task.json"), &json!(context.task))?;
         save(
             &work.join("profile.json"),
-            &json!({"plugins":["./compat"],"providers":{"fixture":{"package":"@opencode/ai/providers/openai-compatible","settings":{"apiKey":"not-a-key","baseURL":format!("http://127.0.0.1:{}/v1",port.trim())},"models":{"model":{"capabilities":{"tools":true},"limit":{"context":32768,"output":1024}}}}}}),
+            &json!({"plugins":["./compat"],"providers":{"fixture":{"package":"@opencode/ai/providers/openai-compatible","settings":{"apiKey":"not-a-key","baseURL":format!("http://127.0.0.1:{}/v1",model.port)},"models":{"model":{"capabilities":{"tools":true},"limit":{"context":32768,"output":1024}}}}}}),
         )?;
         runtime::directories(&context)?;
         let (provider, _) = profile::prepare(&context)?;
         let mut config = profile::config(&context, &provider)?;
-        config["mcp"]["servers"]["proofstorm"]["command"] =
-            json!(["python3", fixture, "mcp", work]);
+        config["mcp"]["servers"]["proofstorm"]["command"] = json!(["bash", mcp, work]);
         save(&work.join("agent/opencode.json"), &config)?;
         let server = runtime::Server::start(&context)?;
         server.preflight(&context, &config)?;
@@ -259,25 +390,24 @@ export default Plugin.define({ id: "fixture.compat", async setup(ctx) {
         );
         Ok(())
     })();
-    let _ = model.kill();
-    let _ = model.wait();
+    drop(model);
     result
 }
 
 #[test]
-#[ignore = "requires explicit OpenCode 2 CLI and Python; fake model/MCP only"]
+#[ignore = "requires explicit OpenCode 2 CLI and jq; fake model/MCP only"]
 fn installed_cli_round_trip() -> Result<()> {
     contract(false, false)
 }
 
 #[test]
-#[ignore = "requires explicit OpenCode 2 CLI and Python; fake model/MCP only"]
+#[ignore = "requires explicit OpenCode 2 CLI and jq; fake model/MCP only"]
 fn installed_cli_forbidden_attempt() -> Result<()> {
     contract(true, false)
 }
 
 #[test]
-#[ignore = "requires explicit OpenCode 2 CLI and Python; fake model/MCP only"]
+#[ignore = "requires explicit OpenCode 2 CLI and jq; fake model/MCP only"]
 fn installed_cli_timeout_exports_and_cancels_owned_session() -> Result<()> {
     contract(false, true)
 }
