@@ -5,7 +5,8 @@
 //! variables, because cdk-mintd lets the environment override its config file.
 //! Only keys Proofstorm neither sets nor manages are accepted, the cell must
 //! opt in with `mint.native_config_override`, and the lock lists the
-//! overrides as unverified.
+//! overrides as unverified. A Nutshell name must also be a setting its pinned
+//! release reads; candidate builds are not checked.
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
@@ -233,6 +234,50 @@ pub fn reserved(implementation: &str, key: &str) -> Option<&'static str> {
         .iter()
         .find(matches)
         .map(|(_, field)| *field)
+}
+
+/// Setting names a pinned Nutshell release reads: the upper-cased fields of
+/// its `cashu.core.settings.Settings` (no env prefix or aliases), listed from
+/// that release's upstream image. A candidate build has no list.
+fn nutshell_settings(version: &str) -> Option<&'static str> {
+    match version {
+        "0.20.3" => Some(include_str!("native_settings/nutshell-0.20.3.txt")),
+        "0.21.0" => Some(include_str!("native_settings/nutshell-0.21.0.txt")),
+        _ => None,
+    }
+}
+
+/// Refuse `native_env` names the selected Nutshell release has no setting
+/// for: Nutshell ignores them, so a typo would silently change nothing.
+/// Candidate builds have no pinned list, so their names stay unchecked: a
+/// candidate's new setting must pass.
+pub(crate) fn validate_release_names(
+    component: &ComponentSpec,
+    entry: &crate::CatalogEntry,
+) -> Result<(), String> {
+    if component.implementation != "nutshell" || entry.source.is_some() {
+        return Ok(());
+    }
+    let version = &entry.version;
+    let Some(known) = nutshell_settings(version) else {
+        return Ok(());
+    };
+    let unknown = override_keys(component)
+        .into_iter()
+        .filter(|name| {
+            !known
+                .lines()
+                .any(|setting| setting.eq_ignore_ascii_case(name))
+        })
+        .collect::<Vec<_>>();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "native_config_override_unknown: component {:?} native_env names settings Nutshell {version} does not read: {}",
+        component.id,
+        unknown.join(", ")
+    ))
 }
 
 /// The override keys a component sets: env names, or dotted TOML leaf paths.
@@ -532,5 +577,58 @@ mod tests {
             message(json!({"PROOFSTORM_X": "1"})),
             "PROOFSTORM_ environment variables are reserved"
         );
+    }
+
+    #[test]
+    fn nutshell_names_must_be_settings_the_selected_release_reads() {
+        let catalog = crate::default_catalog();
+        let mint = |version: &str, env: Value| {
+            let entry = catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == "nutshell" && entry.version == version)
+                .expect("pinned release");
+            let mut component = cell(&json!({"native_env": env}), &json!({}), &json!([ALLOW]))
+                .components
+                .remove(0);
+            component.version = Some(version.into());
+            component.config_version.clone_from(&entry.config_version);
+            crate::validate_catalog_component(&component, catalog).map(|_| ())
+        };
+        // Nutshell reads names ignoring case.
+        let known = json!({"log_level": "DEBUG", "MINT_WATCHDOG_IGNORE_MISMATCH": "true"});
+        assert_eq!(mint("0.21.0", known), Ok(()));
+        assert_eq!(
+            mint(
+                "0.21.0",
+                json!({"LOG_LEVEL": "DEBUG", "MINT_MNEMONIC": "x", "MINT_WATCHDOG_IGNORE_MISMACH": "true"})
+            ),
+            Err("native_config_override_unknown: component \"nutshell\" native_env names settings Nutshell 0.21.0 does not read: MINT_MNEMONIC, MINT_WATCHDOG_IGNORE_MISMACH".into())
+        );
+        // Each release has its own list: 0.21.0 dropped the Blink backend.
+        let blink = json!({"MINT_BLINK_KEY": "x"});
+        assert_eq!(mint("0.20.3", blink.clone()), Ok(()));
+        assert!(mint("0.21.0", blink).is_err());
+    }
+
+    #[test]
+    fn every_pinned_nutshell_has_setting_names() {
+        // A Nutshell bump needs the new release's names, or typos pass again.
+        for platform in [
+            crate::CatalogPlatform::LinuxAmd64,
+            crate::CatalogPlatform::LinuxArm64,
+        ] {
+            for entry in crate::catalog_for_platform(platform)
+                .entries
+                .iter()
+                .filter(|entry| entry.id == "nutshell")
+            {
+                assert!(
+                    super::nutshell_settings(&entry.version).is_some(),
+                    "list the setting names Nutshell {} reads",
+                    entry.version
+                );
+            }
+        }
     }
 }

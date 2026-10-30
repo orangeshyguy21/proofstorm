@@ -128,7 +128,7 @@ node --test crates/proofstorm-acceptance/src/benchmark/opencode/capture.test.mjs
 
 Rust benchmark unit tests preserve strict telemetry and scoring behavior. The
 opt-in installed-CLI tests use isolated temporary homes, a fake loopback model
-and a fake MCP server, with no provider account or Docker:
+in the test process and a fake Bash/`jq` MCP server, with no provider account or Docker:
 
 ```sh
 cargo test -p proofstorm-acceptance benchmark --lib

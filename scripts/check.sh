@@ -90,6 +90,7 @@ check_shell() {
   shellcheck tests/component-compat/*.sh
   shellcheck --external-sources scripts/qualification-*.sh
   shellcheck scripts/test-cdk-config.sh tests/cdk18-config-contract.sh crates/proofstorm-acceptance/drivers/cashu_double_spend.sh
+  shellcheck crates/proofstorm-acceptance/src/benchmark/opencode/fixture-mcp.sh
 }
 
 check_clippy() {

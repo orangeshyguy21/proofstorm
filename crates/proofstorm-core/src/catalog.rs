@@ -1545,7 +1545,7 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
             "component",
             "mint",
             &["component_logs", "reachability_oracle"],
-            &[NUTSHELL_MANAGEMENT, NUTSHELL_DATABASE, "native_env passes extra environment variables for settings Proofstorm does not model, such as a candidate's new setting. It requires mint.native_config_override in policy.allow, refuses names Proofstorm sets, blocks startup on names the image does not read, and is listed in the lock as unverified."],
+            &[NUTSHELL_MANAGEMENT, NUTSHELL_DATABASE, "native_env passes extra environment variables for settings Proofstorm does not model, such as a candidate's new setting. It requires mint.native_config_override in policy.allow, refuses names Proofstorm sets and names the selected release does not read (a candidate build is not checked), and is listed in the lock as unverified."],
         )],
         "cdk" => vec![
             runtime_endpoint(
@@ -1808,7 +1808,8 @@ pub fn validate_new_cell_versions(
 /// # Errors
 ///
 /// Returns an error for an unknown implementation, kind/control mismatch,
-/// unsupported version or configuration contract, or invalid configuration.
+/// unsupported version or configuration contract, invalid configuration, or a
+/// `native_env` name the selected Nutshell release does not read.
 pub fn validate_catalog_component<'a>(
     component: &ComponentSpec,
     catalog: &'a CatalogResponse,
@@ -1873,6 +1874,7 @@ pub fn validate_catalog_component<'a>(
         ));
     }
     validate_component_config(component)?;
+    crate::native_settings::validate_release_names(component, entry)?;
     Ok(entry)
 }
 
