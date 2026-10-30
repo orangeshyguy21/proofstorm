@@ -51,6 +51,8 @@ pub use candidate::{
     CandidateDiagnostics, CandidateInput, CandidateLog, CandidateProvenance, CandidateSource,
     candidate_catalog_entry, effective_catalog, is_github_repository,
 };
+#[cfg(feature = "test-catalogs")]
+pub use catalog::catalog_with_spark_test_images;
 pub use catalog::{
     AuthenticationMode, BuildProvenance, CDK_MINT_IMAGE, CDK_VERSION, CLN_VERSION,
     CatalogDependencySupport, CatalogEndpointCondition, CatalogEntry, CatalogFeature,

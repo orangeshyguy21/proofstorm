@@ -42,7 +42,7 @@ pub(super) fn pinned(amd64: bool) -> Option<Images> {
     images.remove(platform(amd64))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-catalogs"))]
 pub(super) fn test_images() -> Images {
     let image = |name: &str| {
         format!(

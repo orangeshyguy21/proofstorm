@@ -38,6 +38,12 @@ pub enum AddLinkInput {
         to: String,
         network: BitcoinNetwork,
     },
+    SparkBackend {
+        id: String,
+        from: String,
+        to: String,
+        network: BitcoinNetwork,
+    },
     PaymentBackend {
         id: String,
         from: String,
@@ -109,6 +115,18 @@ impl TryFrom<AddLinkInput> for LinkSpec {
                 from,
                 to,
                 binding: Some(DependencyBinding::Ark { network }),
+            },
+            AddLinkInput::SparkBackend {
+                id,
+                from,
+                to,
+                network,
+            } => Self {
+                id,
+                kind: LinkKind::SparkBackend,
+                from,
+                to,
+                binding: Some(DependencyBinding::Spark { network }),
             },
             AddLinkInput::PaymentBackend {
                 id,
@@ -184,6 +202,14 @@ impl TryFrom<LinkSpec> for AddLinkInput {
             }
             (LinkKind::ArkBackend, Some(DependencyBinding::Ark { network })) => {
                 Ok(Self::ArkBackend {
+                    id,
+                    from,
+                    to,
+                    network,
+                })
+            }
+            (LinkKind::SparkBackend, Some(DependencyBinding::Spark { network })) => {
+                Ok(Self::SparkBackend {
                     id,
                     from,
                     to,
@@ -423,11 +449,23 @@ mod tests {
     }
 
     #[test]
-    fn ark_links_preserve_their_typed_network_across_all_cell_inputs() {
-        let canonical: CellSpec = serde_json::from_str(include_str!(
-            "../../proofstorm-core/tests/fixtures/bark-topology.json"
-        ))
-        .unwrap();
+    fn ark_and_spark_links_preserve_their_typed_network_across_all_cell_inputs() {
+        for (fixture, kind) in [
+            (
+                include_str!("../../proofstorm-core/tests/fixtures/bark-topology.json"),
+                "ark_backend",
+            ),
+            (
+                include_str!("../../proofstorm-core/tests/fixtures/spark-topology.json"),
+                "spark_backend",
+            ),
+        ] {
+            network_links_round_trip(fixture, kind);
+        }
+    }
+
+    fn network_links_round_trip(fixture: &str, kind: &str) {
+        let canonical: CellSpec = serde_json::from_str(fixture).unwrap();
         let authored = AuthoredCellSpec {
             api_version: canonical.api_version.clone(),
             name: canonical.name.clone(),
@@ -446,7 +484,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|link| link["kind"] == "ark_backend")
+            .find(|link| link["kind"] == kind)
             .unwrap();
         assert_eq!(link["network"], "regtest");
         assert!(link.get("binding").is_none());

@@ -400,6 +400,29 @@ mod tests {
     }
 
     #[test]
+    fn spark_links_need_declared_catalog_compatibility() {
+        let fixture = fixture();
+        for (consumer, target) in [
+            ("cdk-spark-processor", "open-ssp"),
+            ("open-ssp", "spark-operators"),
+        ] {
+            let mut catalog = catalog_with_spark_test_images(false);
+            catalog
+                .entries
+                .iter_mut()
+                .find(|entry| entry.id == consumer)
+                .unwrap()
+                .compatible_dependencies
+                .retain(|support| support.implementation != target);
+            let refused = resolve_lock(&fixture, &catalog).unwrap_err();
+            assert!(
+                refused.contains("does not declare SparkBackend compatibility"),
+                "{consumer}: {refused}"
+            );
+        }
+    }
+
+    #[test]
     fn each_ldk_server_version_serves_only_its_consumer() {
         let catalog = catalog_with_spark_test_images(false);
         // open-ssp needs macaroon authentication.

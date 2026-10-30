@@ -9,6 +9,8 @@ repository.workspace = true
 [features]
 default = ["invoice-validation"]
 invoice-validation = ["dep:lightning-invoice"]
+# Catalogs with placeholder pins for unpublished stacks, for other crates' tests.
+test-catalogs = []
 
 [dependencies]
 base64.workspace = true

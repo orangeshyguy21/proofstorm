@@ -408,8 +408,9 @@ fn build_catalog(amd64: bool) -> CatalogResponse {
 }
 
 /// The built-in catalog with Spark images pinned as if published, for tests.
-#[cfg(test)]
-pub(crate) fn catalog_with_spark_test_images(amd64: bool) -> CatalogResponse {
+#[cfg(any(test, feature = "test-catalogs"))]
+#[must_use]
+pub fn catalog_with_spark_test_images(amd64: bool) -> CatalogResponse {
     build_catalog_with_spark(amd64, Some(&spark::test_images()))
 }
 
