@@ -100,14 +100,28 @@ while IFS= read -r repository; do repositories+=("$repository"); done <<< "$list
 "$helper" catalog-image stack-restore ${local_run:+--local} "$stack" "$checkout" "$platform" "$revision" "$attempt" "$artifacts" "$work/candidates"
 # shellcheck source=scripts/qualification-docker.sh
 source "$root/scripts/qualification-docker.sh"
+user_docker_config=${DOCKER_CONFIG:-$HOME/.docker}
 qualification_docker_config "$work/docker"
+if [[ -n "$local_run" ]]; then
+  # Anonymous Docker Hub pulls are limited to a few an hour. A local run keeps
+  # the isolated config but asks the maintainer's credential helper, so their
+  # existing login authenticates upstream pulls. CI stays anonymous.
+  store=$(jq -r '.credsStore // empty' "$user_docker_config/config.json" 2>/dev/null || true)
+  if [[ "$store" =~ ^[a-z0-9-]+$ ]]; then
+    jq --arg store "$store" '.credsStore = $store' "$DOCKER_CONFIG/config.json" > "$DOCKER_CONFIG/config.json.new"
+    mv "$DOCKER_CONFIG/config.json.new" "$DOCKER_CONFIG/config.json"
+  fi
+fi
 engine=$(timeout 30 docker info --format '{{.OSType}}/{{.Architecture}}')
 case "$platform:$engine" in
   linux/amd64:linux/x86_64|linux/amd64:linux/amd64|linux/arm64:linux/aarch64|linux/arm64:linux/arm64) ;;
   *) echo 'Docker engine is not native to the selected runner' >&2; exit 1 ;;
 esac
 stage=native-probes
-timeout 300 docker pull registry:2
+# A local run reuses an already pulled registry image instead of spending a pull.
+if [[ -z "$local_run" ]] || ! docker image inspect registry:2 >/dev/null 2>&1; then
+  timeout 300 docker pull registry:2
+fi
 container=$(docker create --name "$owner" --label "dev.proofstorm.qualification-cache=$owner" \
   --publish 127.0.0.1::5000 registry:2)
 docker start "$container" >/dev/null
