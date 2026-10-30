@@ -33,6 +33,9 @@ const SSP_MARKER: &str = ".proofstorm-open-ssp-identity";
 /// open-ssp chmods its seed file to 0600, which a Secret mount refuses, so it
 /// reads a private copy kept in memory beside the Secret.
 const SSP_SEED: &str = "/run/open-ssp/spark.mnemonic";
+/// Funding recipes send the admin token with `curl -H @<file>`, so it never
+/// appears in a command line.
+const ADMIN_HEADER: &str = "/run/open-ssp/admin.header";
 const PROCESSOR_MARKER: &str = ".proofstorm-spark-processor-identity";
 const PROCESSOR_RUN: &str = "/run/spark-processor";
 const PROCESSOR_TLS: [&str; 3] = [
@@ -452,6 +455,10 @@ fn joined(federation: &Federation, item: impl Fn(&Operator) -> String) -> String
 }
 
 /// Variables set over Kubernetes' rendered environment for open-ssp.
+fn admin_header(token: &str) -> String {
+    format!("Authorization: Bearer {token}\n")
+}
+
 fn ssp_environment(federation: &Federation, token: &str) -> Vec<(&'static str, String)> {
     vec![
         (
@@ -498,6 +505,7 @@ pub fn exec_open_ssp() -> Result<()> {
         &identity_record("open-ssp", &seed),
     )?;
     replace_private(Path::new(SSP_SEED), format!("{seed}\n").as_bytes())?;
+    replace_private(Path::new(ADMIN_HEADER), admin_header(&token).as_bytes())?;
     Err(Command::new("open-ssp")
         .envs(ssp_environment(&federation, &token))
         .exec())
@@ -960,6 +968,12 @@ mod tests {
             let error = format!("{:#}", admin_token(&path).unwrap_err());
             assert!(!error.contains(&value));
         }
+        // curl reads this file as one header line.
+        assert_eq!(
+            admin_header(&token),
+            format!("Authorization: Bearer {token}\n")
+        );
+        assert_eq!(ADMIN_HEADER, "/run/open-ssp/admin.header");
     }
 
     #[test]

@@ -2,8 +2,10 @@
 
 ## Current status
 
-The images build from pinned sources with recorded patches. They are not yet catalog
-components, nothing is published, and there is no managed acceptance gate.
+The images build from pinned sources with recorded patches. Proofstorm models,
+validates and renders the stack, but its catalog entries appear only for platforms
+pinned in `crates/proofstorm-core/src/spark_images.json`, which stays empty until the
+images are published. There is no managed acceptance gate yet.
 
 A Docker Compose probe (2026-10-29, native ARM64) passed:
 - a real BOLT11 mint and melt through a CDK 0.18.2 mint, this processor, three Spark
@@ -88,18 +90,53 @@ which version.
 
 ## Runtime notes for the managed components
 
+The Proofstorm driver starts each service; the images' `CMD` is only a default.
+
 - **Processor.** It reads `config.toml` from its working directory. The operator list
   and SSP settings need that file, since environment variables cover only scalar
-  settings, so start it from the directory holding its configuration.
-- **Operator.** Each operator applies both `atlas` migration directories to its own
-  main and ephemeral databases. It then starts `spark-frost-signer` on a Unix socket
-  and runs `spark-operator` with that socket, its identity key, the shared operator
-  list, the threshold, and `-ssp-grpc-port`. The image's `CMD` is only a default.
-- **Federation readiness.** The federation is usable only once every operator has
-  `AVAILABLE` signing keyshares. In the probe that took 16 s.
-- **open-ssp.** It refuses to start without `SPARK_ADMIN_TOKEN`. After the first boot,
-  set `SPARK_MNEMONIC_REQUIRED=1` so a missing seed cannot silently create a new
-  identity.
+  settings. The driver writes it, with the SSP identity read from `/identity`, into a
+  memory volume and starts the processor there.
+- **Operator.** Each operator pod creates its own main and ephemeral databases, sealed
+  to its public key by the database comment (atlas refuses a first migration into a
+  database with any extra schema). It applies both `atlas` migration directories and
+  runs `spark-operator` with its identity key, the shared operator list, the threshold
+  and `-ssp-grpc-port`. `spark-frost-signer` runs beside it on a shared Unix socket.
+- **Federation readiness.** An operator is ready when its gRPC health service reports
+  its databases ready. The federation is usable only once every operator has
+  `AVAILABLE` signing keyshares, about 16 s later in the probe; nothing exposes that
+  outside the databases.
+- **open-ssp.** It refuses to start without `SPARK_ADMIN_TOKEN`, and it chmods its
+  seed file to 0600, which a read-only Secret mount refuses. The driver gives it a
+  private copy in a memory volume and always sets `SPARK_MNEMONIC_REQUIRED=1`, so a
+  missing seed cannot silently create a new identity. Its `/status` always reports
+  `ldk_mode` as `live`.
+
+## Funding
+
+Funding is an explicit step, never part of readiness. Agents run these through
+`cell_exec`, and the acceptance gate runs the same steps. open-ssp's admin API is
+loopback-only. Its token is passed as a header file the driver writes, so it never
+appears in a command:
+
+```sh
+curl -sS --fail-with-body -X POST -H @/run/open-ssp/admin.header \
+  http://127.0.0.1:5000/admin/spark/deposit-address
+```
+
+1. **Spark liquidity.**
+   1. Request a deposit address as above. It fails until the operators finish key
+      generation, so retry.
+   2. Send to it from `bitcoin-core` and mine 3 blocks.
+   3. Claim it with `POST /admin/spark/claim-deposit` and the body
+      `{"transaction_hex": …, "vout": …}`, taken from `getrawtransaction`.
+   4. Check `spark.available_sats` in `/status`.
+2. **Lightning liquidity.** On the SSP's `ldk-server` 762bc47:
+   1. Fund it on-chain.
+   2. Run `open-channel <peer node_id> <peer>:9735 2000000sat --push-to-counterparty 1000000sat --announce-channel`.
+   3. Mine 6 blocks.
+   4. Wait for `list-channels` to show the channel ready and usable.
+
+The processor's wallet starts empty. Paid mint quotes fund it, from the SSP's liquidity.
 
 ## Build and validation
 
