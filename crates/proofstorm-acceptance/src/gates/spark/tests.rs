@@ -260,6 +260,8 @@ fn ldk_payment_records_settle_only_the_exact_payment() {
     assert!(payments::settled(&record("SUCCEEDED"), "other", "INBOUND", 30_000_000).is_err());
     assert!(payments::settled(&record("PENDING"), "hash", "OUTBOUND", 30_000_000).is_err());
     assert!(payments::settled(&Value::Null, "hash", "INBOUND", 30_000_000).is_err());
+    // LDK Server 762bc47 has no record of an invoice until it is paid.
+    assert!(!payments::settled(&json!({"payment":null}), "hash", "INBOUND", 30_000_000).unwrap());
     // An unpaid quote's invoice on the SSP node has no LDK record yet, as
     // observed against open-ssp 9c25f69 and LDK Server 762bc47.
     let unpaid = |details: &Value| payments::receive_unpaid(details, "hash", 30_000_000);

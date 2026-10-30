@@ -5,6 +5,7 @@ use super::{
     cell, control, ensure, expect, funding, http, json, melt_quote_id, melt_quotes, melt_remaining,
     native, quote_state, quote_states, sleep, ssp_status, stack::capture_log,
 };
+use anyhow::Context as _;
 
 const MINT_SAT: u64 = 100_000;
 const UNREACHABLE_SAT: u64 = 1_000;
@@ -41,24 +42,27 @@ pub(super) fn check_invoice<'a>(
     expect::string(decoded, "/payment_hash")
 }
 
-/// Whether the SSP node still holds `hash`'s invoice unpaid. LDK Server keeps
-/// no record of open-ssp's invoice until an HTLC arrives, so none counts too.
+/// Whether the SSP node still holds `hash`'s invoice unpaid.
 pub(super) fn receive_unpaid(details: &Value, hash: &str, amount_msat: u64) -> Result<bool> {
-    if details["payment"].is_null() {
-        return Ok(true);
-    }
     Ok(!settled(details, hash, "INBOUND", amount_msat)?)
 }
 
 /// Whether one LDK payment record for `hash` has succeeded in `direction` for
-/// exactly `amount_msat`. Pending is `false`; a failure is an error.
+/// exactly `amount_msat`. Pending is `false`; a failure is an error. LDK Server
+/// 0.1.0-762bc47 keeps no record of an invoice until it is paid, so a `null`
+/// payment is pending too.
 pub(super) fn settled(
     details: &Value,
     hash: &str,
     direction: &str,
     amount_msat: u64,
 ) -> Result<bool> {
-    let payment = &details["payment"];
+    let payment = details
+        .get("payment")
+        .context("native payment details are missing")?;
+    if payment.is_null() {
+        return Ok(false);
+    }
     ensure!(
         payment
             .pointer("/kind/kind/bolt11/hash")
