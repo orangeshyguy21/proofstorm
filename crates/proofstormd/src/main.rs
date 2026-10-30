@@ -1617,10 +1617,10 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
             .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"))
             .map(String::as_str);
         match secret_kind {
-            Some("bark-processor") => {
+            Some("bark-processor" | "open-ssp" | "spark-processor") => {
                 let claims =
                     Api::<PersistentVolumeClaim>::namespaced(client.clone(), &namespace_name);
-                generated_secrets::ensure_bark(&secrets, &claims, resource).await?;
+                generated_secrets::ensure_owned_identity(&secrets, &claims, resource).await?;
             }
             Some("mint-management-tls" | "payment-processor-tls") => {
                 management_tls::ensure(&secrets, resource).await?;

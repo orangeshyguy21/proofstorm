@@ -24,6 +24,8 @@ use crate::{
 mod bark;
 #[path = "processor_catalog.rs"]
 mod processor;
+#[path = "spark_catalog.rs"]
+mod spark;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
@@ -401,11 +403,21 @@ pub fn distributed_catalog_for_platform(platform: CatalogPlatform) -> CatalogRes
 const LND_VERSIONS: &[&str] = &["0.20.5-beta", LND_VERSION];
 const CLN_VERSIONS: &[&str] = &[CLN_VERSION];
 
+fn build_catalog(amd64: bool) -> CatalogResponse {
+    build_catalog_with_spark(amd64, spark::pinned(amd64).as_ref())
+}
+
+/// The built-in catalog with Spark images pinned as if published, for tests.
+#[cfg(test)]
+pub(crate) fn catalog_with_spark_test_images(amd64: bool) -> CatalogResponse {
+    build_catalog_with_spark(amd64, Some(&spark::test_images()))
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "the default catalog deliberately declares every support-contract field inline"
 )]
-fn build_catalog(amd64: bool) -> CatalogResponse {
+fn build_catalog_with_spark(amd64: bool, spark_images: Option<&spark::Images>) -> CatalogResponse {
     let adapter_version = "0.1.0-alpha.1";
     let backends = default_backend_registry();
     let mut entries = vec![
@@ -727,6 +739,9 @@ fn build_catalog(amd64: bool) -> CatalogResponse {
     promote_component_releases(&mut entries, amd64);
     processor::extend(&mut entries, amd64, backends, adapter_version);
     bark::extend(&mut entries, amd64, backends, adapter_version);
+    if let Some(images) = spark_images {
+        spark::extend(&mut entries, amd64, backends, adapter_version, images);
+    }
     CatalogResponse::try_new(entries).expect("default catalog support contracts are valid")
 }
 
@@ -1513,6 +1528,9 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
     if let Some(endpoints) = bark::endpoints(implementation) {
         return endpoints;
     }
+    if let Some(endpoints) = spark::endpoints(implementation) {
+        return endpoints;
+    }
     let mut endpoints = match implementation {
         "bitcoin-core" => vec![runtime_endpoint(
             "component",
@@ -1722,6 +1740,7 @@ pub(crate) fn bind_processor(entry: &mut CatalogEntry, profile: ProcessorProfile
     let version = match profile {
         ProcessorProfile::LdkServer => processor::LDK_PROCESSOR_VERSION,
         ProcessorProfile::Bark => bark::PROCESSOR_VERSION,
+        ProcessorProfile::Spark => spark::PROCESSOR_VERSION,
     };
     entry
         .support_matrix

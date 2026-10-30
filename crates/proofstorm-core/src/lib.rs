@@ -40,11 +40,11 @@ pub use backend::{
     CredentialObservationContract, EffectiveComponentConfig, ExecutionContextContract,
     ExecutionMountContract, ExecutionMountTemplateContract, ExecutionStorageSource,
     ExecutionStorageTemplateSource, KeycloakConfig, LdkServerProcessorConfig,
-    LinkedStateObservationContract, LndConfig, NutshellMintConfig, OperationAdmissionContract,
-    OperationClass, PostgresConfig, ProtocolProbeContract, ProtocolProbePlan,
-    ReadinessPrerequisite, RedisConfig, StorageObservationContract, StorageRequirementTemplate,
-    TargetDescriptorContract, WorkloadControllerKind, WorkloadObservationContract, WorkspaceConfig,
-    default_backend_registry,
+    LinkedStateObservationContract, LndConfig, NutshellMintConfig, OpenSspConfig,
+    OperationAdmissionContract, OperationClass, PostgresConfig, ProtocolProbeContract,
+    ProtocolProbePlan, ReadinessPrerequisite, RedisConfig, SparkOperatorsConfig,
+    StorageObservationContract, StorageRequirementTemplate, TargetDescriptorContract,
+    WorkloadControllerKind, WorkloadObservationContract, WorkspaceConfig, default_backend_registry,
 };
 pub use candidate::{
     CANDIDATE_BUILD_API_VERSION, CANDIDATE_BUNDLE_MAX_BYTES, CandidateBuild, CandidateBuildPhase,

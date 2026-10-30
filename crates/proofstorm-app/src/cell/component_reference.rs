@@ -79,6 +79,7 @@ const fn component_kind_name(kind: ComponentKind) -> &'static str {
         ComponentKind::Bitcoin => "bitcoin",
         ComponentKind::Lightning => "lightning",
         ComponentKind::ArkServer => "ark_server",
+        ComponentKind::SparkServer => "spark_server",
         ComponentKind::PaymentProcessor => "payment_processor",
         ComponentKind::Mint => "mint",
         ComponentKind::Database => "database",

@@ -12,6 +12,9 @@ pub use processor::LdkServerProcessorConfig;
 #[path = "bark_backend.rs"]
 mod bark;
 pub use bark::{BarkProcessorConfig, BarkServerConfig};
+#[path = "spark_backend.rs"]
+mod spark;
+pub use spark::{OpenSspConfig, SparkOperatorsConfig};
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
@@ -578,6 +581,12 @@ pub enum EffectiveComponentConfig {
     BarkServer(BarkServerConfig),
     #[serde(rename = "cln-hold")]
     ClnHold,
+    #[serde(rename = "spark-operators")]
+    SparkOperators(SparkOperatorsConfig),
+    #[serde(rename = "open-ssp")]
+    OpenSsp(OpenSspConfig),
+    #[serde(rename = "cdk-spark-processor")]
+    SparkProcessor,
     #[serde(rename = "cdk")]
     Cdk(CdkMintConfig),
     #[serde(rename = "nutshell")]
@@ -807,6 +816,12 @@ impl BackendContractRegistry {
         {
             execution_environment.insert("PROOFSTORM_NUTSHELL_VERSION".into(), "0.21.0".into());
         }
+        // A Spark federation runs one pod per operator; everything else runs one.
+        let desired_replicas = match &effective_config {
+            EffectiveComponentConfig::SparkOperators(config) => u16::try_from(config.operators)
+                .map_err(|_| typed_config_error(&input.component, "operators"))?,
+            _ => 1,
+        };
         Ok(ComponentPlanContract {
             instance_key: input.instance_key.clone(),
             revision_digest: input.revision_digest.clone(),
@@ -834,7 +849,7 @@ impl BackendContractRegistry {
             workload: WorkloadObservationContract {
                 kind: backend.workload_kind,
                 name: input.component.id.clone(),
-                desired_replicas: 1,
+                desired_replicas,
             },
             storage,
             credentials,
@@ -1058,6 +1073,9 @@ impl EffectiveComponentConfig {
             "cdk-bark-processor" => bark::effective_config(component),
             "bark-server" => bark::server_effective_config(component),
             "cln-hold" => Ok(Self::ClnHold),
+            "spark-operators" | "open-ssp" | "cdk-spark-processor" => {
+                spark::effective_config(component)
+            }
             "cdk" => Ok(Self::Cdk(cdk()?)),
             "nutshell" => Ok(Self::Nutshell(nutshell()?)),
             "postgresql" => Ok(Self::Postgres(PostgresConfig {
@@ -1993,6 +2011,7 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
     contracts.extend(processor::contracts());
     contracts.push(bark::processor_contract());
     contracts.extend(bark::stack_contracts());
+    contracts.extend(spark::contracts());
     contracts
 }
 

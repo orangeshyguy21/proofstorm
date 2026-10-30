@@ -1,0 +1,607 @@
+{
+  "plan": {
+    "applicable_conditions": [
+      "workload_ready",
+      "service_ready",
+      "protocol_ready",
+      "dependencies_ready",
+      "component_ready",
+      "experiment_controllable"
+    ],
+    "backend_id": "spark-operators",
+    "component_id": "operators",
+    "condition_aggregation": [
+      {
+        "all_of": [
+          "workload_ready",
+          "service_ready",
+          "protocol_ready",
+          "dependencies_ready"
+        ],
+        "condition": "component_ready"
+      }
+    ],
+    "condition_reasons": {
+      "component_ready": [
+        "stale_revision",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped"
+      ],
+      "dependencies_ready": [
+        "not_observed",
+        "dependencies_satisfied",
+        "dependencies_unsatisfied"
+      ],
+      "experiment_controllable": [
+        "control_available",
+        "control_unavailable"
+      ],
+      "protocol_ready": [
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "intentionally_stopped"
+      ],
+      "service_ready": [
+        "not_observed",
+        "endpoints_ready",
+        "endpoints_missing"
+      ],
+      "workload_ready": [
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "image_pull_failed",
+        "image_pull_backoff",
+        "invalid_image_name",
+        "container_config_error",
+        "container_crash_loop",
+        "container_start_error",
+        "container_exited",
+        "pod_unschedulable",
+        "intentionally_stopped"
+      ]
+    },
+    "credentials": [],
+    "effective_config": {
+      "config": {
+        "operators": 3,
+        "threshold": 2
+      },
+      "implementation": "spark-operators"
+    },
+    "execution_context": {
+      "component_id": "operators",
+      "environment": {},
+      "image": "proofstorm-registry.localhost:5000/spark-operators@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "mounts": [],
+      "state_contract": "proofstorm/spark-operators-state/v1"
+    },
+    "instance_key": "i-spark-render",
+    "kind": "spark_server",
+    "linked_targets": {
+      "operators-chain": {
+        "backend_id": "bitcoin-core",
+        "component_id": "chain",
+        "kind": "bitcoin",
+        "ports": {
+          "p2p": 18444,
+          "rpc": 18443,
+          "zmq_block": 28334,
+          "zmq_tx": 28335
+        },
+        "version": "31.1"
+      },
+      "operators-database": {
+        "backend_id": "postgresql",
+        "component_id": "postgres",
+        "kind": "database",
+        "ports": {
+          "postgres": 5432
+        },
+        "version": "17.11"
+      }
+    },
+    "operation_admission": [
+      {
+        "operation": "inspect",
+        "prerequisites": [
+          "accepted_identity"
+        ]
+      },
+      {
+        "operation": "start",
+        "prerequisites": [
+          "accepted_identity",
+          "storage"
+        ]
+      },
+      {
+        "operation": "stop",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "restart",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "native_exec",
+        "prerequisites": [
+          "execution_context"
+        ]
+      },
+      {
+        "operation": "network_heal",
+        "prerequisites": [
+          "fault_identity"
+        ]
+      },
+      {
+        "operation": "authentication",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      }
+    ],
+    "protocol_probe": {
+      "kind": "tcp",
+      "port": 8535
+    },
+    "relevant_links": [
+      {
+        "binding": {
+          "network": "regtest",
+          "type": "chain"
+        },
+        "from": "operators",
+        "id": "operators-chain",
+        "kind": "chain_backend",
+        "to": "chain"
+      },
+      {
+        "binding": {
+          "role": "primary",
+          "type": "database"
+        },
+        "from": "operators",
+        "id": "operators-database",
+        "kind": "database_backend",
+        "to": "postgres"
+      }
+    ],
+    "revision_digest": "sha256:render-test",
+    "rollout_digest": "sha256:spark-render-test",
+    "storage": [],
+    "target_descriptor": {
+      "backend_id": "spark-operators",
+      "component_id": "operators",
+      "kind": "spark_server",
+      "ports": {
+        "grpc": 8535,
+        "ssp": 8536
+      },
+      "version": "0.0.0-5e0c879"
+    },
+    "workload": {
+      "desired_replicas": 3,
+      "kind": "stateful_set",
+      "name": "operators"
+    }
+  },
+  "resources": {
+    "configMaps": [
+      {
+        "apiVersion": "v1",
+        "data": {
+          "operator.config.yaml": "bitcoind:\n  regtest:\n    network: regtest\n    host: chain:18443\n    rpcuser: proofstorm\n    rpcpassword: proofstorm-regtest-only\n    zmqpubrawblock: tcp://chain:28334\n# Spark operator settings pinned with spark-operator 0.0.0-5e0c879, as qualified by\n# the 2026-10-29 probe. The bitcoind section is rendered per cell from its chain link.\ndkg:\n  min_available_keys: 100\ntoken:\n  disconnect_lrc20_node: true\n\ngrpc:\n  server_connection_timeout: 5s\n  server_keepalive_time: 300s\n  server_keepalive_timeout: 20s\n  server_unary_handler_timeout: 60s\n  client_timeout: 20s\n\nlrc20:\n  regtest:\n    disablerpcs: true\n    disablel1: true\n    network: regtest\n    host: 127.0.0.1:18530\n    withdrawbondsats: 10000\n    withdrawrelativeblocklocktime: 1000\n    grpcpagesize: 200\n    grpcpoolsize: 10\nservice_authz:\n  mode: 1 # AuthzModeDisabled\n  ip_allowlist: []\nxff_client_ip_position: 0\nrate_limiter:\n  enabled: true\n  window: 60s\n  max_requests: 1000\n  methods: []\nreturn_detailed_errors: true\nreturn_detailed_panic_errors: true\ntracing:\n  enabled: false\n  otel_collector_endpoint: \"\"\n  otel_collector_cert_path: \"\"\n  global_sampling_rate: 0\n  span_sampling_config:\n    per_span_sampling_rates: {}\n    allow_list: []\n    block_list: []\nknobs:\n  static_values:\n    spark.database.pool.min_conns: 4\n    spark.so.max_unused_deposit_addresses: 64\n    spark.so.enable_instant_static_deposit@REGTEST: 100\n    spark.so.max_pending_instant_static_deposit_amount: 1000000\n    spark.so.deposit_tree.require_prepare_binding: 0\n    spark.so.grpc.server.stream_heartbeat.enabled: 100\n    spark.so.log_transfer_query_invocations: 0\n    spark.so.log_transfer_query_invocations_slow_ms: 0\n    spark.so.shutdown_hodl_invoices: 0\n    spark.so.lightning.receive_sender_allowlist.enabled: 0\n    spark.so.mpc_transfer.enabled: 0\n    spark.so.use_batched_ancestor_chain: 100\n    spark.so.initiate_preimage_swap_v4.enabled: 1\n    spark.so.lightning.enforce_htlc_refund_timelock_floor: 1\n    spark.so.use_consensus_initiate_counter_transfer: 1\n    spark.so.use_consensus_initiate_swap_primary_transfer: 1\n    spark.so.enable_partner_jwt: 1\n    spark.so.signing_keyshare.backfill_secrets_enabled: 0\n    spark.so.signing_keyshare.clear_secret_shares_enabled: 0\n    spark.so.signing_keyshare.dual_write_secret_share: 100\n    spark.so.purge_dangling_signing_keyshare_secrets_batch_size: 1000\n    spark.so.purge_dangling_signing_keyshare_secrets_max_scan_count: 100000\n    spark.so.reconcile_signing_keyshare_secret_pointers_batch_size: 1000\n    spark.so.reconcile_signing_keyshare_secret_pointers_max_scan_count: 100000\n    spark.so.tokens.allow_extra_metadata_on_mainnet: 0\n    spark.so.tokens.allowances_enabled: 1\n    spark.so.tokens.backfill_create_mint_finalized_status_enabled: 0\n    spark.so.tokens.coordinated_freeze_enabled: 0\n    spark.so.tokens.enable_justice_transactions: 1\n    spark.so.tokens.enforce_withdrawal_signature_validation: 0\n    spark.so.tokens.l1_exit_withdrawals_enabled: 1\n    spark.so.tokens.max_active_allowances_per_owner: 100\n    spark.so.tokens.multisig_issuer_enabled: 0\n    spark.so.tokens.token_transaction_v3_enabled: 100\n    spark.so.tokens.token_transaction_v3_phase2_enabled: 100\n    spark.so.tokens.token_transaction_v3_phase2_retry_enabled: 100\n    spark.so.tokens.tx_events_enabled: 1\n    spark.so.finalize_revealed_token_transactions.batch_limit: 50\n    spark.so.finalize_revealed_token_transactions.max_runtime_seconds: 180\n    spark.so.flow_execution.stuck_threshold_seconds: 300\n    spark.so.flow_execution.coordinator_stall_threshold_seconds: 600\n    spark.so.flow_execution.sweep_batch_limit: 50\n    spark.so.flow_execution.metrics_enabled: 0\n    spark.so.flow_execution.metrics_min_age_seconds: 600\n    spark.so.internal_rpc.brontide_enabled: 0\n    spark.so.ro_session@/spark.SparkService/query_nodes: 100\n    spark.so.ro_session@/spark.SparkService/query_pending_transfers: 100\n    spark.so.ro_session@/spark.SparkService/query_transfers_by_id: 100\n    spark.so.ro_session@/spark_token.SparkTokenService/query_token_outputs: 100\n"
+        },
+        "kind": "ConfigMap",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "operators",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "operators"
+          },
+          "name": "operators-config",
+          "namespace": "proofstorm-i-spark-render"
+        }
+      }
+    ],
+    "deployments": [],
+    "persistentVolumeClaims": [],
+    "secrets": [
+      {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "operators",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "operators"
+          },
+          "name": "operators-identity",
+          "namespace": "proofstorm-i-spark-render"
+        },
+        "stringData": {
+          "PROOFSTORM_SECRET_KIND": "spark-operators",
+          "PROOFSTORM_SPARK_OPERATORS": "3",
+          "PROOFSTORM_SPARK_SERVICE": "operators",
+          "PROOFSTORM_SPARK_THRESHOLD": "2"
+        },
+        "type": "Opaque"
+      }
+    ],
+    "services": [
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "operators",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "operators"
+          },
+          "name": "operators",
+          "namespace": "proofstorm-i-spark-render"
+        },
+        "spec": {
+          "clusterIP": "None",
+          "ports": [
+            {
+              "name": "grpc",
+              "port": 8535,
+              "targetPort": 8535
+            },
+            {
+              "name": "ssp",
+              "port": 8536,
+              "targetPort": 8536
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "operators",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "operators"
+          }
+        }
+      }
+    ],
+    "statefulSets": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "spark-operators",
+            "proofstorm.dev/execution-state-contract": "proofstorm/spark-operators-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:render-test"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "operators",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "operators"
+          },
+          "name": "operators",
+          "namespace": "proofstorm-i-spark-render"
+        },
+        "spec": {
+          "podManagementPolicy": "Parallel",
+          "replicas": 3,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "operators",
+              "proofstorm.dev/instance": "i-spark-render",
+              "proofstorm.dev/network-identity": "operators"
+            }
+          },
+          "serviceName": "operators",
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:spark-render-test"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "operators",
+                "proofstorm.dev/instance": "i-spark-render",
+                "proofstorm.dev/network-identity": "operators"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-spark-render"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "args": [],
+                  "command": [
+                    "/opt/proofstorm/driver",
+                    "exec-spark-operator"
+                  ],
+                  "env": [
+                    {
+                      "name": "PROOFSTORM_SPARK_DATABASE_HOST",
+                      "value": "postgres"
+                    },
+                    {
+                      "name": "PROOFSTORM_SPARK_DATABASE_PORT",
+                      "value": "5432"
+                    },
+                    {
+                      "name": "PROOFSTORM_SPARK_DATABASE_NAME",
+                      "value": "operators_primary"
+                    },
+                    {
+                      "name": "PGPASSWORD",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_PASSWORD",
+                          "name": "postgres-credentials"
+                        }
+                      }
+                    }
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/spark-operators@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "ports": [
+                    {
+                      "containerPort": 8535,
+                      "name": "grpc"
+                    },
+                    {
+                      "containerPort": 8536,
+                      "name": "ssp"
+                    }
+                  ],
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "/opt/proofstorm/driver",
+                        "spark-operator-ready"
+                      ]
+                    },
+                    "failureThreshold": 40,
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 3
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/spark-operators",
+                      "name": "identity",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/config",
+                      "name": "config",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/run/spark",
+                      "name": "signer"
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
+                    }
+                  ]
+                },
+                {
+                  "command": [
+                    "/opt/proofstorm/driver",
+                    "exec-spark-signer"
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/spark-operators@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "signer",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/run/spark",
+                      "name": "signer"
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "initContainers": [
+                {
+                  "command": [
+                    "/usr/local/lib/proofstorm-driver",
+                    "install"
+                  ],
+                  "image": "proofstorm-controller:driver-image-required",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "proofstorm-driver",
+                  "resources": {
+                    "limits": {
+                      "cpu": "200m",
+                      "memory": "128Mi"
+                    },
+                    "requests": {
+                      "cpu": "10m",
+                      "memory": "16Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    },
+                    "readOnlyRootFilesystem": true,
+                    "runAsNonRoot": true
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver"
+                    }
+                  ]
+                },
+                {
+                  "command": [
+                    "sh",
+                    "-ec",
+                    "# Create this operator's main and ephemeral databases on the linked PostgreSQL\n# server, then bind the main database to the operator's identity key, once.\n# Arguments: host, port, base database name. The base name was validated as a\n# PostgreSQL identifier with room for the suffixes before publication.\n# PROOFSTORM_POD_NAME is the StatefulSet pod name <component>-<ordinal>. A database holding\n# state without the seal, or sealed to another identity, is never adopted.\nhost=$1\nport=$2\nbase=$3\nordinal=${PROOFSTORM_POD_NAME##*-}\ncase \"$ordinal\" in ''|*[!0-9]*) echo 'Spark operator ordinal is not a number' >&2; exit 1 ;; esac\nidentity=$(cat \"/spark-operators/operator-$ordinal.pub\")\ncase \"$identity\" in ''|*[!0-9a-f]*) echo 'Spark operator identity is missing or malformed' >&2; exit 1 ;; esac\n[ \"${#identity}\" = 66 ] || { echo 'Spark operator identity is missing or malformed' >&2; exit 1; }\nmain=${base}_${ordinal}\nexport PGCONNECT_TIMEOUT=3\nexport PGOPTIONS='-c statement_timeout=5000'\nfor _attempt in $(seq 1 120); do\n    if pg_isready -q -h \"$host\" -p \"$port\" -U proofstorm -d postgres; then break; fi\n    sleep 1\ndone\npg_isready -q -h \"$host\" -p \"$port\" -U proofstorm -d postgres || { echo \"PostgreSQL was not available before operator initialization\" >&2; exit 1; }\nfor database in \"$main\" \"${main}_ephemeral\"; do\n    exists=$(psql -X -h \"$host\" -p \"$port\" -U proofstorm -d postgres -tAc \"SELECT 1 FROM pg_database WHERE datname = '$database'\")\n    [ \"$exists\" = 1 ] || psql -X -q -h \"$host\" -p \"$port\" -U proofstorm -d postgres -c \"CREATE DATABASE \\\"$database\\\"\"\ndone\n# The seal is the database's comment, not a schema: atlas refuses a first\n# migration into a database holding any schema besides an empty public one.\nexpected=\"proofstorm-spark-operator/v1 $identity\"\nseal() {\n    psql -X -v ON_ERROR_STOP=1 -h \"$host\" -p \"$port\" -U proofstorm -d postgres -tAc \"SELECT coalesce(shobj_description(oid, 'pg_database'), '') FROM pg_database WHERE datname = '$main'\"\n}\nif [ -z \"$(seal)\" ]; then\n    tables=$(psql -X -v ON_ERROR_STOP=1 -h \"$host\" -p \"$port\" -U proofstorm -d \"$main\" -tAc \"SELECT count(*) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema')\")\n    [ \"$tables\" = 0 ] || { echo 'Spark operator database has state but no identity seal; restore or explicitly reset it' >&2; exit 1; }\n    psql -X -v ON_ERROR_STOP=1 -q -h \"$host\" -p \"$port\" -U proofstorm -d postgres -c \"COMMENT ON DATABASE \\\"$main\\\" IS '$expected'\"\nfi\n[ \"$(seal)\" = \"$expected\" ] || { echo 'Spark operator database belongs to another identity' >&2; exit 1; }\n",
+                    "ensure-spark-databases",
+                    "postgres",
+                    "5432",
+                    "operators_primary"
+                  ],
+                  "env": [
+                    {
+                      "name": "PGPASSWORD",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "POSTGRES_PASSWORD",
+                          "name": "postgres-credentials"
+                        }
+                      }
+                    },
+                    {
+                      "name": "PROOFSTORM_POD_NAME",
+                      "valueFrom": {
+                        "fieldRef": {
+                          "fieldPath": "metadata.name"
+                        }
+                      }
+                    }
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "ensure-spark-databases",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/spark-operators",
+                      "name": "identity",
+                      "readOnly": true
+                    }
+                  ]
+                },
+                {
+                  "command": [
+                    "sh",
+                    "-ec",
+                    "n=0; while [ \"$n\" -lt 120 ]; do ready=1; for target in \"$@\"; do /opt/proofstorm/driver tcp \"${target%:*}\" \"${target##*:}\" || ready=0; done; [ \"$ready\" = 1 ] && exit 0; n=$((n+1)); sleep 1; done; echo 'spark-operator dependencies did not become ready' >&2; exit 1",
+                    "--",
+                    "chain:18443"
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/spark-operators@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "wait-for-spark-operator-dependencies",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload",
+              "volumes": [
+                {
+                  "name": "identity",
+                  "secret": {
+                    "defaultMode": 288,
+                    "secretName": "operators-identity"
+                  }
+                },
+                {
+                  "configMap": {
+                    "defaultMode": 288,
+                    "name": "operators-config"
+                  },
+                  "name": "config"
+                },
+                {
+                  "emptyDir": {
+                    "medium": "Memory"
+                  },
+                  "name": "signer"
+                },
+                {
+                  "emptyDir": {},
+                  "name": "proofstorm-driver"
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

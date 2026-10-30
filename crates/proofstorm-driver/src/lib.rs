@@ -24,6 +24,8 @@ pub mod nutshell;
 pub mod processor;
 #[cfg(feature = "runtime")]
 pub mod quote;
+#[cfg(all(unix, feature = "runtime"))]
+pub mod spark;
 #[cfg(feature = "observation")]
 pub mod wallet;
 

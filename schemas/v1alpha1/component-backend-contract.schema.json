@@ -52,6 +52,7 @@
         "bitcoin",
         "lightning",
         "ark_server",
+        "spark_server",
         "payment_processor",
         "mint",
         "database",
@@ -282,7 +283,7 @@
     },
     "DependencyBinding": {
       "additionalProperties": false,
-      "description": "Typed dependency qualifier. Chain and Ark bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
+      "description": "Typed dependency qualifier. Chain, Ark and Spark bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
       "properties": {
         "database": {
           "maxLength": 63,
@@ -318,6 +319,7 @@
           "enum": [
             "chain",
             "ark",
+            "spark",
             "payment",
             "database",
             "authentication"
@@ -337,8 +339,8 @@
       "type": "object",
       "x-kubernetes-validations": [
         {
-          "message": "chain and Ark bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol",
-          "rule": "self.type in ['chain', 'ark'] ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))"
+          "message": "chain, Ark and Spark bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol",
+          "rule": "self.type in ['chain', 'ark', 'spark'] ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))"
         }
       ]
     },
@@ -474,6 +476,7 @@
         "lightning_peer",
         "chain_backend",
         "ark_backend",
+        "spark_backend",
         "payment_backend",
         "database_backend",
         "authentication_backend",

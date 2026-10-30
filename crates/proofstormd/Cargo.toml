@@ -13,6 +13,7 @@ bip39 = "2.2"
 futures.workspace = true
 getrandom.workspace = true
 rcgen = "=0.13.2"
+secp256k1 = "=0.29.1"
 time = "0.3"
 k8s-openapi.workspace = true
 kube.workspace = true

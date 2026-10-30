@@ -1,0 +1,22 @@
+{
+  "api_version": "proofstorm/v1alpha1",
+  "name": "spark-topology-contract",
+  "components": [
+    {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
+    {"id":"postgres","kind":"database","implementation":"postgresql","version":"17.11","config_version":"postgresql/17/v1","control":"cell","config":{}},
+    {"id":"operators","kind":"spark_server","implementation":"spark-operators","version":"0.0.0-5e0c879","config_version":"spark-operators/0.0/v1","control":"cell","config":{}},
+    {"id":"ssp-node","kind":"lightning","implementation":"ldk-server","version":"0.1.0-762bc47","config_version":"ldk-server/0.1/v1","control":"cell","config":{}},
+    {"id":"ssp","kind":"spark_server","implementation":"open-ssp","version":"0.1.0-9c25f69","config_version":"open-ssp/0.1/v1","control":"cell","config":{}},
+    {"id":"processor","kind":"payment_processor","implementation":"cdk-spark-processor","version":"0.1.0-d7244e2","config_version":"cdk-spark-processor/0.1/v1","control":"target","config":{}},
+    {"id":"mint","kind":"mint","implementation":"cdk","version":"0.18.2","config_version":"cdk-mintd/0.18/v1","control":"target","config":{}}
+  ],
+  "links": [
+    {"id":"operators-chain","kind":"chain_backend","from":"operators","to":"chain","binding":{"type":"chain","network":"regtest"}},
+    {"id":"operators-database","kind":"database_backend","from":"operators","to":"postgres","binding":{"type":"database","role":"primary"}},
+    {"id":"ssp-node-chain","kind":"chain_backend","from":"ssp-node","to":"chain","binding":{"type":"chain","network":"regtest"}},
+    {"id":"ssp-operators","kind":"spark_backend","from":"ssp","to":"operators","binding":{"type":"spark","network":"regtest"}},
+    {"id":"ssp-lightning","kind":"payment_backend","from":"ssp","to":"ssp-node","binding":{"type":"payment","method":"bolt11","unit":"sat"}},
+    {"id":"processor-ssp","kind":"spark_backend","from":"processor","to":"ssp","binding":{"type":"spark","network":"regtest"}},
+    {"id":"mint-bolt11","kind":"payment_backend","from":"mint","to":"processor","binding":{"type":"payment","method":"bolt11","unit":"sat"}}
+  ]
+}

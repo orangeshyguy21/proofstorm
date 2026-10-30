@@ -190,6 +190,7 @@ pub fn ensure_positions(nodes: &[CanvasNode], positions: &mut Positions) {
             ComponentKind::Bitcoin | ComponentKind::IdentityProvider | ComponentKind::Database => 0,
             ComponentKind::Lightning
             | ComponentKind::ArkServer
+            | ComponentKind::SparkServer
             | ComponentKind::PaymentProcessor
             | ComponentKind::Proxy => 1,
             ComponentKind::Mint | ComponentKind::Oracle => 2,
@@ -290,6 +291,11 @@ pub fn appearance(kind: ComponentKind) -> (&'static str, &'static str, &'static 
             "ark",
             "Ark server",
             "M3 18h18 M5 18V9l7-6 7 6v9 M9 18v-6h6v6",
+        ),
+        ComponentKind::SparkServer => (
+            "spark",
+            "Spark server",
+            "M12 2v6 M12 16v6 M2 12h6 M16 12h6 M5 5l4 4 M15 15l4 4 M5 19l4-4 M15 9l4-4",
         ),
         ComponentKind::PaymentProcessor => (
             "processor",

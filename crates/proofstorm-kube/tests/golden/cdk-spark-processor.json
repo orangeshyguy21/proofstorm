@@ -1,0 +1,627 @@
+{
+  "plan": {
+    "applicable_conditions": [
+      "workload_ready",
+      "storage_ready",
+      "service_ready",
+      "protocol_ready",
+      "dependencies_ready",
+      "component_ready",
+      "experiment_controllable"
+    ],
+    "backend_id": "cdk-spark-processor",
+    "component_id": "processor",
+    "condition_aggregation": [
+      {
+        "all_of": [
+          "workload_ready",
+          "storage_ready",
+          "service_ready",
+          "protocol_ready",
+          "dependencies_ready"
+        ],
+        "condition": "component_ready"
+      }
+    ],
+    "condition_reasons": {
+      "component_ready": [
+        "stale_revision",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped"
+      ],
+      "dependencies_ready": [
+        "not_observed",
+        "dependencies_satisfied",
+        "dependencies_unsatisfied"
+      ],
+      "experiment_controllable": [
+        "control_available",
+        "control_unavailable"
+      ],
+      "protocol_ready": [
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "intentionally_stopped"
+      ],
+      "service_ready": [
+        "not_observed",
+        "endpoints_ready",
+        "endpoints_missing"
+      ],
+      "storage_ready": [
+        "not_observed",
+        "storage_bound",
+        "storage_pending"
+      ],
+      "workload_ready": [
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "image_pull_failed",
+        "image_pull_backoff",
+        "invalid_image_name",
+        "container_config_error",
+        "container_crash_loop",
+        "container_start_error",
+        "container_exited",
+        "pod_unschedulable",
+        "intentionally_stopped"
+      ]
+    },
+    "credentials": [],
+    "effective_config": {
+      "implementation": "cdk-spark-processor"
+    },
+    "execution_context": {
+      "component_id": "processor",
+      "environment": {},
+      "image": "proofstorm-registry.localhost:5000/cdk-spark-processor@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "mounts": [
+        {
+          "mount_path": "/data",
+          "name": "data",
+          "read_only": false,
+          "source": {
+            "source": "stateful_data"
+          }
+        }
+      ],
+      "state_contract": "proofstorm/cdk-spark-processor-state/v1"
+    },
+    "instance_key": "i-spark-render",
+    "kind": "payment_processor",
+    "linked_targets": {
+      "processor-ssp": {
+        "backend_id": "open-ssp",
+        "component_id": "ssp",
+        "kind": "spark_server",
+        "ports": {
+          "http": 5000
+        },
+        "version": "0.1.0-9c25f69"
+      },
+      "ssp-operators": {
+        "backend_id": "spark-operators",
+        "component_id": "operators",
+        "kind": "spark_server",
+        "ports": {
+          "grpc": 8535,
+          "ssp": 8536
+        },
+        "version": "0.0.0-5e0c879"
+      }
+    },
+    "operation_admission": [
+      {
+        "operation": "inspect",
+        "prerequisites": [
+          "accepted_identity"
+        ]
+      },
+      {
+        "operation": "start",
+        "prerequisites": [
+          "accepted_identity",
+          "storage"
+        ]
+      },
+      {
+        "operation": "stop",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "restart",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "native_exec",
+        "prerequisites": [
+          "execution_context"
+        ]
+      },
+      {
+        "operation": "network_heal",
+        "prerequisites": [
+          "fault_identity"
+        ]
+      },
+      {
+        "operation": "authentication",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      }
+    ],
+    "protocol_probe": {
+      "kind": "tcp",
+      "port": 50051
+    },
+    "relevant_links": [
+      {
+        "binding": {
+          "network": "regtest",
+          "type": "spark"
+        },
+        "from": "processor",
+        "id": "processor-ssp",
+        "kind": "spark_backend",
+        "to": "ssp"
+      },
+      {
+        "binding": {
+          "network": "regtest",
+          "type": "spark"
+        },
+        "from": "ssp",
+        "id": "ssp-operators",
+        "kind": "spark_backend",
+        "to": "operators"
+      }
+    ],
+    "revision_digest": "sha256:render-test",
+    "rollout_digest": "sha256:spark-render-test",
+    "storage": [
+      {
+        "claim_name": "data-processor-0"
+      }
+    ],
+    "target_descriptor": {
+      "backend_id": "cdk-spark-processor",
+      "component_id": "processor",
+      "kind": "payment_processor",
+      "ports": {
+        "grpc": 50051
+      },
+      "version": "0.1.0-d7244e2"
+    },
+    "workload": {
+      "desired_replicas": 1,
+      "kind": "stateful_set",
+      "name": "processor"
+    }
+  },
+  "resources": {
+    "configMaps": [],
+    "deployments": [],
+    "persistentVolumeClaims": [],
+    "secrets": [
+      {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "processor",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "processor"
+          },
+          "name": "processor-identity",
+          "namespace": "proofstorm-i-spark-render"
+        },
+        "stringData": {
+          "PROOFSTORM_SECRET_KIND": "spark-processor"
+        },
+        "type": "Opaque"
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "processor",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "processor"
+          },
+          "name": "processor-payment-tls",
+          "namespace": "proofstorm-i-spark-render"
+        },
+        "stringData": {
+          "PROOFSTORM_SECRET_KIND": "payment-processor-tls",
+          "PROOFSTORM_TLS_SERVER_NAME": "processor"
+        },
+        "type": "Opaque"
+      }
+    ],
+    "services": [
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "processor",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "processor"
+          },
+          "name": "processor",
+          "namespace": "proofstorm-i-spark-render"
+        },
+        "spec": {
+          "ports": [
+            {
+              "name": "grpc",
+              "port": 50051,
+              "targetPort": 50051
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "processor",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "processor"
+          }
+        }
+      }
+    ],
+    "statefulSets": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "cdk-spark-processor",
+            "proofstorm.dev/execution-state-contract": "proofstorm/cdk-spark-processor-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:render-test"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "processor",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "processor"
+          },
+          "name": "processor",
+          "namespace": "proofstorm-i-spark-render"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "processor",
+              "proofstorm.dev/instance": "i-spark-render",
+              "proofstorm.dev/network-identity": "processor"
+            }
+          },
+          "serviceName": "processor",
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:spark-render-test"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "processor",
+                "proofstorm.dev/instance": "i-spark-render",
+                "proofstorm.dev/network-identity": "processor"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-spark-render"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "args": [],
+                  "command": [
+                    "/opt/proofstorm/driver",
+                    "exec-spark-processor"
+                  ],
+                  "env": [
+                    {
+                      "name": "PROOFSTORM_SPARK_SSP_URL",
+                      "value": "http://ssp:5000"
+                    },
+                    {
+                      "name": "PROOFSTORM_SPARK_PROCESSOR_PORT",
+                      "value": "50051"
+                    },
+                    {
+                      "name": "RUST_LOG",
+                      "value": "info"
+                    }
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/cdk-spark-processor@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "ports": [
+                    {
+                      "containerPort": 50051,
+                      "name": "grpc"
+                    }
+                  ],
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "/opt/proofstorm/driver",
+                        "processor-settings",
+                        "https://127.0.0.1:50051",
+                        "/processor-client/tls",
+                        "cdk-spark-processor"
+                      ]
+                    },
+                    "failureThreshold": 40,
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 3
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/data",
+                      "name": "data"
+                    },
+                    {
+                      "mountPath": "/spark-operators",
+                      "name": "spark-operators",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/processor-identity",
+                      "name": "identity",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/processor-server/tls",
+                      "name": "processor-server",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/processor-client/tls",
+                      "name": "processor-client",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/run/spark-processor",
+                      "name": "config"
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "initContainers": [
+                {
+                  "command": [
+                    "/usr/local/lib/proofstorm-driver",
+                    "install"
+                  ],
+                  "image": "proofstorm-controller:driver-image-required",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "proofstorm-driver",
+                  "resources": {
+                    "limits": {
+                      "cpu": "200m",
+                      "memory": "128Mi"
+                    },
+                    "requests": {
+                      "cpu": "10m",
+                      "memory": "16Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    },
+                    "readOnlyRootFilesystem": true,
+                    "runAsNonRoot": true
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver"
+                    }
+                  ]
+                },
+                {
+                  "command": [
+                    "sh",
+                    "-ec",
+                    "n=0; while [ \"$n\" -lt 120 ]; do ready=1; for target in \"$@\"; do /opt/proofstorm/driver tcp \"${target%:*}\" \"${target##*:}\" || ready=0; done; [ \"$ready\" = 1 ] && exit 0; n=$((n+1)); sleep 1; done; echo 'spark-processor dependencies did not become ready' >&2; exit 1",
+                    "--",
+                    "ssp:5000",
+                    "operators:8535"
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/cdk-spark-processor@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "wait-for-spark-processor-dependencies",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload",
+              "volumes": [
+                {
+                  "name": "spark-operators",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "ca.crt",
+                        "path": "ca.crt"
+                      },
+                      {
+                        "key": "operators.json",
+                        "path": "operators.json"
+                      },
+                      {
+                        "key": "threshold",
+                        "path": "threshold"
+                      }
+                    ],
+                    "secretName": "operators-identity"
+                  }
+                },
+                {
+                  "name": "identity",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "mnemonic",
+                        "path": "mnemonic"
+                      }
+                    ],
+                    "secretName": "processor-identity"
+                  }
+                },
+                {
+                  "name": "processor-server",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "ca.pem",
+                        "path": "ca.pem"
+                      },
+                      {
+                        "key": "server.pem",
+                        "path": "server.pem"
+                      },
+                      {
+                        "key": "server.key",
+                        "path": "server.key"
+                      }
+                    ],
+                    "secretName": "processor-payment-tls"
+                  }
+                },
+                {
+                  "name": "processor-client",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "ca.pem",
+                        "path": "ca.pem"
+                      },
+                      {
+                        "key": "client.pem",
+                        "path": "client.pem"
+                      },
+                      {
+                        "key": "client.key",
+                        "path": "client.key"
+                      }
+                    ],
+                    "secretName": "processor-payment-tls"
+                  }
+                },
+                {
+                  "emptyDir": {
+                    "medium": "Memory"
+                  },
+                  "name": "config"
+                },
+                {
+                  "emptyDir": {},
+                  "name": "proofstorm-driver"
+                }
+              ]
+            }
+          },
+          "volumeClaimTemplates": [
+            {
+              "apiVersion": "v1",
+              "kind": "PersistentVolumeClaim",
+              "metadata": {
+                "labels": {
+                  "app.kubernetes.io/managed-by": "proofstormd",
+                  "proofstorm.dev/component": "processor",
+                  "proofstorm.dev/instance": "i-spark-render",
+                  "proofstorm.dev/network-identity": "processor"
+                },
+                "name": "data"
+              },
+              "spec": {
+                "accessModes": [
+                  "ReadWriteOnce"
+                ],
+                "resources": {
+                  "requests": {
+                    "storage": "1Gi"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
