@@ -41,6 +41,15 @@ pub(super) fn check_invoice<'a>(
     expect::string(decoded, "/payment_hash")
 }
 
+/// Whether the SSP node still holds `hash`'s invoice unpaid. LDK Server keeps
+/// no record of open-ssp's invoice until an HTLC arrives, so none counts too.
+pub(super) fn receive_unpaid(details: &Value, hash: &str, amount_msat: u64) -> Result<bool> {
+    if details["payment"].is_null() {
+        return Ok(true);
+    }
+    Ok(!settled(details, hash, "INBOUND", amount_msat)?)
+}
+
 /// Whether one LDK payment record for `hash` has succeeded in `direction` for
 /// exactly `amount_msat`. Pending is `false`; a failure is an error.
 pub(super) fn settled(
