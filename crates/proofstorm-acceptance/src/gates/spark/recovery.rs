@@ -130,13 +130,16 @@ pub(super) fn unpaid(
 /// open-ssp creates the quote's invoice on its own LDK node for the
 /// processor's payment hash. That node must not have received it.
 fn unpaid_receive(client: &mut McpClient, hash: &str, phase: &str) -> Result<Value> {
-    let details = native::json_output(
-        client,
-        INSTANCE,
-        RUN,
-        "ssp-node",
-        &format!("spark-unpaid-receive-{phase}"),
-        &format!("{LDK} get-payment-details {}", native::quote(hash)),
+    let details = payments::inbound(
+        &native::json_output(
+            client,
+            INSTANCE,
+            RUN,
+            "ssp-node",
+            &format!("spark-unpaid-receive-{phase}"),
+            &format!("{LDK} {}", payments::LIST_PAYMENTS),
+        )?,
+        hash,
     )?;
     ensure!(
         payments::receive_unpaid(&details, hash, UNPAID_SAT * 1000)?,

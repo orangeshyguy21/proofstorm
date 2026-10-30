@@ -260,15 +260,36 @@ fn ldk_payment_records_settle_only_the_exact_payment() {
     assert!(payments::settled(&record("SUCCEEDED"), "other", "INBOUND", 30_000_000).is_err());
     assert!(payments::settled(&record("PENDING"), "hash", "OUTBOUND", 30_000_000).is_err());
     assert!(payments::settled(&Value::Null, "hash", "INBOUND", 30_000_000).is_err());
-    // LDK Server 762bc47 has no record of an invoice until it is paid.
+    // A node with no record of the payment yet has not received it.
     assert!(!payments::settled(&json!({"payment":null}), "hash", "INBOUND", 30_000_000).unwrap());
-    // An unpaid quote's invoice on the SSP node has no LDK record yet, as
-    // observed against open-ssp 9c25f69 and LDK Server 762bc47.
     let unpaid = |details: &Value| payments::receive_unpaid(details, "hash", 30_000_000);
     assert!(unpaid(&json!({"payment":null})).unwrap());
     assert!(unpaid(&record("PENDING")).unwrap());
     assert!(!unpaid(&record("SUCCEEDED")).unwrap());
     assert!(unpaid(&record("FAILED")).is_err());
+}
+
+#[test]
+fn inbound_payments_are_found_by_hash_in_the_payment_list() {
+    // LDK Server 762bc47 gives inbound payments a payment_id other than their
+    // hash: get-payment-details <hash> stays null even after one succeeds.
+    let payment = |id: &str, hash: &str| json!({"payment_id":id,"kind":{"kind":{"bolt11":{"hash":hash}}},"direction":"INBOUND","status":"SUCCEEDED","amount_msat":1});
+    let list = json!({"list":[payment("a", "other"), payment("b", "hash")]});
+    assert_eq!(
+        payments::inbound(&list, "hash").unwrap()["payment"]["payment_id"],
+        "b"
+    );
+    assert_eq!(
+        payments::inbound(&list, "missing").unwrap(),
+        json!({"payment":null})
+    );
+    assert_eq!(
+        payments::inbound(&json!({}), "hash").unwrap(),
+        json!({"payment":null})
+    );
+    let duplicate = json!({"list":[payment("a", "hash"), payment("b", "hash")]});
+    assert!(payments::inbound(&duplicate, "hash").is_err());
+    assert!(payments::inbound(&json!({"list":"x"}), "hash").is_err());
 }
 
 #[test]

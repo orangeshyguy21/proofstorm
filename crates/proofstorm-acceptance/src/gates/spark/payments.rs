@@ -48,9 +48,8 @@ pub(super) fn receive_unpaid(details: &Value, hash: &str, amount_msat: u64) -> R
 }
 
 /// Whether one LDK payment record for `hash` has succeeded in `direction` for
-/// exactly `amount_msat`. Pending is `false`; a failure is an error. LDK Server
-/// 0.1.0-762bc47 keeps no record of an invoice until it is paid, so a `null`
-/// payment is pending too.
+/// exactly `amount_msat`. Pending is `false`, and so is a `null` payment: the
+/// node has no record of it yet. A failure is an error.
 pub(super) fn settled(
     details: &Value,
     hash: &str,
@@ -84,6 +83,31 @@ pub(super) fn settled(
     }
 }
 
+/// LDK Server 0.1.0-762bc47 does not key inbound payments by their hash, so
+/// inbound lookups search the node's payment list for it.
+pub(super) const LIST_PAYMENTS: &str = "list-payments --number-of-payments 1000";
+
+/// The record paying `hash` in a `list-payments` result (its `list`), in the shape
+/// `get-payment-details` prints: `null` when the node has none.
+pub(super) fn inbound(list: &Value, hash: &str) -> Result<Value> {
+    let payments = match list.get("list") {
+        Some(Value::Array(payments)) => payments.as_slice(),
+        None => &[],
+        Some(_) => anyhow::bail!("native payment list is malformed"),
+    };
+    let matches = payments
+        .iter()
+        .filter(|payment| {
+            payment
+                .pointer("/kind/kind/bolt11/hash")
+                .and_then(Value::as_str)
+                == Some(hash)
+        })
+        .collect::<Vec<_>>();
+    ensure!(matches.len() <= 1, "several native payments share one hash");
+    Ok(json!({"payment": matches.first().map_or(Value::Null, |payment| (*payment).clone())}))
+}
+
 /// Poll a node's own record of one payment until it has succeeded.
 fn wait_payment(
     client: &mut McpClient,
@@ -97,8 +121,19 @@ fn wait_payment(
     native::Session::new(client, INSTANCE, RUN).poll(
         node,
         id,
-        &format!("{LDK} get-payment-details {}", native::quote(payment)),
-        |v| Ok(settled(v, hash, direction, amount_msat)?.then(|| v.clone())),
+        &if direction == "INBOUND" {
+            format!("{LDK} {LIST_PAYMENTS}")
+        } else {
+            format!("{LDK} get-payment-details {}", native::quote(payment))
+        },
+        |v| {
+            let details = if direction == "INBOUND" {
+                inbound(v, hash)?
+            } else {
+                v.clone()
+            };
+            Ok(settled(&details, hash, direction, amount_msat)?.then_some(details))
+        },
     )
 }
 
@@ -267,7 +302,7 @@ pub(super) fn melt(
                 native::quote(&log)
             ),
         )?;
-        // LDK identifies an inbound BOLT11 payment by its payment hash.
+        // The peer's own record of the invoice, found by its payment hash.
         let hash = expect::string(&invoice, "/payment_hash")?;
         let received = wait_payment(
             client,
@@ -373,13 +408,16 @@ pub(super) fn unreachable(
         };
         context.record(&format!("{label}-quote.json"), &json!({"quote":quote}))?;
         let hash = expect::string(&invoice, "/payment_hash")?;
-        let island = native::json_output(
-            client,
-            INSTANCE,
-            RUN,
-            "island",
-            &format!("{label}-recipient"),
-            &format!("{LDK} get-payment-details {}", native::quote(hash)),
+        let island = inbound(
+            &native::json_output(
+                client,
+                INSTANCE,
+                RUN,
+                "island",
+                &format!("{label}-recipient"),
+                &format!("{LDK} {LIST_PAYMENTS}"),
+            )?,
+            hash,
         )?;
         ensure!(
             !settled(&island, hash, "INBOUND", UNREACHABLE_SAT * 1000)?,
