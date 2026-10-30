@@ -50,6 +50,32 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
+# Docker Desktop's daemon runs in a VM and cannot reach a registry on the host's
+# loopback, so a local run pushes the exported OCI layout from the host over the
+# registry API instead. The manifest bytes, and therefore its digest, are unchanged.
+push_layout() {
+  local archive=$1 registry=$2 repository=$3 tag=$4 layout manifest media digest location separator
+  local fetch=(curl -q --noproxy '*' --fail --silent --show-error)
+  layout=$(mktemp -d "$work/layout.XXXXXX")
+  tar -xf "$archive" -C "$layout"
+  manifest=$(jq -er '.manifests|select(length==1)|.[0].digest|select(test("^sha256:[a-f0-9]{64}$"))|ltrimstr("sha256:")' "$layout/index.json")
+  media=$(jq -er '.manifests[0].mediaType' "$layout/index.json")
+  for digest in $(jq -er '.config.digest, .layers[].digest|select(test("^sha256:[a-f0-9]{64}$"))' "$layout/blobs/sha256/$manifest"); do
+    if "${fetch[@]}" --max-time 30 --head --output /dev/null "http://$registry/v2/$repository/blobs/$digest" 2>/dev/null; then
+      continue
+    fi
+    location=$("${fetch[@]}" --max-time 30 --request POST --dump-header - --output /dev/null \
+      "http://$registry/v2/$repository/blobs/uploads/" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
+    [[ "$location" == http://* ]] || location="http://$registry$location"
+    separator='?'
+    [[ "$location" != *\?* ]] || separator='&'
+    "${fetch[@]}" --max-time 900 --upload-file "$layout/blobs/sha256/${digest#sha256:}" \
+      --header 'Content-Type: application/octet-stream' --output /dev/null "$location${separator}digest=$digest"
+  done
+  "${fetch[@]}" --max-time 60 --upload-file "$layout/blobs/sha256/$manifest" --header "Content-Type: $media" \
+    --output /dev/null "http://$registry/v2/$repository/manifests/$tag"
+  rm -rf "$layout"
+}
 checkout=$root
 if [[ -n "$local_run" ]]; then
   # Stage pins and build in a disposable clone of this commit. This checkout,
@@ -110,8 +136,12 @@ for repository in "${repositories[@]}"; do
     "$image" -ec "${fields[7]}" > "$candidate/probe.stdout"
   "$helper" catalog-image local "$candidate"
   target="$cache/$stack-candidate/$repository:qualified"
-  docker tag "$image" "$target"
-  timeout 300 docker push "$target" >/dev/null
+  if [[ -n "$local_run" ]]; then
+    push_layout "$artifact/image.tar" "$cache" "$stack-candidate/$repository" qualified
+  else
+    docker tag "$image" "$target"
+    timeout 300 docker push "$target" >/dev/null
+  fi
   timeout 30 docker buildx imagetools inspect --raw "$target" > "$candidate/manifest.json"
   digest=$(sha256sum "$candidate/manifest.json" | cut -d' ' -f1)
   config=$(jq -er '.config.digest|select(test("^sha256:[a-f0-9]{64}$"))' "$candidate/manifest.json")
