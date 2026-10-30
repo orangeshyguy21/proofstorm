@@ -193,8 +193,15 @@ while IFS=$'\t' read -r image source; do
   [[ "$(sha256sum "$work/manifest.json" | cut -d' ' -f1)" == "$digest" ]] || exit 1
 done < <(jq -er '.[]|[.image,.source]|@tsv' "$work/public/cache-inputs.json")
 stage=managed-gate
+tool_cache=()
+if [[ -n "$local_run" && -d "$root/.proofstorm-dev/state/tools" ]]; then
+  # Reuse the developer installation's tools: their downloads are flaky, and
+  # the runner still checks every executable against the bootstrap pins.
+  tool_cache=(--bootstrap-tool-cache "$root/.proofstorm-dev/state/tools")
+fi
 "$runner" --root "$checkout" --checkout-home "$checkout/.proofstorm-dev/state" \
-  --qualification-image-cache "$cache" --work-dir "$work/run" --timeout 3600 "$gate"
+  --qualification-image-cache "$cache" ${tool_cache[@]+"${tool_cache[@]}"} \
+  --work-dir "$work/run" --timeout 3600 "$gate"
 stage=evidence
 "$helper" catalog-image stack-evidence "$stack" "$work/public/staged" "$work/run" "$work/public/qualification.json"
 stage=complete
