@@ -1045,6 +1045,41 @@ mod tests {
     }
 
     #[test]
+    fn candidate_native_env_may_name_settings_its_base_release_does_not_read() {
+        // native_env exists for a candidate's new settings; the base
+        // release's pinned names cannot judge the candidate's source.
+        let catalog = effective_catalog(default_catalog(), &[succeeded_candidate()])
+            .expect("merge candidate catalog");
+        let mint = |version: &str| crate::ComponentSpec {
+            id: "mint".into(),
+            kind: crate::ComponentKind::Mint,
+            implementation: "nutshell".into(),
+            version: Some(version.into()),
+            config_version: default_catalog()
+                .entries
+                .iter()
+                .find(|entry| entry.id == "nutshell")
+                .expect("Nutshell entry")
+                .config_version
+                .clone(),
+            control: crate::ControlClass::Target,
+            config: [(
+                "native_env".to_owned(),
+                serde_json::json!({"MINT_MNEMONIC": "abandon"}),
+            )]
+            .into(),
+        };
+        crate::validate_catalog_component(&mint("candidate-pr1095-aabbccdd"), &catalog)
+            .expect("candidate setting passes");
+        let refused = crate::validate_catalog_component(&mint("0.21.0"), &catalog)
+            .expect_err("the release does not read it");
+        assert!(
+            refused.contains("Nutshell 0.21.0 does not read: MINT_MNEMONIC"),
+            "{refused}"
+        );
+    }
+
+    #[test]
     fn candidates_on_retired_bases_drop_out_without_breaking_the_catalog() {
         let current = succeeded_candidate();
         let mut stale = succeeded_candidate();

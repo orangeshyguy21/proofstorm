@@ -2378,51 +2378,16 @@ fn cdk_native_toml_adds_keys_to_the_rendered_config_without_replacing_any() {
 }
 
 #[test]
-fn nutshell_native_env_reaches_the_mint_after_the_image_accepts_its_names() {
-    let init_containers = |rendered: &RenderedComponent| {
-        serde_json::to_value(&rendered.deployments[0]).unwrap()["spec"]["template"]["spec"]
-            ["initContainers"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-    };
-    let check = |containers: &[Value]| {
-        containers
-            .iter()
-            .find(|container| container["name"] == "check-native-env")
-            .cloned()
-    };
-    let baseline =
-        render_nutshell_mint_component(&mint_plan_with_overrides("nutshell", None)).unwrap();
-    assert!(check(&init_containers(&baseline)).is_none());
-
+fn nutshell_native_env_reaches_the_mint_environment() {
+    // Planning already refused names the pinned release does not read.
     let plan = mint_plan_with_overrides(
         "nutshell",
-        Some(json!({"MINT_MNEMONIC": "abandon abandon about", "DEBUG": "TRUE"})),
+        Some(json!({"MINT_WATCHDOG_IGNORE_MISMATCH": "TRUE", "DEBUG": "TRUE"})),
     );
     let rendered = render_nutshell_mint_component(&plan).unwrap();
     let environment = rendered.config_maps[0].data.as_ref().unwrap();
-    assert_eq!(environment["MINT_MNEMONIC"], "abandon abandon about");
+    assert_eq!(environment["MINT_WATCHDOG_IGNORE_MISMATCH"], "TRUE");
     assert_eq!(environment["DEBUG"], "TRUE");
-    let containers = init_containers(&rendered);
-    // The check runs before the mint waits for any dependency.
-    let names = containers
-        .iter()
-        .map(|container| container["name"].as_str().unwrap())
-        .collect::<Vec<_>>();
-    let check_at = names.iter().position(|name| *name == "check-native-env");
-    let first_wait = names.iter().position(|name| name.starts_with("wait-for-"));
-    assert!(
-        check_at.is_some() && first_wait.is_some() && check_at < first_wait,
-        "{names:?}"
-    );
-    let check = check(&containers).expect("name check");
-    let command = check["command"].as_array().unwrap();
-    assert_eq!(command[..2], [json!("python"), json!("-c")]);
-    // Names are argv, never shell text.
-    assert_eq!(command[3..], [json!("DEBUG"), json!("MINT_MNEMONIC")]);
-    assert_eq!(check["terminationMessagePolicy"], "FallbackToLogsOnError");
-    assert_eq!(check["image"], json!(plan.execution_context.image));
 
     let mut plan = mint_plan_with_overrides("nutshell", None);
     let proofstorm_core::EffectiveComponentConfig::Nutshell(nutshell) = &mut plan.effective_config

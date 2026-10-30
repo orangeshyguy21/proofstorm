@@ -991,11 +991,10 @@ fn current_rollout_pods<'a>(
 
 /// Upstream's own last error line from the init container that prepares the
 /// native config: CDK's `initialize-config` (`config validate`, then
-/// `config apply` or `config init`, which also reach the database) and
-/// Nutshell's `native_env` check. Both are upstream programs reading
-/// documents that hold only references to secrets, so their output may reach
-/// component status. Every other container keeps fixed text, because its
-/// native output may echo secrets.
+/// `config apply` or `config init`, which also reach the database). It is an
+/// upstream program reading a document that holds only references to
+/// secrets, so its output may reach component status. Every other container
+/// keeps fixed text, because its native output may echo secrets.
 fn upstream_init_failure<'a>(
     plan: &'a ComponentPlanContract,
     pods: impl IntoIterator<Item = &'a Pod>,
@@ -1005,10 +1004,7 @@ fn upstream_init_failure<'a>(
             continue;
         };
         for container in status.init_container_statuses.iter().flatten() {
-            if !matches!(
-                container.name.as_str(),
-                CDK_CONFIG_CONTAINER | NATIVE_ENV_CHECK_CONTAINER
-            ) {
+            if container.name != CDK_CONFIG_CONTAINER {
                 continue;
             }
             // Only a failure happening now: an exit, or the exit behind a
@@ -2682,28 +2678,6 @@ pub fn render_nutshell_mint_component(
         &mut rendered,
         &mut deployment["spec"]["template"]["spec"],
     )?;
-    if !config.native_env.is_empty() {
-        // Nutshell ignores names it has no setting for; refuse typos up front.
-        // This is the first init container, so a typo fails before waiting
-        // for any dependency.
-        let mut command = vec![
-            json!("python"),
-            json!("-c"),
-            json!(NUTSHELL_CHECK_NATIVE_ENV),
-        ];
-        command.extend(config.native_env.keys().map(|name| json!(name)));
-        append_init_container(
-            &mut deployment,
-            json!({
-                "name": NATIVE_ENV_CHECK_CONTAINER,
-                "image": plan.execution_context.image,
-                "imagePullPolicy": "IfNotPresent",
-                "command": command,
-                "terminationMessagePolicy": "FallbackToLogsOnError",
-                "securityContext": container_security()
-            }),
-        );
-    }
     if let Some(processor) = &processor {
         append_init_container(
             &mut deployment,
@@ -3102,9 +3076,6 @@ fn nutshell_mint_environment(
     }
     environment
 }
-
-const NUTSHELL_CHECK_NATIVE_ENV: &str = include_str!("../drivers/nutshell_check_native_env.py");
-const NATIVE_ENV_CHECK_CONTAINER: &str = "check-native-env";
 
 /// Add a mint's `native_env` to its `ConfigMap`. Validation already refused
 /// names Proofstorm sets; this refuses them again rather than overwrite one.
@@ -4497,33 +4468,30 @@ mod tests {
             condition.message,
             bounded_condition_message(&format!("initialize-config failed: {database}"))
         );
-        let typo = "native_env names this Nutshell build does not read: MINT_MNEMNOIC";
+        let invalid = "Error: unknown field `listen_hots`";
         let condition = workload_ready(
-            NATIVE_ENV_CHECK_CONTAINER,
-            upstream(typo),
+            CDK_CONFIG_CONTAINER,
+            upstream(invalid),
             json!({}),
             json!({}),
         );
         assert_eq!(condition.reason, ComponentConditionReason::ContainerExited);
         assert_eq!(
             condition.message,
-            format!("check-native-env failed: {typo}")
+            format!("initialize-config failed: {invalid}")
         );
         // Other containers' native output never reaches component status, and
         // an init container's earlier exit doesn't explain the mint's crash loop.
         for (name, current) in [
             ("wait-for-lightning", crash_loop.clone()),
-            (
-                NATIVE_ENV_CHECK_CONTAINER,
-                json!({"terminated": {"exitCode": 0}}),
-            ),
+            (CDK_CONFIG_CONTAINER, json!({"terminated": {"exitCode": 0}})),
         ] {
-            let condition = workload_ready(name, current, upstream(typo), crash_loop.clone());
+            let condition = workload_ready(name, current, upstream(invalid), crash_loop.clone());
             assert_eq!(
                 condition.reason,
                 ComponentConditionReason::ContainerCrashLoop
             );
-            assert!(!condition.message.contains("MINT_MNEMNOIC"), "{name}");
+            assert!(!condition.message.contains("listen_hots"), "{name}");
         }
     }
 
