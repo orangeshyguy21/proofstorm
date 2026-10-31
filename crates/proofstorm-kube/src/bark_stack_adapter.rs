@@ -281,7 +281,12 @@ fn server_database(plan: &ComponentPlanContract) -> Result<super::PostgresDataba
     Ok(database)
 }
 
-fn wait_chain(plan: &ComponentPlanContract, url: &str, cookie: &str, mount: &str) -> Value {
+pub(super) fn wait_chain(
+    plan: &ComponentPlanContract,
+    url: &str,
+    cookie: &str,
+    mount: &str,
+) -> Value {
     json!({"name":"wait-for-bitcoin","image":plan.execution_context.image,
         "command":[crate::drivers::DRIVER_PATH,"wait-bark-chain",url,cookie],"securityContext":container_security(),
         "volumeMounts":[{"name":"config","mountPath":mount,"readOnly":true},{"name":"proofstorm-driver","mountPath":"/opt/proofstorm","readOnly":true}]})

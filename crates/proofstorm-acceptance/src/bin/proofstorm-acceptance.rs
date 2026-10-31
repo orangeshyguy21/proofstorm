@@ -78,7 +78,7 @@ struct Arguments {
     #[arg(long)]
     list: bool,
     /// Print exact cache inputs for a supported gate without creating a runtime.
-    #[arg(long, value_parser = ["bark-processor"])]
+    #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(gates::IMAGE_CACHE_GATES))]
     image_cache_inputs: Option<String>,
     /// Parent-owned worker home; not an existing-installation test mode.
     #[arg(long, hide = true)]
@@ -93,8 +93,8 @@ struct Arguments {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Arguments::parse();
-    if args.image_cache_inputs.is_some() {
-        println!("{}", gates::bark::image_cache_inputs()?);
+    if let Some(gate) = args.image_cache_inputs {
+        println!("{}", gates::image_cache_inputs(&gate)?);
         return Ok(());
     }
     if let Some(path) = args.benchmark_proxy {

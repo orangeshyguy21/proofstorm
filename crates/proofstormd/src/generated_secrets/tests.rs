@@ -417,118 +417,163 @@ async fn a_lost_create_race_keeps_the_winning_credentials() {
     assert!(matches!(error, Error::SecretContract(message) if message.contains("missing key")));
 }
 
-async fn ensure_bark_identity(
-    cluster: &Arc<Mutex<Cluster>>,
-    template: &Secret,
-) -> Result<(), Error> {
+async fn ensure_owned(cluster: &Arc<Mutex<Cluster>>, template: &Secret) -> Result<(), Error> {
     let secrets = api(cluster);
     let claims = Api::namespaced(secrets.into_client(), "test");
-    ensure_bark(&api(cluster), &claims, template).await
+    ensure_owned_identity(&api(cluster), &claims, template).await
 }
 
-fn bark_template() -> Secret {
+/// Each owned-storage identity kind, its error label and its generated keys.
+const OWNED: &[(&str, &str, &[&str])] = &[
+    ("bark-processor", "Bark", &["mnemonic"]),
+    ("open-ssp", "Open SSP", &["mnemonic", "admin-token"]),
+    ("spark-processor", "Spark processor", &["mnemonic"]),
+];
+
+fn owned_template(kind: &str) -> Secret {
     serde_json::from_value(json!({"apiVersion":"v1","kind":"Secret","type":"Opaque",
         "metadata":{"name":"credentials","labels":{"proofstorm.dev/component":"backend"}},
-        "stringData":{"PROOFSTORM_SECRET_KIND":"bark-processor"}}))
+        "stringData":{"PROOFSTORM_SECRET_KIND":kind}}))
     .unwrap()
 }
 
 #[tokio::test]
-async fn bark_seed_is_unique_preserved_and_never_recreated_over_storage() {
-    let template = bark_template();
-    let mut seeds = BTreeSet::new();
-    for _ in 0..3 {
-        let cluster = Arc::new(Mutex::new(Cluster::default()));
-        ensure_bark_identity(&cluster, &template).await.unwrap();
-        let original = cluster.lock().unwrap().secret.clone().unwrap();
-        let seed = &original.data.as_ref().unwrap()["mnemonic"].0;
-        is_mnemonic(std::str::from_utf8(seed).unwrap());
-        assert!(seeds.insert(seed.clone()));
-        cluster.lock().unwrap().claim_exists = true;
-        ensure_bark_identity(&cluster, &template).await.unwrap();
-        assert_eq!(cluster.lock().unwrap().secret.as_ref(), Some(&original));
-        assert_eq!(cluster.lock().unwrap().creates.len(), 1);
-        cluster.lock().unwrap().secret = None;
-        let error = ensure_bark_identity(&cluster, &template).await.unwrap_err();
-        assert!(error.to_string().contains("owned storage exists"));
-        assert_eq!(cluster.lock().unwrap().creates.len(), 1);
-    }
-}
-
-#[tokio::test]
-async fn invalid_or_racing_bark_identity_is_never_overwritten() {
-    let template = bark_template();
-    let cluster = Arc::new(Mutex::new(Cluster::default()));
-    ensure_bark_identity(&cluster, &template).await.unwrap();
-    let original = cluster.lock().unwrap().secret.clone().unwrap();
-    for missing in ["mnemonic", "PROOFSTORM_SECRET_KIND"] {
-        for invalid in [
-            None,
-            Some(b"".to_vec()),
-            Some(b"private invalid words".to_vec()),
-        ] {
-            let mut stored = original.clone();
-            if let Some(bytes) = invalid {
-                stored
-                    .data
-                    .as_mut()
-                    .unwrap()
-                    .insert(missing.into(), ByteString(bytes));
-            } else {
-                stored.data.as_mut().unwrap().remove(missing);
+async fn owned_seeds_are_unique_preserved_and_never_recreated_over_storage() {
+    for (kind, label, generated) in OWNED {
+        let template = owned_template(kind);
+        let mut seeds = BTreeSet::new();
+        for _ in 0..3 {
+            let cluster = Arc::new(Mutex::new(Cluster::default()));
+            ensure_owned(&cluster, &template).await.unwrap();
+            let original = cluster.lock().unwrap().secret.clone().unwrap();
+            let data = original.data.as_ref().unwrap();
+            let text = |key: &str| std::str::from_utf8(&data[key].0).unwrap().to_owned();
+            assert_eq!(data.len(), generated.len() + 1);
+            is_mnemonic(&text("mnemonic"));
+            assert!(seeds.insert(text("mnemonic")));
+            if generated.contains(&"admin-token") {
+                is_random_hex(&text("admin-token"));
+                assert!(seeds.insert(text("admin-token")));
             }
-            for racing in [false, true] {
-                let state = if racing {
-                    Cluster {
-                        concurrent: Some(stored.clone()),
-                        ..Cluster::default()
-                    }
-                } else {
-                    Cluster {
-                        secret: Some(stored.clone()),
-                        claim_exists: true,
-                        ..Cluster::default()
-                    }
-                };
-                let cluster = Arc::new(Mutex::new(state));
-                let error = ensure_bark_identity(&cluster, &template).await.unwrap_err();
-                assert!(!format!("{error:#}").contains("private invalid words"));
-                assert_eq!(cluster.lock().unwrap().secret.as_ref(), Some(&stored));
-                assert_eq!(cluster.lock().unwrap().creates.len(), usize::from(racing));
-            }
+            cluster.lock().unwrap().claim_exists = true;
+            ensure_owned(&cluster, &template).await.unwrap();
+            assert_eq!(cluster.lock().unwrap().secret.as_ref(), Some(&original));
+            assert_eq!(cluster.lock().unwrap().creates.len(), 1);
+            cluster.lock().unwrap().secret = None;
+            let error = ensure_owned(&cluster, &template).await.unwrap_err();
+            assert!(
+                matches!(error, Error::SecretContract(message) if message == format!(
+                    "{label} identity Secret \"credentials\" is missing while owned storage exists; restore the identity instead of regenerating it"
+                ))
+            );
+            assert_eq!(cluster.lock().unwrap().creates.len(), 1);
         }
     }
-    let cluster = Arc::new(Mutex::new(Cluster {
-        concurrent: Some(original.clone()),
-        ..Cluster::default()
-    }));
-    ensure_bark_identity(&cluster, &template).await.unwrap();
-    assert_eq!(cluster.lock().unwrap().secret.as_ref(), Some(&original));
 }
 
 #[tokio::test]
-async fn bark_storage_guard_rechecks_concurrent_creation_and_cannot_be_bypassed() {
-    let template = bark_template();
+async fn invalid_or_racing_owned_identity_is_never_overwritten() {
+    for (kind, label, generated) in OWNED {
+        let template = owned_template(kind);
+        let cluster = Arc::new(Mutex::new(Cluster::default()));
+        ensure_owned(&cluster, &template).await.unwrap();
+        let original = cluster.lock().unwrap().secret.clone().unwrap();
+        for missing in generated.iter().chain(&["PROOFSTORM_SECRET_KIND"]) {
+            for invalid in [
+                None,
+                Some(b"".to_vec()),
+                Some(b"private invalid words".to_vec()),
+            ] {
+                let mut stored = original.clone();
+                if let Some(bytes) = invalid {
+                    stored
+                        .data
+                        .as_mut()
+                        .unwrap()
+                        .insert((*missing).into(), ByteString(bytes));
+                } else {
+                    stored.data.as_mut().unwrap().remove(*missing);
+                }
+                for racing in [false, true] {
+                    let state = if racing {
+                        Cluster {
+                            concurrent: Some(stored.clone()),
+                            ..Cluster::default()
+                        }
+                    } else {
+                        Cluster {
+                            secret: Some(stored.clone()),
+                            claim_exists: true,
+                            ..Cluster::default()
+                        }
+                    };
+                    let cluster = Arc::new(Mutex::new(state));
+                    let error = ensure_owned(&cluster, &template).await.unwrap_err();
+                    let message = format!("{error:#}");
+                    assert!(!message.contains("private invalid words"));
+                    assert!(
+                        message.contains("is missing key")
+                            || message.ends_with(&format!(
+                                "{label} identity Secret has invalid data; refusing replacement"
+                            ))
+                    );
+                    assert_eq!(cluster.lock().unwrap().secret.as_ref(), Some(&stored));
+                    assert_eq!(cluster.lock().unwrap().creates.len(), usize::from(racing));
+                }
+            }
+        }
+        let cluster = Arc::new(Mutex::new(Cluster {
+            concurrent: Some(original.clone()),
+            ..Cluster::default()
+        }));
+        ensure_owned(&cluster, &template).await.unwrap();
+        assert_eq!(cluster.lock().unwrap().secret.as_ref(), Some(&original));
+    }
+}
+
+#[tokio::test]
+async fn owned_identities_refuse_each_others_secrets() {
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    assert!(
-        ensure(&api(&cluster), &template)
+    ensure_owned(&cluster, &owned_template("open-ssp"))
+        .await
+        .unwrap();
+    for kind in ["bark-processor", "spark-processor"] {
+        let error = ensure_owned(&cluster, &owned_template(kind))
             .await
-            .unwrap_err()
-            .to_string()
-            .contains("provisioning guard")
-    );
-    assert!(cluster.lock().unwrap().creates.is_empty());
-    ensure_bark_identity(&cluster, &template).await.unwrap();
-    let original = cluster.lock().unwrap().secret.clone().unwrap();
-    let race = Arc::new(Mutex::new(Cluster {
-        claim_exists: true,
-        claim_race_secret: Some(original.clone()),
-        ..Cluster::default()
-    }));
-    ensure_bark_identity(&race, &template).await.unwrap();
-    let state = race.lock().unwrap();
-    assert!(state.creates.is_empty());
-    assert_eq!(state.secret.as_ref(), Some(&original));
+            .unwrap_err();
+        assert!(error.to_string().contains("has invalid data"));
+    }
+    assert_eq!(cluster.lock().unwrap().creates.len(), 1);
+    let error = ensure_owned(&cluster, &owned_template("cdk-mint"))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("not an owned-storage identity"));
+}
+
+#[tokio::test]
+async fn owned_storage_guard_rechecks_concurrent_creation_and_cannot_be_bypassed() {
+    for (kind, label, _) in OWNED {
+        let template = owned_template(kind);
+        let cluster = Arc::new(Mutex::new(Cluster::default()));
+        let error = ensure(&api(&cluster), &template).await.unwrap_err();
+        assert!(
+            matches!(error, Error::SecretContract(message) if message == format!(
+                "{label} identity requires the owned-storage provisioning guard"
+            ))
+        );
+        assert!(cluster.lock().unwrap().creates.is_empty());
+        ensure_owned(&cluster, &template).await.unwrap();
+        let original = cluster.lock().unwrap().secret.clone().unwrap();
+        let race = Arc::new(Mutex::new(Cluster {
+            claim_exists: true,
+            claim_race_secret: Some(original.clone()),
+            ..Cluster::default()
+        }));
+        ensure_owned(&race, &template).await.unwrap();
+        let state = race.lock().unwrap();
+        assert!(state.creates.is_empty());
+        assert_eq!(state.secret.as_ref(), Some(&original));
+    }
 }
 
 async fn ensure_bark_tls(cluster: &Arc<Mutex<Cluster>>, template: &Secret) -> Result<(), Error> {
@@ -540,7 +585,7 @@ async fn ensure_bark_tls(cluster: &Arc<Mutex<Cluster>>, template: &Secret) -> Re
 async fn bark_tls_preserves_distinct_roles_and_refuses_lost_or_incomplete_identity() {
     let mut authorities = BTreeSet::new();
     for role in ["cln", "hold"] {
-        let mut template = bark_template();
+        let mut template = owned_template("bark-processor");
         template.string_data = Some(BTreeMap::from([
             ("PROOFSTORM_SECRET_KIND".into(), format!("bark-{role}-tls")),
             ("PROOFSTORM_TLS_SERVER_NAME".into(), "backend".into()),
@@ -595,5 +640,339 @@ async fn bark_tls_preserves_distinct_roles_and_refuses_lost_or_incomplete_identi
         }));
         ensure_bark_tls(&race, &template).await.unwrap();
         assert_eq!(race.lock().unwrap().secret.as_ref(), Some(&original));
+    }
+}
+
+fn operators_template(operators: &str, threshold: &str, service: &str) -> Secret {
+    serde_json::from_value(json!({"apiVersion":"v1","kind":"Secret","type":"Opaque",
+    "metadata":{"name":"credentials","labels":{"proofstorm.dev/component":service}},
+    "stringData":{
+        "PROOFSTORM_SECRET_KIND":"spark-operators",
+        "PROOFSTORM_SPARK_OPERATORS":operators,
+        "PROOFSTORM_SPARK_THRESHOLD":threshold,
+        "PROOFSTORM_SPARK_SERVICE":service
+    }}))
+    .unwrap()
+}
+
+const SUBJECT_KEY_ID: &[u8] = &[0x55, 0x1d, 0x0e];
+const KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x0f];
+const SUBJECT_ALT_NAME: &[u8] = &[0x55, 0x1d, 0x11];
+const BASIC_CONSTRAINTS: &[u8] = &[0x55, 0x1d, 0x13];
+const AUTHORITY_KEY_ID: &[u8] = &[0x55, 0x1d, 0x23];
+const EXTENDED_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x25];
+const SERVER_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01];
+const CLIENT_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02];
+const P256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+
+/// Splits one DER element off `input`: tag, whole encoding, contents, rest.
+fn der(input: &[u8]) -> (u8, &[u8], &[u8], &[u8]) {
+    let (length, header) = if input[1] < 0x80 {
+        (usize::from(input[1]), 2)
+    } else {
+        let count = usize::from(input[1] & 0x7f);
+        let length = input[2..2 + count]
+            .iter()
+            .fold(0, |length, byte| length << 8 | usize::from(*byte));
+        (length, 2 + count)
+    };
+    let end = header + length;
+    (input[0], &input[..end], &input[header..end], &input[end..])
+}
+
+fn der_children(mut input: &[u8]) -> Vec<(u8, &[u8], &[u8])> {
+    let mut children = Vec::new();
+    while !input.is_empty() {
+        let (tag, whole, contents, rest) = der(input);
+        children.push((tag, whole, contents));
+        input = rest;
+    }
+    children
+}
+
+/// The X.509 fields these tests check, read without a parser dependency.
+struct Certificate {
+    issuer: Vec<u8>,
+    subject: Vec<u8>,
+    public_key: Vec<u8>,
+    /// Extension OID contents to the DER inside its `extnValue`.
+    extensions: BTreeMap<Vec<u8>, Vec<u8>>,
+}
+
+fn certificate(pem: &str) -> Certificate {
+    assert!(pem.starts_with("-----BEGIN CERTIFICATE-----"));
+    let body: String = pem
+        .lines()
+        .filter(|line| !line.starts_with("-----"))
+        .collect();
+    // `ByteString` decodes base64 for Kubernetes, and so for PEM bodies here.
+    let bytes = serde_json::from_value::<ByteString>(json!(body)).unwrap().0;
+    let (_, _, certificate, _) = der(&bytes);
+    let (_, _, tbs, _) = der(certificate);
+    let fields = der_children(tbs);
+    assert_eq!(fields[0].0, 0xa0, "X.509 v3");
+    let (_, _, extensions) = fields.iter().find(|(tag, ..)| *tag == 0xa3).unwrap();
+    let (_, _, extensions, _) = der(extensions);
+    Certificate {
+        issuer: fields[3].1.to_vec(),
+        subject: fields[5].1.to_vec(),
+        public_key: fields[6].1.to_vec(),
+        extensions: der_children(extensions)
+            .into_iter()
+            .map(|(_, _, extension)| {
+                let parts = der_children(extension);
+                (parts[0].2.to_vec(), parts[parts.len() - 1].2.to_vec())
+            })
+            .collect(),
+    }
+}
+
+impl Certificate {
+    /// The first key-usage byte; every later usage bit must be clear.
+    fn key_usage(&self) -> u8 {
+        let (tag, _, bits, _) = der(&self.extensions[KEY_USAGE]);
+        assert_eq!(tag, 0x03);
+        assert!(bits[2..].iter().all(|byte| *byte == 0));
+        bits[1]
+    }
+
+    fn uses_p256(&self) -> bool {
+        self.public_key
+            .windows(P256.len())
+            .any(|window| window == P256)
+    }
+}
+
+fn assert_server_certificate(
+    data: &BTreeMap<String, String>,
+    index: usize,
+    authority: &Certificate,
+) {
+    let server = certificate(&data[&format!("server-{index}.crt")]);
+    // Chains to `ca.crt`: issued under its name and its key identifier.
+    assert_eq!(server.issuer, authority.subject);
+    let (_, _, authority_id, _) = der(&authority.extensions[SUBJECT_KEY_ID]);
+    let (_, _, identifiers, _) = der(&server.extensions[AUTHORITY_KEY_ID]);
+    assert_eq!(
+        der_children(identifiers),
+        vec![(0x80, identifiers, authority_id)]
+    );
+    let key = rcgen::KeyPair::from_pem(&data[&format!("server-{index}.key")]).unwrap();
+    assert_eq!(key.public_key_der(), server.public_key);
+    assert!(server.uses_p256());
+    let (_, _, names, _) = der(&server.extensions[SUBJECT_ALT_NAME]);
+    let names: Vec<(u8, Vec<u8>)> = der_children(names)
+        .into_iter()
+        .map(|(tag, _, name)| (tag, name.to_vec()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            (0x82, format!("backend-{index}.backend").into_bytes()),
+            (0x82, format!("backend-{index}").into_bytes()),
+            (0x82, b"localhost".to_vec()),
+            (0x87, vec![127, 0, 0, 1]),
+        ]
+    );
+    let (_, _, usages, _) = der(&server.extensions[EXTENDED_KEY_USAGE]);
+    let usages: Vec<(u8, &[u8])> = der_children(usages)
+        .into_iter()
+        .map(|(tag, _, usage)| (tag, usage))
+        .collect();
+    assert_eq!(usages, [(0x06, SERVER_AUTH), (0x06, CLIENT_AUTH)]);
+    assert_eq!(server.key_usage(), 0x80, "digitalSignature only");
+    assert_eq!(
+        server.extensions[BASIC_CONSTRAINTS],
+        [0x30, 0x03, 0x01, 0x01, 0x00]
+    );
+}
+
+#[tokio::test]
+async fn spark_operators_generate_every_identity_in_its_contract_format() {
+    let template = operators_template("3", "2", "backend");
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    ensure(&api(&cluster), &template).await.unwrap();
+    let data = cluster.lock().unwrap().creates[0]
+        .string_data
+        .clone()
+        .unwrap();
+    let mut keys: BTreeSet<String> = template.string_data.clone().unwrap().into_keys().collect();
+    keys.extend(["ca.crt", "operators.json", "threshold"].map(String::from));
+    let authority = certificate(&data["ca.crt"]);
+    assert_eq!(authority.issuer, authority.subject);
+    assert!(authority.uses_p256());
+    assert_eq!(
+        authority.extensions[BASIC_CONSTRAINTS],
+        [0x30, 0x06, 0x01, 0x01, 0xff, 0x02, 0x01, 0x00]
+    );
+    assert_eq!(authority.key_usage(), 0x04, "keyCertSign only");
+    let secp = secp256k1::Secp256k1::new();
+    let mut entries = Vec::new();
+    let mut distinct = BTreeSet::new();
+    for index in 0..3 {
+        let key = data[&format!("operator-{index}.key")]
+            .strip_suffix('\n')
+            .unwrap();
+        let public = data[&format!("operator-{index}.pub")]
+            .strip_suffix('\n')
+            .unwrap();
+        is_random_hex(key);
+        assert_eq!(public.len(), 66);
+        assert!(public.starts_with("02") || public.starts_with("03"));
+        let secret: secp256k1::SecretKey = key.parse().unwrap();
+        assert_eq!(secret.public_key(&secp).to_string(), public);
+        assert_server_certificate(&data, index, &authority);
+        for value in [key, public, data[&format!("server-{index}.key")].as_str()] {
+            assert!(distinct.insert(value.to_owned()));
+        }
+        entries.push(format!(
+            r#"{{"id":{index},"address":"backend-{index}.backend:8535","external_address":"backend-{index}.backend:8535","identity_public_key":"{public}","cert_path":"/spark-operators/ca.crt"}}"#
+        ));
+        keys.extend([
+            format!("operator-{index}.key"),
+            format!("operator-{index}.pub"),
+            format!("server-{index}.crt"),
+            format!("server-{index}.key"),
+        ]);
+    }
+    assert_eq!(data["operators.json"], format!("[{}]", entries.join(",")));
+    assert_eq!(data["threshold"], "2\n");
+    // The CA signing key is discarded; nothing else is stored.
+    assert_eq!(data.keys().cloned().collect::<BTreeSet<_>>(), keys);
+    let persisted = cluster.lock().unwrap().secret.clone();
+    ensure(&api(&cluster), &template).await.unwrap();
+    let state = cluster.lock().unwrap();
+    assert_eq!(state.secret, persisted);
+    assert_eq!((state.creates.len(), state.reads), (1, 2));
+}
+
+#[tokio::test]
+async fn spark_operator_federations_of_every_size_are_independent() {
+    let mut authorities = BTreeSet::new();
+    for (operators, threshold) in [("1", "1"), ("5", "3"), ("5", "5")] {
+        let template = operators_template(operators, threshold, "backend");
+        let cluster = Arc::new(Mutex::new(Cluster::default()));
+        ensure(&api(&cluster), &template).await.unwrap();
+        let data = cluster.lock().unwrap().creates[0]
+            .string_data
+            .clone()
+            .unwrap();
+        let operators: usize = operators.parse().unwrap();
+        assert_eq!(data.len(), 7 + 4 * operators);
+        assert_eq!(data["threshold"], format!("{threshold}\n"));
+        let entries: Vec<Value> = serde_json::from_str(&data["operators.json"]).unwrap();
+        assert_eq!(entries.len(), operators);
+        let authority = certificate(&data["ca.crt"]);
+        for (index, entry) in entries.iter().enumerate() {
+            assert_eq!(entry["id"], index);
+            assert_server_certificate(&data, index, &authority);
+        }
+        assert!(authorities.insert(data["ca.crt"].clone()));
+    }
+}
+
+#[tokio::test]
+async fn spark_operator_federation_is_fixed_at_creation() {
+    let template = operators_template("3", "2", "backend");
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    ensure(&api(&cluster), &template).await.unwrap();
+    let original = cluster.lock().unwrap().secret.clone().unwrap();
+    let refuses = async |template: &Secret, stored: &Secret, racing: bool, expected: &str| {
+        let cluster = Arc::new(Mutex::new(Cluster {
+            secret: (!racing).then(|| stored.clone()),
+            concurrent: racing.then(|| stored.clone()),
+            ..Cluster::default()
+        }));
+        let error = ensure(&api(&cluster), template).await.unwrap_err();
+        assert!(
+            matches!(&error, Error::SecretContract(message)
+            if message.contains(expected)
+                && message.contains("the federation's size, threshold and service are fixed at creation")),
+            "{error}"
+        );
+        let state = cluster.lock().unwrap();
+        assert_eq!(state.secret.as_ref(), Some(stored));
+        assert_eq!(state.creates.len(), usize::from(racing));
+    };
+    for racing in [false, true] {
+        for changed in [
+            operators_template("4", "2", "backend"),
+            operators_template("3", "3", "backend"),
+            operators_template("3", "2", "other"),
+        ] {
+            refuses(&changed, &original, racing, "differs from its template").await;
+        }
+        for key in original.data.as_ref().unwrap().keys() {
+            let setting = key.starts_with("PROOFSTORM_");
+            let expected = if setting {
+                "differs from its template".into()
+            } else {
+                format!("is missing key {key:?}")
+            };
+            for value in [None, Some(ByteString(vec![]))] {
+                let mut stored = original.clone();
+                let data = stored.data.as_mut().unwrap();
+                match value {
+                    Some(value) => data.insert(key.clone(), value),
+                    None => data.remove(key),
+                };
+                refuses(&template, &stored, racing, &expected).await;
+            }
+        }
+    }
+    let race = Arc::new(Mutex::new(Cluster {
+        concurrent: Some(original.clone()),
+        ..Cluster::default()
+    }));
+    ensure(&api(&race), &template).await.unwrap();
+    assert_eq!(race.lock().unwrap().secret.as_ref(), Some(&original));
+}
+
+#[tokio::test]
+async fn invalid_spark_operator_templates_fail_before_any_api_call() {
+    let mut unnamed = operators_template("3", "2", "backend");
+    unnamed
+        .string_data
+        .as_mut()
+        .unwrap()
+        .remove("PROOFSTORM_SPARK_SERVICE");
+    let mut relabelled = operators_template("3", "2", "backend");
+    relabelled.metadata.labels = Some(BTreeMap::from([(
+        "proofstorm.dev/component".into(),
+        "other".into(),
+    )]));
+    for (template, expected) in [
+        (
+            operators_template("0", "1", "backend"),
+            "needs 1 to 5 Spark operators",
+        ),
+        (
+            operators_template("6", "1", "backend"),
+            "needs 1 to 5 Spark operators",
+        ),
+        (
+            operators_template("three", "1", "backend"),
+            "needs 1 to 5 Spark operators",
+        ),
+        (
+            operators_template("3", "0", "backend"),
+            "needs a Spark threshold from 1 to 3",
+        ),
+        (
+            operators_template("3", "4", "backend"),
+            "needs a Spark threshold from 1 to 3",
+        ),
+        (
+            operators_template("3", "-1", "backend"),
+            "needs a Spark threshold from 1 to 3",
+        ),
+        (unnamed, "has no PROOFSTORM_SPARK_SERVICE"),
+        (relabelled, "names a Spark service other than its component"),
+    ] {
+        let cluster = Arc::new(Mutex::new(Cluster::default()));
+        let error = ensure(&api(&cluster), &template).await.unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+        let state = cluster.lock().unwrap();
+        assert_eq!((state.reads, state.creates.len()), (0, 0));
     }
 }

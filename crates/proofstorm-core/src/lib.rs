@@ -40,17 +40,19 @@ pub use backend::{
     CredentialObservationContract, EffectiveComponentConfig, ExecutionContextContract,
     ExecutionMountContract, ExecutionMountTemplateContract, ExecutionStorageSource,
     ExecutionStorageTemplateSource, KeycloakConfig, LdkServerProcessorConfig,
-    LinkedStateObservationContract, LndConfig, NutshellMintConfig, OperationAdmissionContract,
-    OperationClass, PostgresConfig, ProtocolProbeContract, ProtocolProbePlan,
-    ReadinessPrerequisite, RedisConfig, StorageObservationContract, StorageRequirementTemplate,
-    TargetDescriptorContract, WorkloadControllerKind, WorkloadObservationContract, WorkspaceConfig,
-    default_backend_registry,
+    LinkedStateObservationContract, LndConfig, NutshellMintConfig, OpenSspConfig,
+    OperationAdmissionContract, OperationClass, PostgresConfig, ProtocolProbeContract,
+    ProtocolProbePlan, ReadinessPrerequisite, RedisConfig, SparkOperatorsConfig,
+    StorageObservationContract, StorageRequirementTemplate, TargetDescriptorContract,
+    WorkloadControllerKind, WorkloadObservationContract, WorkspaceConfig, default_backend_registry,
 };
 pub use candidate::{
     CANDIDATE_BUILD_API_VERSION, CANDIDATE_BUNDLE_MAX_BYTES, CandidateBuild, CandidateBuildPhase,
     CandidateDiagnostics, CandidateInput, CandidateLog, CandidateProvenance, CandidateSource,
     candidate_catalog_entry, effective_catalog, is_github_repository,
 };
+#[cfg(feature = "test-catalogs")]
+pub use catalog::catalog_with_spark_test_images;
 pub use catalog::{
     AuthenticationMode, BuildProvenance, CDK_MINT_IMAGE, CDK_VERSION, CLN_VERSION,
     CatalogDependencySupport, CatalogEndpointCondition, CatalogEntry, CatalogFeature,

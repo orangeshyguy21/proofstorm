@@ -56,6 +56,30 @@ async fn run() -> Result<()> {
             return proofstorm_driver::bark_stack::cln_hold_ready().await;
         }
         #[cfg(unix)]
+        [command] if command == "exec-spark-signer" => {
+            return proofstorm_driver::spark::exec_signer();
+        }
+        #[cfg(unix)]
+        [command] if command == "exec-spark-operator" => {
+            return proofstorm_driver::spark::exec_operator();
+        }
+        #[cfg(unix)]
+        [command] if command == "spark-operator-ready" => {
+            return proofstorm_driver::spark::operator_ready().await;
+        }
+        #[cfg(unix)]
+        [command] if command == "exec-open-ssp" => {
+            return proofstorm_driver::spark::exec_open_ssp();
+        }
+        #[cfg(unix)]
+        [command] if command == "open-ssp-ready" => {
+            return proofstorm_driver::spark::open_ssp_ready().await;
+        }
+        #[cfg(unix)]
+        [command] if command == "exec-spark-processor" => {
+            return proofstorm_driver::spark::exec_processor().await;
+        }
+        #[cfg(unix)]
         [command, url, cookie] if command == "wait-bark-chain" => {
             return proofstorm_driver::bark_stack::wait_chain(url, Path::new(cookie)).await;
         }

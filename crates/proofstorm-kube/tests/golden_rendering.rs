@@ -21,6 +21,8 @@ const REVISION_DIGEST: &str = "sha256:b2-golden-revision";
 
 #[path = "support/bark.rs"]
 mod bark;
+#[path = "support/spark.rs"]
+mod spark;
 
 // Shared snapshots have a fixed platform; the backend matrix below separately
 // checks all platform-specific images without depending on the test host.
@@ -1691,6 +1693,7 @@ fn assert_backend_goldens(platform: CatalogPlatform) {
         "cdk-bark-processor",
         "cdk-cli-wallet",
         "cdk-ldk-server-processor",
+        "cdk-spark-processor",
         "cln",
         "cln-hold",
         "cocod-wallet",
@@ -1699,8 +1702,10 @@ fn assert_backend_goldens(platform: CatalogPlatform) {
         "lnd",
         "nutshell",
         "nutshell-wallet",
+        "open-ssp",
         "postgresql",
         "redis",
+        "spark-operators",
         "workspace",
     ];
     assert_eq!(
@@ -1710,6 +1715,23 @@ fn assert_backend_goldens(platform: CatalogPlatform) {
     let catalog = catalog_for_platform(platform);
     // Embedded CDK backends are configuration of the one CDK backend.
     for backend_id in characterized.into_iter().chain(CDK_EMBEDDED_SCENARIOS) {
+        if matches!(
+            backend_id,
+            "spark-operators" | "open-ssp" | "cdk-spark-processor"
+        ) {
+            // Spark entries ship only once their images are pinned, so these
+            // goldens come from synthetic plans of the topology fixture.
+            let plan = spark::plan(backend_id);
+            let rendered = match backend_id {
+                "spark-operators" => proofstorm_kube::render_spark_operators_component(&plan),
+                "open-ssp" => proofstorm_kube::render_open_ssp_component(&plan),
+                _ => proofstorm_kube::render_spark_processor_component(&plan),
+            }
+            .unwrap();
+            assert_component_security(&rendered);
+            assert_golden(backend_id, &component_snapshot(&plan, &rendered));
+            continue;
+        }
         if matches!(
             backend_id,
             "cdk-bark-processor" | "bark-server" | "cln-hold"

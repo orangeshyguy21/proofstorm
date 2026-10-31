@@ -79,6 +79,7 @@ pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssu
                 match profile {
                     ProcessorProfile::LdkServer => "ldk_processor_payment_bindings",
                     ProcessorProfile::Bark => "bark_processor_payment_bindings",
+                    ProcessorProfile::Spark => "spark_processor_payment_bindings",
                 },
                 format!("/components/{index}"),
                 format!(
@@ -157,13 +158,16 @@ mod tests {
         }
     }
 
-    // Mint-side topology fixtures do not install Bark: catalog resolution still
-    // requires the separately qualified backend, images and dependency graph.
+    // Mint-side topology fixtures do not install Bark or Spark: catalog resolution
+    // still requires the separately qualified backend, images and dependency graph.
     fn mint_cell(profile: ProcessorProfile) -> CellSpec {
         match profile {
             ProcessorProfile::LdkServer => example(),
             ProcessorProfile::Bark => {
                 serde_json::from_str(include_str!("../tests/fixtures/bark-topology.json")).unwrap()
+            }
+            ProcessorProfile::Spark => {
+                serde_json::from_str(include_str!("../tests/fixtures/spark-topology.json")).unwrap()
             }
         }
     }
@@ -213,7 +217,9 @@ mod tests {
                 if mutation == "mixed-profiles" {
                     second.implementation = match profile {
                         ProcessorProfile::LdkServer => ProcessorProfile::Bark,
-                        ProcessorProfile::Bark => ProcessorProfile::LdkServer,
+                        ProcessorProfile::Bark | ProcessorProfile::Spark => {
+                            ProcessorProfile::LdkServer
+                        }
                     }
                     .implementation()
                     .into();
@@ -243,7 +249,11 @@ mod tests {
 
     #[test]
     fn mint_bindings_require_the_selected_profile_not_the_ldk_default() {
-        for profile in [ProcessorProfile::LdkServer, ProcessorProfile::Bark] {
+        for profile in [
+            ProcessorProfile::LdkServer,
+            ProcessorProfile::Bark,
+            ProcessorProfile::Spark,
+        ] {
             let cell = mint_cell(profile);
             assert!(validate_cell(&cell).valid, "{profile:?}");
             for mutation in [

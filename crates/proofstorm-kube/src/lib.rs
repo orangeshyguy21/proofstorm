@@ -26,8 +26,9 @@ pub use adapter::{
     render_cdk_component, render_cdk_wallet_component, render_cell, render_cln_component,
     render_cln_hold_component, render_cocod_wallet_component, render_component_network_policy,
     render_keycloak_component, render_ldk_server_component, render_ldk_server_processor_component,
-    render_lnd_component, render_nutshell_mint_component, render_postgres_component,
-    render_protocol_prober, render_redis_component, render_wallet_component,
+    render_lnd_component, render_nutshell_mint_component, render_open_ssp_component,
+    render_postgres_component, render_protocol_prober, render_redis_component,
+    render_spark_operators_component, render_spark_processor_component, render_wallet_component,
     render_workspace_component,
 };
 pub use api::{

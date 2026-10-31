@@ -4,19 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       family:
-        description: Standard compatibility builds or the Bark candidate handoff
+        description: Standard compatibility builds, or a Bark or Spark candidate handoff or qualification
         type: choice
         required: true
         default: standard
-        options: [standard, bark, bark-qualification]
+        options: [standard, bark, bark-qualification, spark, spark-qualification]
       architecture:
-        description: Architecture for the Bark handoff (standard keeps its full matrix)
+        description: Architecture for a Bark or Spark handoff (standard keeps its full matrix)
         type: choice
         required: true
         default: amd64
         options: [amd64, arm64]
       candidate_run:
-        description: Successful Bark image build run ID (bark-qualification only)
+        description: Successful Bark or Spark image build run ID (bark-qualification or spark-qualification only)
         type: string
         default: ''
   pull_request:
@@ -24,12 +24,15 @@ on:
     # Candidate packaging evidence is separate from shipped-image qualification.
     paths:
       - '.github/workflows/component-images.yml'
+      - '.github/workflows/spark-images.yml'
       - 'docker/**'
       - 'crates/proofstorm-core/src/release_policy.rs'
       - 'crates/proofstorm-xtask/src/release/catalog_images/**'
       - 'crates/proofstorm-xtask/src/release/catalog_images.rs'
       - 'scripts/catalog-image.sh'
       - 'scripts/test-catalog-image.sh'
+      - 'scripts/stack-image-build.sh'
+      - 'scripts/qualification-docker.sh'
 
 permissions:
   contents: read
@@ -55,6 +58,36 @@ jobs:
     with:
       architecture: ${{ inputs.architecture }}
 
+  managed-spark-qualification:
+    name: Managed Spark qualification
+    if: github.event_name == 'workflow_dispatch' && inputs.family == 'spark-qualification'
+    uses: ./.github/workflows/spark-qualification.yml
+    with:
+      architecture: ${{ inputs.architecture }}
+      candidate_run: ${{ inputs.candidate_run }}
+
+  native-spark-images:
+    name: Spark candidate handoff
+    if: github.event_name == 'workflow_dispatch' && inputs.family == 'spark'
+    uses: ./.github/workflows/spark-images.yml
+    with:
+      architecture: ${{ inputs.architecture }}
+
+  native-spark-components:
+    name: Spark payment components (${{ matrix.arch }})
+    # Pull requests and standard runs build the Spark recipes through the same
+    # handoff as family=spark. A standard dispatch keeps image.tar, so
+    # spark-qualification can use its images without building them again; pull
+    # requests keep only the build receipts.
+    if: github.event_name != 'workflow_dispatch' || inputs.family == 'standard'
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    uses: ./.github/workflows/spark-images.yml
+    with:
+      architecture: ${{ matrix.arch }}
+
   native-payment-components:
     name: Payment component (${{ matrix.selection }}, ${{ matrix.arch }})
     if: github.event_name != 'workflow_dispatch' || inputs.family == 'standard'
@@ -62,13 +95,11 @@ jobs:
       fail-fast: false
       matrix:
         arch: [amd64, arm64]
+        # Spark's recipes, including ldk-server@0.1.0-762bc47, build in
+        # native-spark-components.
         selection:
           - ldk-server@0.1.0-50fe752
           - cdk-ldk-server-processor@0.1.0-fe468ca
-          - ldk-server@0.1.0-762bc47
-          - spark-operator@0.0.0-5e0c879
-          - open-ssp@0.1.0-9c25f69
-          - cdk-spark-processor@0.1.0-d7244e2
         include:
           - arch: amd64
             runner: ubuntu-24.04
@@ -97,7 +128,7 @@ jobs:
         run: |
           set -o pipefail
           # Protocol readiness and payment behavior are covered by the separate
-          # live acceptance gates. The Spark stack has none yet; see docker/payment/SPARK.md.
+          # live acceptance gates.
           bash scripts/catalog-image.sh build "$SELECTION" "linux/$ARCH" \
             "$RUNNER_TEMP/payment-component" \
             2>&1 | tee "$RUNNER_TEMP/payment-component-build.log"

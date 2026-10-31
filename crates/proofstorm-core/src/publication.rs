@@ -221,6 +221,7 @@ fn is_rollout_relevant_link(kind: LinkKind) -> bool {
         kind,
         LinkKind::ChainBackend
             | LinkKind::ArkBackend
+            | LinkKind::SparkBackend
             | LinkKind::PaymentBackend
             | LinkKind::DatabaseBackend
             | LinkKind::AuthenticationBackend
@@ -274,6 +275,7 @@ fn require_compatible_dependency(
         link.kind,
         LinkKind::ChainBackend
             | LinkKind::ArkBackend
+            | LinkKind::SparkBackend
             | LinkKind::PaymentBackend
             | LinkKind::DatabaseBackend
             | LinkKind::AuthenticationBackend

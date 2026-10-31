@@ -1,0 +1,83 @@
+name: Spark native candidate images
+
+on:
+  workflow_call:
+    inputs:
+      architecture:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: Native builder architecture (no emulation)
+        type: choice
+        required: true
+        default: amd64
+        options: [amd64, arm64]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spark-images-${{ github.ref }}-${{ inputs.architecture }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.selection }} (${{ inputs.architecture }})
+    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        # The xtask stack table is authoritative; its tests require this list to match.
+        selection:
+          - spark-operator@0.0.0-5e0c879
+          - open-ssp@0.1.0-9c25f69
+          - cdk-spark-processor@0.1.0-d7244e2
+          - ldk-server@0.1.0-762bc47
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      PLATFORM: linux/${{ inputs.architecture }}
+      SELECTION: ${{ matrix.selection }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the exact recipe on its native platform
+        run: bash scripts/stack-image-build.sh spark "$SELECTION" "$PLATFORM" "$RUNNER_TEMP/spark-image"
+      # Only manually dispatched builds can be qualified, so only they keep the
+      # image and frozen source. Pull requests keep the receipts.
+      - name: Retain image, frozen source and native build evidence
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: spark-image-${{ matrix.selection }}-${{ inputs.architecture }}-${{ github.sha }}-${{ github.run_attempt }}
+          # Exact allowlist; no Docker config, credentials, build cache or runtime state.
+          # SHA256SUMS exists only when the complete image handoff succeeded.
+          path: |
+            ${{ runner.temp }}/spark-image/artifacts/build.log
+            ${{ runner.temp }}/spark-image/artifacts/native.json
+            ${{ runner.temp }}/spark-image/artifacts/image.json
+            ${{ runner.temp }}/spark-image/artifacts/inspect.json
+            ${{ runner.temp }}/spark-image/artifacts/probe.stdout
+            ${{ runner.temp }}/spark-image/artifacts/image.tar
+            ${{ runner.temp }}/spark-image/artifacts/work.tar.gz
+            ${{ runner.temp }}/spark-image/artifacts/SHA256SUMS
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
+      - name: Retain native build evidence
+        if: always() && github.event_name != 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: spark-image-${{ matrix.selection }}-${{ inputs.architecture }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/spark-image/artifacts/build.log
+            ${{ runner.temp }}/spark-image/artifacts/native.json
+            ${{ runner.temp }}/spark-image/artifacts/image.json
+            ${{ runner.temp }}/spark-image/artifacts/inspect.json
+            ${{ runner.temp }}/spark-image/artifacts/probe.stdout
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,640 @@
+{
+  "plan": {
+    "applicable_conditions": [
+      "workload_ready",
+      "storage_ready",
+      "credentials_ready",
+      "service_ready",
+      "protocol_ready",
+      "dependencies_ready",
+      "component_ready",
+      "experiment_controllable"
+    ],
+    "backend_id": "open-ssp",
+    "component_id": "ssp",
+    "condition_aggregation": [
+      {
+        "all_of": [
+          "workload_ready",
+          "storage_ready",
+          "service_ready",
+          "protocol_ready",
+          "dependencies_ready"
+        ],
+        "condition": "component_ready"
+      }
+    ],
+    "condition_reasons": {
+      "component_ready": [
+        "stale_revision",
+        "component_operational",
+        "component_not_operational",
+        "intentionally_stopped"
+      ],
+      "credentials_ready": [
+        "not_observed",
+        "credentials_projected",
+        "credentials_missing"
+      ],
+      "dependencies_ready": [
+        "not_observed",
+        "dependencies_satisfied",
+        "dependencies_unsatisfied"
+      ],
+      "experiment_controllable": [
+        "control_available",
+        "control_unavailable"
+      ],
+      "protocol_ready": [
+        "protocol_responding",
+        "protocol_probe_pending",
+        "protocol_probe_failed",
+        "intentionally_stopped"
+      ],
+      "service_ready": [
+        "not_observed",
+        "endpoints_ready",
+        "endpoints_missing"
+      ],
+      "storage_ready": [
+        "not_observed",
+        "storage_bound",
+        "storage_pending"
+      ],
+      "workload_ready": [
+        "not_observed",
+        "stale_revision",
+        "workload_available",
+        "workload_unavailable",
+        "image_pull_failed",
+        "image_pull_backoff",
+        "invalid_image_name",
+        "container_config_error",
+        "container_crash_loop",
+        "container_start_error",
+        "container_exited",
+        "pod_unschedulable",
+        "intentionally_stopped"
+      ]
+    },
+    "credentials": [
+      {
+        "claim_name": "data-ssp-node-0",
+        "identity": "ldk-server:ssp-lightning:ssp-node:data-ssp-node-0",
+        "mount_name": "ldk-server",
+        "mount_path": "/ldk-server",
+        "read_only": true,
+        "source_component_id": "ssp-node",
+        "source_state_contract": "proofstorm/ldk-server-state/v1"
+      }
+    ],
+    "effective_config": {
+      "config": {
+        "max_swap_total_sats": 1000000
+      },
+      "implementation": "open-ssp"
+    },
+    "execution_context": {
+      "component_id": "ssp",
+      "environment": {},
+      "image": "proofstorm-registry.localhost:5000/open-ssp@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "mounts": [
+        {
+          "mount_path": "/data",
+          "name": "data",
+          "read_only": false,
+          "source": {
+            "source": "stateful_data"
+          }
+        },
+        {
+          "mount_path": "/ldk-server",
+          "name": "ldk-server",
+          "read_only": true,
+          "source": {
+            "link_id": "ssp-lightning",
+            "source": "linked_stateful_data"
+          }
+        }
+      ],
+      "state_contract": "proofstorm/open-ssp-state/v1"
+    },
+    "instance_key": "i-spark-render",
+    "kind": "spark_server",
+    "linked_targets": {
+      "ssp-lightning": {
+        "backend_id": "ldk-server",
+        "component_id": "ssp-node",
+        "kind": "lightning",
+        "ports": {
+          "p2p": 9735,
+          "rpc": 3536
+        },
+        "version": "0.1.0-762bc47"
+      },
+      "ssp-operators": {
+        "backend_id": "spark-operators",
+        "component_id": "operators",
+        "kind": "spark_server",
+        "ports": {
+          "grpc": 8535,
+          "ssp": 8536
+        },
+        "version": "0.0.0-5e0c879"
+      }
+    },
+    "operation_admission": [
+      {
+        "operation": "inspect",
+        "prerequisites": [
+          "accepted_identity"
+        ]
+      },
+      {
+        "operation": "start",
+        "prerequisites": [
+          "accepted_identity",
+          "storage"
+        ]
+      },
+      {
+        "operation": "stop",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "restart",
+        "prerequisites": [
+          "workload_identity"
+        ]
+      },
+      {
+        "operation": "native_exec",
+        "prerequisites": [
+          "execution_context"
+        ]
+      },
+      {
+        "operation": "network_heal",
+        "prerequisites": [
+          "fault_identity"
+        ]
+      },
+      {
+        "operation": "authentication",
+        "prerequisites": [
+          "dependencies",
+          "protocol"
+        ]
+      }
+    ],
+    "protocol_probe": {
+      "kind": "tcp",
+      "port": 5000
+    },
+    "relevant_links": [
+      {
+        "binding": {
+          "method": "bolt11",
+          "type": "payment",
+          "unit": "sat"
+        },
+        "from": "ssp",
+        "id": "ssp-lightning",
+        "kind": "payment_backend",
+        "to": "ssp-node"
+      },
+      {
+        "binding": {
+          "network": "regtest",
+          "type": "spark"
+        },
+        "from": "ssp",
+        "id": "ssp-operators",
+        "kind": "spark_backend",
+        "to": "operators"
+      }
+    ],
+    "revision_digest": "sha256:render-test",
+    "rollout_digest": "sha256:spark-render-test",
+    "storage": [
+      {
+        "claim_name": "data-ssp-0"
+      }
+    ],
+    "target_descriptor": {
+      "backend_id": "open-ssp",
+      "component_id": "ssp",
+      "kind": "spark_server",
+      "ports": {
+        "http": 5000
+      },
+      "version": "0.1.0-9c25f69"
+    },
+    "workload": {
+      "desired_replicas": 1,
+      "kind": "stateful_set",
+      "name": "ssp"
+    }
+  },
+  "resources": {
+    "configMaps": [],
+    "deployments": [],
+    "persistentVolumeClaims": [],
+    "secrets": [
+      {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "ssp",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "ssp"
+          },
+          "name": "ssp-identity",
+          "namespace": "proofstorm-i-spark-render"
+        },
+        "stringData": {
+          "PROOFSTORM_SECRET_KIND": "open-ssp"
+        },
+        "type": "Opaque"
+      }
+    ],
+    "services": [
+      {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "ssp",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "ssp"
+          },
+          "name": "ssp",
+          "namespace": "proofstorm-i-spark-render"
+        },
+        "spec": {
+          "ports": [
+            {
+              "name": "http",
+              "port": 5000,
+              "targetPort": 5000
+            }
+          ],
+          "selector": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "ssp",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "ssp"
+          }
+        }
+      }
+    ],
+    "statefulSets": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+          "annotations": {
+            "proofstorm.dev/backend-id": "open-ssp",
+            "proofstorm.dev/execution-state-contract": "proofstorm/open-ssp-state/v1",
+            "proofstorm.dev/revision-digest": "sha256:render-test"
+          },
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/component": "ssp",
+            "proofstorm.dev/instance": "i-spark-render",
+            "proofstorm.dev/network-identity": "ssp"
+          },
+          "name": "ssp",
+          "namespace": "proofstorm-i-spark-render"
+        },
+        "spec": {
+          "replicas": 1,
+          "selector": {
+            "matchLabels": {
+              "app.kubernetes.io/managed-by": "proofstormd",
+              "proofstorm.dev/component": "ssp",
+              "proofstorm.dev/instance": "i-spark-render",
+              "proofstorm.dev/network-identity": "ssp"
+            }
+          },
+          "serviceName": "ssp",
+          "template": {
+            "metadata": {
+              "annotations": {
+                "proofstorm.dev/rollout-digest": "sha256:spark-render-test"
+              },
+              "labels": {
+                "app.kubernetes.io/managed-by": "proofstormd",
+                "proofstorm.dev/component": "ssp",
+                "proofstorm.dev/instance": "i-spark-render",
+                "proofstorm.dev/network-identity": "ssp"
+              }
+            },
+            "spec": {
+              "affinity": {
+                "podAffinity": {
+                  "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                      "labelSelector": {
+                        "matchLabels": {
+                          "proofstorm.dev/instance": "i-spark-render"
+                        }
+                      },
+                      "topologyKey": "kubernetes.io/hostname"
+                    }
+                  ]
+                }
+              },
+              "automountServiceAccountToken": false,
+              "containers": [
+                {
+                  "args": [],
+                  "command": [
+                    "/opt/proofstorm/driver",
+                    "exec-open-ssp"
+                  ],
+                  "env": [
+                    {
+                      "name": "SSP_LISTEN_ADDR",
+                      "value": "0.0.0.0:5000"
+                    },
+                    {
+                      "name": "SSP_NETWORK",
+                      "value": "REGTEST"
+                    },
+                    {
+                      "name": "SSP_PUBLIC_URL",
+                      "value": "http://ssp:5000"
+                    },
+                    {
+                      "name": "SSP_DATA_DIR",
+                      "value": "/data"
+                    },
+                    {
+                      "name": "SSP_MIN_SPLIT_CHILD_SATS",
+                      "value": "1"
+                    },
+                    {
+                      "name": "SSP_SWAP_FEE_SATS",
+                      "value": "0"
+                    },
+                    {
+                      "name": "MAX_SWAP_TOTAL_SATS",
+                      "value": "1000000"
+                    },
+                    {
+                      "name": "LDK_BACKEND",
+                      "value": "server"
+                    },
+                    {
+                      "name": "LDK_GRPC_ADDR",
+                      "value": "ssp-node:3536"
+                    },
+                    {
+                      "name": "LDK_MACAROON_FILE",
+                      "value": "/ldk-server/regtest/macaroons/admin.macaroon"
+                    },
+                    {
+                      "name": "LDK_TLS_CERT_FILE",
+                      "value": "/ldk-server/tls.crt"
+                    },
+                    {
+                      "name": "RUST_LOG",
+                      "value": "info"
+                    }
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/open-ssp@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "component",
+                  "ports": [
+                    {
+                      "containerPort": 5000,
+                      "name": "http"
+                    }
+                  ],
+                  "readinessProbe": {
+                    "exec": {
+                      "command": [
+                        "/opt/proofstorm/driver",
+                        "open-ssp-ready"
+                      ]
+                    },
+                    "failureThreshold": 40,
+                    "periodSeconds": 3,
+                    "timeoutSeconds": 5
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/data",
+                      "name": "data"
+                    },
+                    {
+                      "mountPath": "/spark-operators",
+                      "name": "spark-operators",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/ssp-identity",
+                      "name": "ssp-identity",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/run/open-ssp",
+                      "name": "ssp-seed"
+                    },
+                    {
+                      "mountPath": "/ldk-server",
+                      "name": "ldk-server",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "enableServiceLinks": false,
+              "initContainers": [
+                {
+                  "command": [
+                    "/usr/local/lib/proofstorm-driver",
+                    "install"
+                  ],
+                  "image": "proofstorm-controller:driver-image-required",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "proofstorm-driver",
+                  "resources": {
+                    "limits": {
+                      "cpu": "200m",
+                      "memory": "128Mi"
+                    },
+                    "requests": {
+                      "cpu": "10m",
+                      "memory": "16Mi"
+                    }
+                  },
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    },
+                    "readOnlyRootFilesystem": true,
+                    "runAsNonRoot": true
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver"
+                    }
+                  ]
+                },
+                {
+                  "command": [
+                    "sh",
+                    "-ec",
+                    "n=0; while [ \"$n\" -lt 120 ]; do ready=1; test -s /ldk-server/regtest/macaroons/admin.macaroon || ready=0; test -s /ldk-server/tls.crt || ready=0; for target in \"$@\"; do /opt/proofstorm/driver tcp \"${target%:*}\" \"${target##*:}\" || ready=0; done; [ \"$ready\" = 1 ] && exit 0; n=$((n+1)); sleep 1; done; echo 'open-ssp dependencies did not become ready' >&2; exit 1",
+                    "--",
+                    "ssp-node:3536",
+                    "operators:8535"
+                  ],
+                  "image": "proofstorm-registry.localhost:5000/open-ssp@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                  "imagePullPolicy": "IfNotPresent",
+                  "name": "wait-for-open-ssp-dependencies",
+                  "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                      "drop": [
+                        "ALL"
+                      ]
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/ldk-server",
+                      "name": "ldk-server",
+                      "readOnly": true
+                    },
+                    {
+                      "mountPath": "/opt/proofstorm",
+                      "name": "proofstorm-driver",
+                      "readOnly": true
+                    }
+                  ]
+                }
+              ],
+              "securityContext": {
+                "fsGroup": 1000,
+                "runAsGroup": 1000,
+                "runAsNonRoot": true,
+                "runAsUser": 1000,
+                "seccompProfile": {
+                  "type": "RuntimeDefault"
+                }
+              },
+              "serviceAccountName": "proofstorm-workload",
+              "volumes": [
+                {
+                  "name": "spark-operators",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "ca.crt",
+                        "path": "ca.crt"
+                      },
+                      {
+                        "key": "operators.json",
+                        "path": "operators.json"
+                      },
+                      {
+                        "key": "threshold",
+                        "path": "threshold"
+                      }
+                    ],
+                    "secretName": "operators-identity"
+                  }
+                },
+                {
+                  "name": "ssp-identity",
+                  "secret": {
+                    "defaultMode": 288,
+                    "items": [
+                      {
+                        "key": "mnemonic",
+                        "path": "mnemonic"
+                      },
+                      {
+                        "key": "admin-token",
+                        "path": "admin-token"
+                      }
+                    ],
+                    "secretName": "ssp-identity"
+                  }
+                },
+                {
+                  "emptyDir": {
+                    "medium": "Memory"
+                  },
+                  "name": "ssp-seed"
+                },
+                {
+                  "name": "ldk-server",
+                  "persistentVolumeClaim": {
+                    "claimName": "data-ssp-node-0",
+                    "readOnly": true
+                  }
+                },
+                {
+                  "emptyDir": {},
+                  "name": "proofstorm-driver"
+                }
+              ]
+            }
+          },
+          "volumeClaimTemplates": [
+            {
+              "apiVersion": "v1",
+              "kind": "PersistentVolumeClaim",
+              "metadata": {
+                "labels": {
+                  "app.kubernetes.io/managed-by": "proofstormd",
+                  "proofstorm.dev/component": "ssp",
+                  "proofstorm.dev/instance": "i-spark-render",
+                  "proofstorm.dev/network-identity": "ssp"
+                },
+                "name": "data"
+              },
+              "spec": {
+                "accessModes": [
+                  "ReadWriteOnce"
+                ],
+                "resources": {
+                  "requests": {
+                    "storage": "1Gi"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -762,7 +762,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "cell_up",
-        description = "Start or live-edit a named cell, preserving unchanged components. For inline authoring supply components and links ([] if none), plus name and request_id; the current API version is automatic. Alternatives: cell document/file, patch or plan. Use exactly one form. Returns acceptance, not readiness; use cell_wait. For edits copy desired_generation/instance_key from cell_inspect into expected_generation/expected_instance_key. Keep the entire request unchanged for exact retries. Omit preconditions for creation. Backend links require id/kind/from/to and flat kind-specific fields: chain_backend network; payment_backend method/unit; database_backend role; authentication_backend protocol. Canonical cell_read specifications also work."
+        description = "Start or live-edit a named cell, preserving unchanged components. For inline authoring supply components and links ([] if none), plus name and request_id; the current API version is automatic. Alternatives: cell document/file, patch or plan. Use exactly one form. Returns acceptance, not readiness; use cell_wait. For edits copy desired_generation/instance_key from cell_inspect into expected_generation/expected_instance_key. Keep the entire request unchanged for exact retries. Omit preconditions for creation. Backend links require id/kind/from/to and flat kind-specific fields: chain_backend, ark_backend and spark_backend network; payment_backend method/unit; database_backend role; authentication_backend protocol. Canonical cell_read specifications also work."
     )]
     async fn proofstorm_cell_up(
         &self,
@@ -2002,6 +2002,7 @@ fn topology_summary(cell: &CellSpec) -> TopologySummary {
             link.kind,
             LinkKind::ChainBackend
                 | LinkKind::ArkBackend
+                | LinkKind::SparkBackend
                 | LinkKind::PaymentBackend
                 | LinkKind::DatabaseBackend
                 | LinkKind::AuthenticationBackend

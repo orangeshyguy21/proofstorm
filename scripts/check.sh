@@ -80,8 +80,8 @@ check_shell() {
   shellcheck scripts/test-controller-cache.sh
   shellcheck scripts/cargo-cache.sh scripts/test-cargo-cache.sh
   shellcheck scripts/catalog-image.sh scripts/test-catalog-image.sh
-  shellcheck --external-sources scripts/bark-image-build.sh scripts/test-bark-image-build.sh
-  shellcheck --external-sources scripts/bark-qualification.sh scripts/test-bark-qualification.sh
+  shellcheck --external-sources scripts/bark-image-build.sh scripts/stack-image-build.sh scripts/test-bark-image-build.sh
+  shellcheck --external-sources scripts/bark-qualification.sh scripts/stack-qualification.sh scripts/test-bark-qualification.sh
   shellcheck --external-sources scripts/ci-macos-bundle.sh scripts/test-ci-macos-bundle.sh scripts/macos-install-smoke.sh scripts/macos-install-check.sh
   shellcheck --external-sources scripts/acceptance.sh
   shellcheck scripts/test-workflow-surface.sh

@@ -140,6 +140,7 @@ pub enum ComponentKind {
     Bitcoin,
     Lightning,
     ArkServer,
+    SparkServer,
     PaymentProcessor,
     Mint,
     Database,
@@ -183,6 +184,7 @@ pub enum LinkKind {
     LightningPeer,
     ChainBackend,
     ArkBackend,
+    SparkBackend,
     PaymentBackend,
     DatabaseBackend,
     AuthenticationBackend,
@@ -325,6 +327,9 @@ pub enum DependencyBinding {
     Ark {
         network: BitcoinNetwork,
     },
+    Spark {
+        network: BitcoinNetwork,
+    },
     Payment {
         method: PaymentMethod,
         unit: String,
@@ -357,12 +362,12 @@ impl JsonSchema for DependencyBinding {
     fn json_schema(generator: &mut SchemaGenerator) -> Schema {
         json_schema!({
             "type": "object",
-            "description": "Typed dependency qualifier. Chain and Ark bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
+            "description": "Typed dependency qualifier. Chain, Ark and Spark bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.",
             "required": ["type"],
             "properties": {
                 "type": {
                     "type": "string",
-                    "enum": ["chain", "ark", "payment", "database", "authentication"]
+                    "enum": ["chain", "ark", "spark", "payment", "database", "authentication"]
                 },
                 "protocol": AuthenticationProtocol::json_schema(generator),
                 "network": BitcoinNetwork::json_schema(generator),
@@ -384,8 +389,8 @@ impl JsonSchema for DependencyBinding {
             "additionalProperties": false,
             "x-kubernetes-validations": [
                 {
-                    "rule": "self.type in ['chain', 'ark'] ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))",
-                    "message": "chain and Ark bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol"
+                    "rule": "self.type in ['chain', 'ark', 'spark'] ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'payment' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == 'database' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))",
+                    "message": "chain, Ark and Spark bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol"
                 }
             ]
         })
@@ -396,10 +401,10 @@ impl JsonSchema for DependencyBinding {
 #[serde(deny_unknown_fields)]
 #[schemars(extend(
     "x-kubernetes-validations" = [{
-        "rule": "self.kind in ['chain_backend', 'ark_backend', 'payment_backend', 'database_backend', 'authentication_backend'] ? has(self.binding) : !has(self.binding)",
+        "rule": "self.kind in ['chain_backend', 'ark_backend', 'spark_backend', 'payment_backend', 'database_backend', 'authentication_backend'] ? has(self.binding) : !has(self.binding)",
         "message": "backend links require a binding; peer and network-path links forbid one"
     }, {
-        "rule": "!has(self.binding) || (self.kind == 'chain_backend' && self.binding.type == 'chain') || (self.kind == 'ark_backend' && self.binding.type == 'ark') || (self.kind == 'payment_backend' && self.binding.type == 'payment') || (self.kind == 'database_backend' && self.binding.type == 'database') || (self.kind == 'authentication_backend' && self.binding.type == 'authentication')",
+        "rule": "!has(self.binding) || (self.kind == 'chain_backend' && self.binding.type == 'chain') || (self.kind == 'ark_backend' && self.binding.type == 'ark') || (self.kind == 'spark_backend' && self.binding.type == 'spark') || (self.kind == 'payment_backend' && self.binding.type == 'payment') || (self.kind == 'database_backend' && self.binding.type == 'database') || (self.kind == 'authentication_backend' && self.binding.type == 'authentication')",
         "message": "backend link kind must match its binding type"
     }]
 ))]
@@ -469,6 +474,39 @@ pub struct CellSpec {
     pub links: Vec<LinkSpec>,
     #[serde(default)]
     pub policy: CellPolicy,
+}
+
+impl CellSpec {
+    /// The links a component's plan carries: its own, plus, for a Spark
+    /// processor, its SSP's operator link. The processor links only to the
+    /// SSP but talks to that SSP's operators directly.
+    #[must_use]
+    pub fn plan_links(&self, component_id: &str) -> Vec<LinkSpec> {
+        let mut links = self
+            .links
+            .iter()
+            .filter(|link| link.from == component_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let spark_processor = self.components.iter().any(|component| {
+            component.id == component_id
+                && component.implementation == crate::processor_ids::SPARK_PROCESSOR
+        });
+        if spark_processor {
+            let ssps = links
+                .iter()
+                .filter(|link| link.kind == LinkKind::SparkBackend)
+                .map(|link| link.to.clone())
+                .collect::<Vec<_>>();
+            links.extend(
+                self.links
+                    .iter()
+                    .filter(|link| link.kind == LinkKind::SparkBackend && ssps.contains(&link.from))
+                    .cloned(),
+            );
+        }
+        links
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

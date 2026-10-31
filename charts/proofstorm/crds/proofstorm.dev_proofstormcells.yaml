@@ -51,6 +51,7 @@ spec:
                           - bitcoin
                           - lightning
                           - ark_server
+                          - spark_server
                           - payment_processor
                           - mint
                           - database
@@ -77,7 +78,7 @@ spec:
                     items:
                       properties:
                         binding:
-                          description: Typed dependency qualifier. Chain and Ark bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.
+                          description: Typed dependency qualifier. Chain, Ark and Spark bindings require network; payment bindings require method and unit; database bindings require a role and may name the database to create; authentication bindings require a protocol. Proofstorm validates the discriminator-specific fields before publication.
                           nullable: true
                           properties:
                             database:
@@ -106,6 +107,7 @@ spec:
                               enum:
                               - chain
                               - ark
+                              - spark
                               - payment
                               - database
                               - authentication
@@ -119,8 +121,8 @@ spec:
                           - type
                           type: object
                           x-kubernetes-validations:
-                          - message: chain and Ark bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol
-                            rule: 'self.type in [''chain'', ''ark''] ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == ''payment'' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == ''database'' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))'
+                          - message: chain, Ark and Spark bindings require only network; payment bindings require only method and unit; database bindings require a role and may name a database; authentication bindings require only protocol
+                            rule: 'self.type in [''chain'', ''ark'', ''spark''] ? has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == ''payment'' ? has(self.method) && has(self.unit) && !has(self.network) && !has(self.role) && !has(self.protocol) && !has(self.database) : (self.type == ''database'' ? has(self.role) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.protocol) : has(self.protocol) && !has(self.network) && !has(self.method) && !has(self.unit) && !has(self.role) && !has(self.database)))'
                         from:
                           type: string
                         id:
@@ -132,6 +134,7 @@ spec:
                           - lightning_peer
                           - chain_backend
                           - ark_backend
+                          - spark_backend
                           - payment_backend
                           - database_backend
                           - authentication_backend
@@ -147,9 +150,9 @@ spec:
                       type: object
                       x-kubernetes-validations:
                       - message: backend links require a binding; peer and network-path links forbid one
-                        rule: 'self.kind in [''chain_backend'', ''ark_backend'', ''payment_backend'', ''database_backend'', ''authentication_backend''] ? has(self.binding) : !has(self.binding)'
+                        rule: 'self.kind in [''chain_backend'', ''ark_backend'', ''spark_backend'', ''payment_backend'', ''database_backend'', ''authentication_backend''] ? has(self.binding) : !has(self.binding)'
                       - message: backend link kind must match its binding type
-                        rule: '!has(self.binding) || (self.kind == ''chain_backend'' && self.binding.type == ''chain'') || (self.kind == ''ark_backend'' && self.binding.type == ''ark'') || (self.kind == ''payment_backend'' && self.binding.type == ''payment'') || (self.kind == ''database_backend'' && self.binding.type == ''database'') || (self.kind == ''authentication_backend'' && self.binding.type == ''authentication'')'
+                        rule: '!has(self.binding) || (self.kind == ''chain_backend'' && self.binding.type == ''chain'') || (self.kind == ''ark_backend'' && self.binding.type == ''ark'') || (self.kind == ''spark_backend'' && self.binding.type == ''spark'') || (self.kind == ''payment_backend'' && self.binding.type == ''payment'') || (self.kind == ''database_backend'' && self.binding.type == ''database'') || (self.kind == ''authentication_backend'' && self.binding.type == ''authentication'')'
                     type: array
                   name:
                     type: string
@@ -316,6 +319,7 @@ spec:
                                 - lightning_peer
                                 - chain_backend
                                 - ark_backend
+                                - spark_backend
                                 - payment_backend
                                 - database_backend
                                 - authentication_backend
@@ -644,6 +648,7 @@ spec:
                       - bitcoin
                       - lightning
                       - ark_server
+                      - spark_server
                       - payment_processor
                       - mint
                       - database

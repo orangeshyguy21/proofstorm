@@ -1,6 +1,4 @@
-//! Rail registration and an on-chain deposit boarded into Ark by the processor.
-use std::collections::BTreeSet;
-
+//! Bark's advertised rails and an on-chain deposit boarded into Ark by the processor.
 use super::{
     Duration, GateContext, INSTANCE, McpClient, RUN, Result, Value, ensure, expect, http, json,
     native, sleep,
@@ -26,36 +24,6 @@ pub(super) fn check_settings(settings: &Value) -> Result<()> {
         "Bark capabilities differ from its {METHODS} sat profile"
     );
     Ok(())
-}
-
-/// CDK registers every advertised rail for both minting and melting.
-pub(super) fn check_registered(info: &Value) -> Result<()> {
-    let expected = METHODS.split(',').collect::<BTreeSet<_>>();
-    for nut in ["4", "5"] {
-        let mut methods = BTreeSet::new();
-        for method in expect::array(info, &format!("/nuts/{nut}/methods"))? {
-            ensure!(
-                method["unit"] == "sat",
-                "mint registered a non-sat rail: {method}"
-            );
-            ensure!(
-                methods.insert(expect::string(method, "/method")?),
-                "mint registered one rail twice: {method}"
-            );
-        }
-        ensure!(
-            methods == expected,
-            "mint NUT-{nut:0>2} rails {methods:?} differ from the processor's {METHODS}"
-        );
-    }
-    Ok(())
-}
-
-pub(super) fn registered(context: &GateContext, namespace: &str) -> Result<()> {
-    let mut forward = http::PortForward::open(&context.kubectl, namespace, "service/mint", 3338)?;
-    let info = http::get_json_retrying(&mut forward, "/v1/info", 30)?;
-    context.record("bark-mint-info.json", &info)?;
-    check_registered(&info)
 }
 
 fn bitcoin(sat: u64) -> String {

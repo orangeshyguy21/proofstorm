@@ -8,8 +8,9 @@ use crate::Error;
 
 type GenerateData = fn(&Secret) -> Result<BTreeMap<String, String>, Error>;
 
-mod bark;
-pub(super) use bark::ensure as ensure_bark;
+mod owned;
+mod spark;
+pub(super) use owned::ensure as ensure_owned_identity;
 
 pub(super) async fn ensure(secrets: &Api<Secret>, template: &Secret) -> Result<(), Error> {
     let kind = template
@@ -17,12 +18,14 @@ pub(super) async fn ensure(secrets: &Api<Secret>, template: &Secret) -> Result<(
         .as_ref()
         .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"))
         .map(String::as_str);
+    if let Some(identity) = kind.and_then(owned::identity) {
+        return Err(Error::SecretContract(format!(
+            "{} identity requires the owned-storage provisioning guard",
+            identity.label
+        )));
+    }
     let (required, generate): (&[&str], GenerateData) = match kind {
-        Some("bark-processor") => {
-            return Err(Error::SecretContract(
-                "Bark identity requires the owned-storage provisioning guard".into(),
-            ));
-        }
+        Some("spark-operators") => return spark::ensure_operators(secrets, template).await,
         Some("cdk-mint") => (
             &[
                 "PROOFSTORM_SECRET_KIND",
@@ -65,9 +68,23 @@ async fn ensure_generated_secret(
     required: &[&str],
     generate: impl FnOnce() -> Result<BTreeMap<String, String>, Error>,
 ) -> Result<(), Error> {
+    ensure_generated_secret_with(secrets, template, generate, |existing| {
+        validate(existing, required)
+    })
+    .await
+}
+
+/// Like [`ensure_generated_secret`], for kinds whose stored data needs more
+/// than a key-presence check before it is kept.
+async fn ensure_generated_secret_with(
+    secrets: &Api<Secret>,
+    template: &Secret,
+    generate: impl FnOnce() -> Result<BTreeMap<String, String>, Error>,
+    validate: impl Fn(&Secret) -> Result<(), Error>,
+) -> Result<(), Error> {
     let name = template.name_any();
     if let Some(existing) = secrets.get_opt(&name).await? {
-        return validate(&existing, required);
+        return validate(&existing);
     }
     let mut desired = template.clone();
     desired
@@ -78,7 +95,7 @@ async fn ensure_generated_secret(
     match secrets.create(&PostParams::default(), &desired).await {
         Ok(_) => Ok(()),
         Err(kube::Error::Api(response)) if response.code == 409 => {
-            validate(&secrets.get(&name).await?, required)
+            validate(&secrets.get(&name).await?)
         }
         Err(error) => Err(error.into()),
     }
@@ -111,13 +128,18 @@ fn random_bytes<const N: usize>(name: &str) -> Result<[u8; N], Error> {
 }
 
 fn random_hex(name: &str) -> Result<String, Error> {
-    Ok(random_bytes::<32>(name)?
-        .iter()
-        .fold(String::with_capacity(64), |mut encoded, byte| {
+    Ok(hex(&random_bytes::<32>(name)?))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().fold(
+        String::with_capacity(bytes.len() * 2),
+        |mut encoded, byte| {
             use std::fmt::Write as _;
             write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
             encoded
-        }))
+        },
+    )
 }
 
 /// The server's owner password only. Linked components build their own URLs

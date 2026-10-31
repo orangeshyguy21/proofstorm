@@ -137,6 +137,7 @@ pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssu
                 link.kind,
                 LinkKind::ChainBackend
                     | LinkKind::ArkBackend
+                    | LinkKind::SparkBackend
                     | LinkKind::PaymentBackend
                     | LinkKind::DatabaseBackend
                     | LinkKind::AuthenticationBackend

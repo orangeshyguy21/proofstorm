@@ -20,6 +20,7 @@ const BARK_ARKOOR: &str = "arkoor";
 pub enum ProcessorProfile {
     LdkServer,
     Bark,
+    Spark,
 }
 
 impl ProcessorProfile {
@@ -28,6 +29,7 @@ impl ProcessorProfile {
         match implementation {
             processor_ids::LDK_PROCESSOR => Some(Self::LdkServer),
             processor_ids::BARK_PROCESSOR => Some(Self::Bark),
+            processor_ids::SPARK_PROCESSOR => Some(Self::Spark),
             _ => None,
         }
     }
@@ -37,6 +39,7 @@ impl ProcessorProfile {
         match self {
             Self::LdkServer => processor_ids::LDK_PROCESSOR,
             Self::Bark => processor_ids::BARK_PROCESSOR,
+            Self::Spark => processor_ids::SPARK_PROCESSOR,
         }
     }
 
@@ -52,6 +55,7 @@ impl ProcessorProfile {
                 PaymentMethod::Custom(BARK_ARKOOR.into()),
             ]
             .into(),
+            Self::Spark => [PaymentMethod::Bolt11].into(),
         }
     }
 
@@ -62,8 +66,8 @@ impl ProcessorProfile {
         matches!(self, Self::Bark)
     }
 
-    /// Units the `client` implementation may bind. Bark serves only sat
-    /// upstream. The LDK processor reports msat, which CDK converts to sat,
+    /// Units the `client` implementation may bind. Bark and Spark serve only
+    /// sat upstream. The LDK processor reports msat, which CDK converts to sat,
     /// the only CDK combination qualified. Nutshell has no conversion: it works
     /// in the native msat, and refuses sat at startup. sat stays bindable so
     /// that refusal is observable.
@@ -80,7 +84,7 @@ impl ProcessorProfile {
     pub const fn settings_unit(self) -> &'static str {
         match self {
             Self::LdkServer => "msat",
-            Self::Bark => "sat",
+            Self::Bark | Self::Spark => "sat",
         }
     }
 
@@ -96,6 +100,7 @@ impl ProcessorProfile {
             Self::Bark => {
                 format!("one {units} binding for each method in the processor's payment_methods")
             }
+            Self::Spark => format!("one bolt11 binding in {units}"),
         }
     }
 

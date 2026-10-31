@@ -49,10 +49,16 @@ pub use bark_stack::{
 };
 #[path = "processor_adapter.rs"]
 mod processor;
+#[path = "spark_adapter.rs"]
+mod spark;
 pub use bark::render_processor as render_bark_processor_component;
 pub use processor::{
     render_node as render_ldk_server_component,
     render_processor as render_ldk_server_processor_component,
+};
+pub use spark::{
+    render_operators as render_spark_operators_component,
+    render_processor as render_spark_processor_component, render_ssp as render_open_ssp_component,
 };
 
 static COMPONENT_RENDERERS: LazyLock<BTreeMap<&'static str, ComponentRenderer>> =
@@ -69,6 +75,9 @@ static COMPONENT_RENDERERS: LazyLock<BTreeMap<&'static str, ComponentRenderer>> 
             ("cdk-bark-processor", bark::render_processor),
             ("bark-server", bark_stack::render_server),
             ("cln-hold", bark_stack::render_cln_hold),
+            ("spark-operators", spark::render_operators),
+            ("open-ssp", spark::render_ssp),
+            ("cdk-spark-processor", spark::render_processor),
             ("nutshell", render_nutshell_mint_component),
             ("nutshell-wallet", render_wallet_component),
             ("cdk-cli-wallet", render_cdk_wallet_component),
@@ -210,12 +219,7 @@ pub fn compile_component_plans(
                 .ok_or_else(|| AdapterError::MissingLock {
                     component: component.id.clone(),
                 })?;
-            let relevant_links = cell
-                .links
-                .iter()
-                .filter(|link| link.from == component.id)
-                .cloned()
-                .collect::<Vec<_>>();
+            let relevant_links = cell.plan_links(&component.id);
             let mut linked_targets = BTreeMap::new();
             let mut linked_state = BTreeMap::new();
             for link in &relevant_links {
@@ -3913,6 +3917,9 @@ pub fn component_ports(component: &ComponentSpec) -> BTreeMap<String, u16> {
             | "cdk-bark-processor"
             | "bark-server"
             | "cln-hold"
+            | "spark-operators"
+            | "open-ssp"
+            | "cdk-spark-processor"
     ) {
         return default_backend_registry()
             .require(&component.implementation)

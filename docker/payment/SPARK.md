@@ -2,8 +2,23 @@
 
 ## Current status
 
-The images build from pinned sources with recorded patches. They are not yet catalog
-components, nothing is published, and there is no managed acceptance gate.
+The images build from pinned sources with recorded patches. Proofstorm models,
+validates and renders the stack, but its catalog entries appear only for platforms
+pinned in `crates/proofstorm-core/src/spark_images.json`, which stays empty until the
+images are published. The managed `spark-processor` gate and its native image
+pipeline are described under [Build and validation](#build-and-validation).
+
+The gate passed a local managed qualification on native ARM64 (Docker Desktop on Apple
+silicon) on 2026-10-30, at commit `692da71`. It covered:
+- settings and transport refusals
+- SSP funding and the channel
+- an unpaid quote, a mint paid while the processor was stopped, and two melts, across
+  two full-stack restarts with every identity unchanged
+- an unreachable melt that was never paid
+- cleanup
+
+Melts carried no payment preimage, as documented. AMD64 qualification needs a native
+AMD64 runner.
 
 A Docker Compose probe (2026-10-29, native ARM64) passed:
 - a real BOLT11 mint and melt through a CDK 0.18.2 mint, this processor, three Spark
@@ -88,28 +103,167 @@ which version.
 
 ## Runtime notes for the managed components
 
+The Proofstorm driver starts each service; the images' `CMD` is only a default.
+
 - **Processor.** It reads `config.toml` from its working directory. The operator list
   and SSP settings need that file, since environment variables cover only scalar
-  settings, so start it from the directory holding its configuration.
-- **Operator.** Each operator applies both `atlas` migration directories to its own
-  main and ephemeral databases. It then starts `spark-frost-signer` on a Unix socket
-  and runs `spark-operator` with that socket, its identity key, the shared operator
-  list, the threshold, and `-ssp-grpc-port`. The image's `CMD` is only a default.
-- **Federation readiness.** The federation is usable only once every operator has
-  `AVAILABLE` signing keyshares. In the probe that took 16 s.
-- **open-ssp.** It refuses to start without `SPARK_ADMIN_TOKEN`. After the first boot,
-  set `SPARK_MNEMONIC_REQUIRED=1` so a missing seed cannot silently create a new
-  identity.
+  settings. The driver writes it, with the SSP identity read from `/identity`, into a
+  memory volume and starts the processor there.
+- **Operator.** Each operator pod creates its own main and ephemeral databases, sealed
+  to its public key by the database comment (atlas refuses a first migration into a
+  database with any extra schema). It applies both `atlas` migration directories and
+  runs `spark-operator` with its identity key, the shared operator list, the threshold
+  and `-ssp-grpc-port`. `spark-frost-signer` runs beside it on a shared Unix socket.
+- **Federation readiness.** An operator is ready when its gRPC health service reports
+  its databases ready. The federation is usable only once every operator has
+  `AVAILABLE` signing keyshares, about 16 s later in the probe; nothing exposes that
+  outside the databases.
+- **open-ssp.** It refuses to start without `SPARK_ADMIN_TOKEN`, and it chmods its
+  seed file to 0600, which a read-only Secret mount refuses. The driver gives it a
+  private copy in a memory volume and always sets `SPARK_MNEMONIC_REQUIRED=1`, so a
+  missing seed cannot silently create a new identity. Its `/status` always reports
+  `ldk_mode` as `live`.
+
+## Funding
+
+Funding is an explicit step, never part of readiness. Agents run these through
+`cell_exec`, and the acceptance gate runs the same steps. open-ssp's admin API is
+loopback-only. Its token is passed as a header file the driver writes, so it never
+appears in a command:
+
+```sh
+curl -sS --fail-with-body -X POST -H @/run/open-ssp/admin.header \
+  http://127.0.0.1:5000/admin/spark/deposit-address
+```
+
+1. **Spark liquidity.**
+   1. Request a deposit address as above. It fails until the operators finish key
+      generation, so retry.
+   2. Send to it from `bitcoin-core` and mine 3 blocks.
+   3. Claim it with `POST /admin/spark/claim-deposit` and the body
+      `{"transaction_hex": …, "vout": …}`, taken from `getrawtransaction`.
+   4. Check `spark.available_sats` in `/status`.
+2. **Lightning liquidity.** On the SSP's `ldk-server` 762bc47:
+   1. Fund it on-chain.
+   2. Run `open-channel <peer node_id> <peer>:9735 2000000sat --push-to-counterparty 1000000sat --announce-channel`.
+   3. Mine 6 blocks.
+   4. Wait for `list-channels` to show the channel ready and usable.
+
+The processor's wallet starts empty. Paid mint quotes fund it, from the SSP's liquidity.
 
 ## Build and validation
 
-Native builds and offline probes run in the
-[component image workflow](../../.github/workflows/component-images.yml) on AMD64 and
-ARM64 for pull requests that change these recipes. Locally, on a clean checkout:
+Spark uses the same native image and qualification pipeline as Bark. The scripts
+take a stack name, and everything Spark-specific is one row of the stack table in
+[`catalog_images/stack.rs`](../../crates/proofstorm-xtask/src/release/catalog_images/stack.rs):
+
+| Recipe | Key in `spark_images.json` | Catalog entry |
+| --- | --- | --- |
+| `spark-operator@0.0.0-5e0c879` | `operators` | `spark-operators` |
+| `open-ssp@0.1.0-9c25f69` | `ssp` | `open-ssp` |
+| `cdk-spark-processor@0.1.0-d7244e2` | `processor` | `cdk-spark-processor` |
+| `ldk-server@0.1.0-762bc47` | `ldk_server` | `ldk-server` |
+
+The gate is `spark-processor`. Its evidence files are `spark-result.json`,
+`spark-plan.json` and `spark-storage-cleanup.json`.
+
+### Native builds
+
+[`spark-images.yml`](../../.github/workflows/spark-images.yml) builds each recipe on a
+native AMD64 or ARM64 runner with `scripts/stack-image-build.sh spark`. A manually
+dispatched job keeps the complete handoff for 14 days; a pull request keeps only the
+build, inspection and probe receipts, because only dispatched builds can be qualified:
+- `image.tar`, exported by image ID
+- the frozen source in `work.tar.gz`
+- the native host record
+- build, inspection and probe receipts
+- `SHA256SUMS`, written only when the handoff is complete
+
+Nothing is published. The
+[component image workflow](../../.github/workflows/component-images.yml) runs it in
+three ways:
+- For pull requests that change these recipes, and for `family=standard`, on both
+  architectures.
+- For `family=spark`, on one architecture:
+
+  ```sh
+  gh workflow run component-images.yml --ref REVIEWED_BRANCH -f family=spark -f architecture=arm64
+  ```
+
+### Managed qualification
+
+`family=spark-qualification` runs
+[`spark-qualification.yml`](../../.github/workflows/spark-qualification.yml). It uses
+the images of one successful, manually dispatched build run without building them
+again. That run can be `spark-images.yml`, or `component-images.yml` with `family=spark`
+or `standard`. Pull-request runs are not accepted.
 
 ```sh
-bash scripts/catalog-image.sh build spark-operator@0.0.0-5e0c879 linux/arm64 ../spark-operator-work
+gh workflow run component-images.yml --ref REVIEWED_BRANCH \
+  -f family=spark-qualification -f architecture=arm64 -f candidate_run=BUILD_RUN
 ```
 
+On a fresh runner, `scripts/stack-qualification.sh spark`:
+1. Restores the four handoffs. It rechecks each checksum, the frozen source, the recipe,
+   provenance and patches, the native host, the image ID and the offline probe.
+2. Starts a loopback registry. It loads each image, probes it again and pushes it, and
+   checks that the registry config runs as `1000:1000` with the same root filesystem.
+3. Writes those manifest digests into `spark_images.json` for the build platform, in
+   that disposable checkout only. `catalog.patch` records the change.
+4. Builds the checkout artifacts with `just dev-build`, and the matching controller image.
+5. Checks that the cache holds every image that
+   `proofstorm-acceptance --image-cache-inputs spark-processor` lists. It copies the
+   gate's other images in once.
+6. Runs `spark-processor` with `--qualification-image-cache`.
+7. Writes `qualification.json`. The gate list must be exactly `[spark-processor]`,
+   cleanup and preservation must pass with no volumes left, and the gate's lock must
+   use the staged images.
+
+The public artifact holds `status.json` (it must show `stage: complete` and exit 0),
+`qualification.json`, the staged pins and candidate receipts, `catalog.patch`,
+`controller-source.json`, `cache-inputs.json` and `spark-run-identity.json`. Raw gate
+output and runtime homes are never uploaded.
+
+### Local run on an ARM64 Mac
+
+On Apple silicon, Docker Desktop's Linux engine runs ARM64 natively. The same
+scripts can therefore build and qualify `linux/arm64` with `--local`, without CI:
+- Builds record the real host (`Darwin`/`arm64`) in `native.json`. Only a `--local`
+  restore accepts it; CI qualification never does.
+- Qualification clones the committed `HEAD` into its work directory, then stages pins,
+  builds and runs the gate there. The pins files and `.proofstorm-dev` installation of
+  your own checkout are only read.
+
+You need:
+- a clean, committed checkout; `HEAD` is what gets built and qualified
+- Docker Desktop with Buildx, plus Rust, Git, `jq` and `just`
+- GNU `timeout` and `sha256sum` on `PATH`, for example Homebrew `coreutils`
+
+The gate creates its own disposable installation in the same Docker engine as the dev
+cluster, and its preservation check compares every existing container before and
+after. Run it only when no live lab sessions are using the cluster.
+
+```sh
+rev=$(git rev-parse HEAD)
+base=$HOME/spark-qualification-01   # new, outside the checkout
+mkdir -p "$base/artifacts"
+for selection in spark-operator@0.0.0-5e0c879 open-ssp@0.1.0-9c25f69 \
+    cdk-spark-processor@0.1.0-d7244e2 ldk-server@0.1.0-762bc47; do
+  bash scripts/stack-image-build.sh spark --local "$selection" linux/arm64 "$base/build-$selection"
+  mv "$base/build-$selection/artifacts" "$base/artifacts/spark-image-$selection-arm64-$rev-1"
+done
+bash scripts/stack-qualification.sh spark --local linux/arm64 "$rev" 1 \
+  "$base/artifacts" "$base/qualification"
+```
+
+The cold Spark builds and the clone's own first `just dev-build` take a while. The
+results are in `$base/qualification`:
+- `public/` holds the public receipts.
+- `run/` holds the gate's private evidence.
+- `checkout/` is the disposable clone.
+
+If a run is interrupted, retry its runtime cleanup with
+`just e2e-cleanup "$base/qualification/run"`. Delete `$base` when you are done.
+
 Use a native builder for each platform; emulation does not establish native support.
-Nothing is published by these commands.
+None of these commands publishes an image or changes catalog pins in your checkout.

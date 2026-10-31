@@ -61,7 +61,7 @@ fn explicit_versions_bind_recipes_receipts_and_exact_probe_output() {
 }
 
 /// Recipe, version, provenance record and exact native probe output.
-const ADDED_VERSIONS: &[(&str, &str, &str, &str)] = &[
+pub(super) const ADDED_VERSIONS: &[(&str, &str, &str, &str)] = &[
     (
         "cdk-bark-processor",
         "0.1.0-fe468ca",
