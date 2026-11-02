@@ -6,6 +6,10 @@ use super::{
 };
 use anyhow::{Context, Result, ensure};
 use flate2::read::GzDecoder;
+use proofstorm_core::{
+    BARK_CLN_HOLD_VERSION, BARK_PROCESSOR_VERSION, BARK_SERVER_VERSION, SPARK_LDK_SERVER_VERSION,
+    SPARK_OPERATORS_VERSION, SPARK_PROCESSOR_VERSION, SPARK_SSP_VERSION,
+};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -46,19 +50,19 @@ pub(super) const STACKS: [Stack; 2] = [
         images: &[
             Image {
                 repository: "cdk-bark-processor",
-                version: "0.1.0-fe468ca",
+                version: BARK_PROCESSOR_VERSION,
                 key: "processor",
                 catalog_id: "cdk-bark-processor",
             },
             Image {
                 repository: "bark-server",
-                version: "0.7.0-6188e2d",
+                version: BARK_SERVER_VERSION,
                 key: "server",
                 catalog_id: "bark-server",
             },
             Image {
                 repository: "cln-hold",
-                version: "26.06.7-hold.0.3.3",
+                version: BARK_CLN_HOLD_VERSION,
                 key: "cln",
                 catalog_id: "cln-hold",
             },
@@ -73,26 +77,26 @@ pub(super) const STACKS: [Stack; 2] = [
             // One image runs every operator of the `spark-operators` component.
             Image {
                 repository: "spark-operator",
-                version: "0.0.0-5e0c879",
+                version: SPARK_OPERATORS_VERSION,
                 key: "operators",
                 catalog_id: "spark-operators",
             },
             Image {
                 repository: "open-ssp",
-                version: "0.1.0-9c25f69",
+                version: SPARK_SSP_VERSION,
                 key: "ssp",
                 catalog_id: "open-ssp",
             },
             Image {
                 repository: "cdk-spark-processor",
-                version: "0.1.0-d7244e2",
+                version: SPARK_PROCESSOR_VERSION,
                 key: "processor",
                 catalog_id: "cdk-spark-processor",
             },
             // The macaroon-era revision open-ssp needs, not the processor's 50fe752.
             Image {
                 repository: "ldk-server",
-                version: "0.1.0-762bc47",
+                version: SPARK_LDK_SERVER_VERSION,
                 key: "ldk_server",
                 catalog_id: "ldk-server",
             },

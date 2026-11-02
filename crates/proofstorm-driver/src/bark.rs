@@ -1,49 +1,12 @@
 //! Preserve the identity and complete native Bark wallet across process restarts.
-use std::{
-    fs,
-    io::{Read as _, Write as _},
-    os::unix::process::CommandExt,
-    path::Path,
-};
+use std::{fs, os::unix::process::CommandExt, path::Path};
 
 use anyhow::{Context, Result, ensure};
-use sha2::{Digest as _, Sha256};
+
+use crate::state::{bind_marker, identity_record, mnemonic, read_bounded};
 
 const IDENTITY: &str = ".proofstorm-bark-identity";
 const DATABASES: [&str; 2] = ["db.sqlite", "onchain_state.redb"];
-
-pub(crate) fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>> {
-    let file = fs::File::open(path).context("read required Bark identity file")?;
-    ensure!(
-        file.metadata()?.is_file(),
-        "Bark identity must be a regular file"
-    );
-    let mut bytes = Vec::new();
-    file.take(limit + 1).read_to_end(&mut bytes)?;
-    ensure!(
-        bytes.len() as u64 <= limit,
-        "Bark identity file exceeds its size limit"
-    );
-    Ok(bytes)
-}
-
-pub(crate) fn mnemonic(path: &Path) -> Result<String> {
-    let bytes = read_bounded(path, 512)?;
-    let value = std::str::from_utf8(&bytes).context("Bark identity is not UTF-8")?;
-    // Do not attach the parser error: credential words must never reach diagnostics.
-    value
-        .trim()
-        .parse::<bip39::Mnemonic>()
-        .map(|seed| seed.to_string())
-        .map_err(|_| anyhow::anyhow!("invalid Bark mnemonic"))
-}
-
-fn identity_record(mnemonic: &str) -> String {
-    format!(
-        "proofstorm-bark-wallet/v1\n{:x}\n",
-        Sha256::digest(mnemonic.as_bytes())
-    )
-}
 
 fn require_database(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path)
@@ -55,47 +18,13 @@ fn require_database(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A bound volume must also hold both databases: a wallet whose startup was
+/// attempted is never initialized again.
 fn bind_identity(data: &Path, mnemonic: &str) -> Result<()> {
-    ensure!(
-        fs::symlink_metadata(data)?.is_dir(),
-        "Bark data volume must be an existing directory"
-    );
-    let marker = data.join(IDENTITY);
-    let expected = identity_record(mnemonic);
-    match fs::symlink_metadata(&marker) {
-        Ok(metadata) => {
-            ensure!(
-                metadata.is_file(),
-                "Bark identity marker must be a regular file"
-            );
-            ensure!(
-                read_bounded(&marker, 128)? == expected.as_bytes(),
-                "Bark wallet identity mismatch; refusing to replace existing state"
-            );
-            for name in DATABASES {
-                require_database(&data.join(name))?;
-            }
+    if bind_marker(data, IDENTITY, &identity_record("bark-wallet", mnemonic))? {
+        for name in DATABASES {
+            require_database(&data.join(name))?;
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            for entry in fs::read_dir(data)? {
-                let entry = entry?;
-                // A freshly formatted PVC can contain an empty filesystem recovery directory.
-                ensure!(
-                    entry.file_name() == "lost+found"
-                        && entry.file_type()?.is_dir()
-                        && fs::read_dir(entry.path())?.next().is_none(),
-                    "Bark state exists without its identity marker; refusing reinitialization"
-                );
-            }
-            let mut temporary = tempfile::NamedTempFile::new_in(data)?;
-            temporary.write_all(expected.as_bytes())?;
-            temporary.as_file().sync_all()?;
-            temporary
-                .persist_noclobber(&marker)
-                .context("bind Bark wallet identity once")?;
-            fs::File::open(data)?.sync_all()?;
-        }
-        Err(error) => return Err(error).context("inspect Bark identity marker"),
     }
     Ok(())
 }

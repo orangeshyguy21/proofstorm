@@ -48,10 +48,8 @@ impl Drop for InstallationGuard {
 impl Installation {
     /// Serialize all future setup/reset mutations using this same guard.
     pub fn lock(home: &Path) -> Result<InstallationGuard> {
-        let checkout = crate::dev_reset::checkout_guard(home, false)?;
-        if checkout.is_none() {
-            crate::dev_reset::check_pending(home)?;
-        }
+        let checkout = crate::dev_reset::checkout_guard(home)?;
+        crate::dev_reset::check_pending(home)?;
         Self::lock_state(home, checkout)
     }
 

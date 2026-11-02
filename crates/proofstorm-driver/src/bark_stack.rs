@@ -3,11 +3,12 @@ use anyhow::{Context, Result, ensure};
 use sha2::{Digest as _, Sha256};
 use std::{
     fs,
-    io::Write as _,
     os::unix::{fs::DirBuilderExt as _, process::CommandExt as _},
     path::Path,
     process::Command,
 };
+
+use crate::state::{fresh, mnemonic, read_bounded, write};
 
 const SERVER: &str = ".proofstorm-bark-server";
 const SERVER_STARTED: &str = ".proofstorm-bark-server-started";
@@ -28,7 +29,7 @@ const TLS_FILES: [&str; 6] = [
 /// # Errors
 /// Refuses absent credentials and a chain that never becomes ready.
 pub async fn wait_chain(url: &str, cookie: &Path) -> Result<()> {
-    let bytes = super::bark::read_bounded(cookie, 1024)?;
+    let bytes = read_bounded(cookie, 1024)?;
     let cookie = std::str::from_utf8(&bytes).context("invalid chain credential encoding")?;
     let (user, password) = cookie
         .trim()
@@ -61,36 +62,7 @@ fn regular(path: &Path) -> Result<Vec<u8>> {
         metadata.is_file() && metadata.len() > 0,
         "native state must be a nonempty regular file"
     );
-    super::bark::read_bounded(path, 65_536)
-}
-
-fn write_once(path: &Path, contents: &[u8]) -> Result<()> {
-    let parent = path.parent().context("state directory missing")?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    temporary.write_all(contents)?;
-    temporary.as_file().sync_all()?;
-    temporary
-        .persist_noclobber(path)
-        .context("preserve native state identity once")?;
-    fs::File::open(parent)?.sync_all()?;
-    Ok(())
-}
-
-fn fresh(data: &Path) -> Result<()> {
-    ensure!(
-        fs::symlink_metadata(data)?.is_dir(),
-        "native state volume must be a directory"
-    );
-    for entry in fs::read_dir(data)? {
-        let entry = entry?;
-        ensure!(
-            entry.file_name() == "lost+found"
-                && entry.file_type()?.is_dir()
-                && fs::read_dir(entry.path())?.next().is_none(),
-            "native state exists without a completed identity; refusing reinitialization"
-        );
-    }
-    Ok(())
+    read_bounded(path, 65_536)
 }
 
 fn server_context() -> Result<String> {
@@ -118,7 +90,7 @@ fn server_identity(data: &Path, context: &str) -> Result<String> {
         "Bark native directory was redirected"
     );
     regular(&data.join("mnemonic"))?;
-    let seed = super::bark::mnemonic(&data.join("mnemonic"))?;
+    let seed = mnemonic(&data.join("mnemonic"))?;
     Ok(hash(format!("{context}\n{seed}").as_bytes()))
 }
 
@@ -166,7 +138,7 @@ fn prepare_server_with(
         return verify_server(data, context);
     }
     fresh(data)?;
-    write_once(&data.join(SERVER_STARTED), context.as_bytes())?;
+    write(&data.join(SERVER_STARTED), context.as_bytes(), false)?;
     // Kubernetes owns the volume root. The native server chmods its data
     // directory, so create a private child owned by our unprivileged UID.
     fs::DirBuilder::new()
@@ -174,8 +146,8 @@ fn prepare_server_with(
         .create(data.join(SERVER_DATA))?;
     initialize()?;
     let identity = server_identity(data, context)?;
-    write_once(&data.join(SERVER), identity.as_bytes())?;
-    write_once(&runtime.join("bark-created"), b"created")?;
+    write(&data.join(SERVER), identity.as_bytes(), false)?;
+    write(&runtime.join("bark-created"), b"created", false)?;
     Ok(())
 }
 
@@ -195,7 +167,7 @@ fn tls_material(cln: &Path, hold: &Path) -> Result<Vec<(String, Vec<u8>)>> {
     for (role, dir) in [("cln", cln), ("hold", hold)] {
         for name in TLS_FILES {
             // Kubernetes Secret projections are symlinks, unlike native state files.
-            let bytes = super::bark::read_bounded(&dir.join(name), 65_536)?;
+            let bytes = read_bounded(&dir.join(name), 65_536)?;
             ensure!(
                 !bytes.is_empty(),
                 "CLN/hold projected TLS identity is incomplete"
@@ -278,10 +250,10 @@ fn prepare_cln(data: &Path, material: &[(String, Vec<u8>)]) -> Result<()> {
         }
     } else {
         fresh(data)?;
-        write_once(&data.join(CLN_STARTED), fingerprint.as_bytes())?;
+        write(&data.join(CLN_STARTED), fingerprint.as_bytes(), false)?;
         fs::create_dir_all(data.join("regtest/hold"))?;
         for (name, bytes) in material {
-            write_once(&native_tls_path(data, name), bytes)?;
+            write(&native_tls_path(data, name), bytes, false)?;
         }
     }
     Ok(())
@@ -333,7 +305,7 @@ fn seal_cln(data: &Path) -> Result<()> {
             "CLN HSM identity changed"
         );
     } else {
-        write_once(&data.join(CLN), identity.as_bytes())?;
+        write(&data.join(CLN), identity.as_bytes(), false)?;
     }
     Ok(())
 }
@@ -475,9 +447,9 @@ mod tests {
             .unwrap()
             .to_string();
         fs::write(native.join("mnemonic"), &seed).unwrap();
-        write_once(&dir.path().join(SERVER_STARTED), b"context").unwrap();
+        write(&dir.path().join(SERVER_STARTED), b"context", false).unwrap();
         let identity = server_identity(dir.path(), "context").unwrap();
-        write_once(&dir.path().join(SERVER), identity.as_bytes()).unwrap();
+        write(&dir.path().join(SERVER), identity.as_bytes(), false).unwrap();
         verify_server(dir.path(), "context").unwrap();
         assert!(verify_server(dir.path(), "new-database").is_err());
         fs::write(

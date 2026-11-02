@@ -31,7 +31,7 @@ impl Client {
                 ("PROOFSTORM_PRINCIPAL", "audit"),
                 (
                     "PROOFSTORM_CAPABILITIES",
-                    "catalog.read,cell.create,cell.read,cell.validate",
+                    "catalog.read,cell.create,cell.read,cell.validate,cell.publish,cell.status,cell.edit",
                 ),
             ])
             .env("PROOFSTORM_DB", database);

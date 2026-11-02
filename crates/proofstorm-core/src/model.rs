@@ -191,6 +191,18 @@ pub enum LinkKind {
     NetworkPath,
 }
 
+impl LinkKind {
+    /// Backend links point at a component this one depends on and carry a
+    /// typed binding; peer and network-path links do neither.
+    #[must_use]
+    pub const fn is_backend(self) -> bool {
+        !matches!(
+            self,
+            Self::BitcoinPeer | Self::LightningPeer | Self::NetworkPath
+        )
+    }
+}
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
@@ -344,6 +356,21 @@ pub enum DependencyBinding {
     Authentication {
         protocol: AuthenticationProtocol,
     },
+}
+
+impl DependencyBinding {
+    /// The backend link kind that carries this binding.
+    #[must_use]
+    pub const fn link_kind(&self) -> LinkKind {
+        match self {
+            Self::Chain { .. } => LinkKind::ChainBackend,
+            Self::Ark { .. } => LinkKind::ArkBackend,
+            Self::Spark { .. } => LinkKind::SparkBackend,
+            Self::Payment { .. } => LinkKind::PaymentBackend,
+            Self::Database { .. } => LinkKind::DatabaseBackend,
+            Self::Authentication { .. } => LinkKind::AuthenticationBackend,
+        }
+    }
 }
 
 // Kubernetes structural schemas cannot merge internally tagged enum branches

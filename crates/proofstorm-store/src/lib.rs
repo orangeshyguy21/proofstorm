@@ -73,7 +73,9 @@ pub enum StoreError {
     },
     #[error("idempotency key {key:?} was reused with a different request")]
     IdempotencyConflict { key: String },
-    #[error("{resource} {id:?} already exists with different immutable identity")]
+    #[error(
+        "{resource} {id:?} already exists with different immutable identity; reuse an ID only to retry the identical request, otherwise choose a new one"
+    )]
     Conflict { resource: &'static str, id: String },
     #[error("cell validation failed: {0}")]
     Validation(String),

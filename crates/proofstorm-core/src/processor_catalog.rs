@@ -2,8 +2,8 @@
 use super::{
     BTreeSet, BackendContractRegistry, BuildProvenance, CatalogEntry, CatalogFeature,
     CatalogRuntimeEndpoint, ComponentKind, ControlClass, LinkKind, PaymentMethod, ReleaseChannel,
-    StorageBackend, SupportLifecycle, catalog_entry_with_lifecycle, dependency, payment_binding,
-    runtime_endpoint, support_matrix,
+    StorageBackend, SupportLifecycle, catalog_entry_with_lifecycle, dependency, ldk_server_entry,
+    payment_binding, runtime_endpoint, support_matrix,
 };
 use crate::processor_ids::LDK_PROCESSOR;
 
@@ -30,44 +30,13 @@ pub(super) fn extend(
     } else {
         "proofstorm-registry.localhost:5000/cdk-ldk-server-processor@sha256:ee21cdf4056d6f228d17f2e6739f98f11f84f94812762d1b8d6e7d873fc9451e"
     };
-    entries.push(catalog_entry_with_lifecycle(
+    entries.push(ldk_server_entry(
         amd64,
-        "ldk-server",
         backends,
-        ComponentKind::Lightning,
-        "Standalone LDK Server regtest node with native CLI",
         adapter_version,
+        "Standalone LDK Server regtest node with native CLI",
         LDK_SERVER_VERSION,
-        ReleaseChannel::Prerelease,
-        SupportLifecycle::Experimental,
         node_image,
-        BTreeSet::from([
-            CatalogFeature::NativeCli,
-            CatalogFeature::NativeCliEntrypoints,
-            CatalogFeature::Regtest,
-            CatalogFeature::PersistentState,
-            CatalogFeature::Bolt11,
-            CatalogFeature::Bolt12,
-        ]),
-        vec![dependency(
-            LinkKind::ChainBackend,
-            "bitcoin-core",
-            &["31.1"],
-        )],
-        support_matrix(
-            &[StorageBackend::PersistentVolume],
-            &[PaymentMethod::Bolt11, PaymentMethod::Bolt12],
-            &[],
-            &["sat", "msat"],
-            &[],
-            &[],
-            vec![],
-        ),
-        vec![
-            ControlClass::Cell,
-            ControlClass::Target,
-            ControlClass::Workspace,
-        ],
     ));
     entries.push(catalog_entry_with_lifecycle(
         amd64,

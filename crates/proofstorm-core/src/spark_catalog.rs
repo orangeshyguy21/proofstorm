@@ -2,10 +2,10 @@
 //! pinned in `spark_images.json`, which stays empty until the images are
 //! published and a managed gate has qualified them.
 use super::{
-    BTreeSet, BackendContractRegistry, BuildProvenance, CatalogEntry, CatalogFeature,
-    CatalogRuntimeEndpoint, ComponentKind, ControlClass, LinkKind, PaymentMethod, ReleaseChannel,
-    StorageBackend, SupportLifecycle, catalog_entry_with_lifecycle, dependency, payment_binding,
-    runtime_endpoint, support_matrix,
+    BTreeSet, BackendContractRegistry, CatalogEntry, CatalogFeature, CatalogRuntimeEndpoint,
+    ComponentKind, ControlClass, LinkKind, PaymentMethod, ReleaseChannel, StorageBackend,
+    SupportLifecycle, attach_provenance, catalog_entry_with_lifecycle, dependency,
+    ldk_server_entry, payment_binding, runtime_endpoint, support_matrix,
 };
 use crate::{
     ProcessorProfile,
@@ -22,12 +22,12 @@ pub(super) struct Images {
     ldk_server: String,
 }
 
-pub(super) const PROCESSOR_VERSION: &str = "0.1.0-d7244e2";
-const OPERATORS_VERSION: &str = "0.0.0-5e0c879";
-const SSP_VERSION: &str = "0.1.0-9c25f69";
+pub const PROCESSOR_VERSION: &str = "0.1.0-d7244e2";
+pub const OPERATORS_VERSION: &str = "0.0.0-5e0c879";
+pub const SSP_VERSION: &str = "0.1.0-9c25f69";
 /// open-ssp's LDK client authenticates with macaroons, which the API-key-era
 /// `ldk-server` that the CDK LDK Server processor needs does not issue.
-const LDK_SERVER_VERSION: &str = "0.1.0-762bc47";
+pub const LDK_SERVER_VERSION: &str = "0.1.0-762bc47";
 const QUALIFICATION: &str = "Experimental. A Docker Compose probe on native ARM64 passed BOLT11/sat mint, melt, an unreachable melt and restarts through this stack; no managed qualification has run yet.";
 const LDK_SERVER_GUIDANCE: &str = "Pinned upstream revision 762bc473342c8f945475785ec6743a9b26f56aff for open-ssp. It authenticates with macaroons, so the CDK LDK Server processor, which needs an API key, uses 0.1.0-50fe752 instead. Native entrypoint: ldk-server-cli --config /config/config.toml --base-url 127.0.0.1:3536; the CLI reads the admin macaroon and TLS certificate from /data through that config. Use amounts with explicit sat/msat suffixes. Channel recipe for an SSP node: onchain-receive, send to it from bitcoin-core and mine 6 blocks, take the peer's node_id from its get-node-info, then open-channel <peer node_id> <peer component>:9735 2000000sat --push-to-counterparty 1000000sat --announce-channel so both directions have liquidity, mine 6 blocks and wait until list-channels shows the channel is_channel_ready and is_usable. Keep credentials out of command arguments and public output.";
 
@@ -69,44 +69,13 @@ pub(super) fn extend(
     adapter_version: &str,
     images: &Images,
 ) {
-    let mut ldk_server = catalog_entry_with_lifecycle(
+    let mut ldk_server = ldk_server_entry(
         amd64,
-        "ldk-server",
         backends,
-        ComponentKind::Lightning,
-        "Standalone LDK Server regtest node with native CLI, macaroon authentication for open-ssp",
         adapter_version,
+        "Standalone LDK Server regtest node with native CLI, macaroon authentication for open-ssp",
         LDK_SERVER_VERSION,
-        ReleaseChannel::Prerelease,
-        SupportLifecycle::Experimental,
         &images.ldk_server,
-        BTreeSet::from([
-            CatalogFeature::NativeCli,
-            CatalogFeature::NativeCliEntrypoints,
-            CatalogFeature::Regtest,
-            CatalogFeature::PersistentState,
-            CatalogFeature::Bolt11,
-            CatalogFeature::Bolt12,
-        ]),
-        vec![dependency(
-            LinkKind::ChainBackend,
-            "bitcoin-core",
-            &["31.1"],
-        )],
-        support_matrix(
-            &[StorageBackend::PersistentVolume],
-            &[PaymentMethod::Bolt11, PaymentMethod::Bolt12],
-            &[],
-            &["sat", "msat"],
-            &[],
-            &[],
-            vec![],
-        ),
-        vec![
-            ControlClass::Cell,
-            ControlClass::Target,
-            ControlClass::Workspace,
-        ],
     );
     // Guidance is per implementation; this revision authenticates differently.
     ldk_server.runtime_endpoints = vec![runtime_endpoint(
@@ -221,12 +190,7 @@ pub(super) fn extend(
             }
             _ => continue,
         };
-        let mut provenance: BuildProvenance =
-            serde_json::from_str(encoded).expect("pinned Spark build provenance");
-        provenance.platform = platform(amd64).into();
-        entry.source_digest =
-            crate::digest_json(&(&entry.source_digest, &entry.image, &provenance));
-        entry.build_provenance = Some(provenance);
+        attach_provenance(entry, encoded, platform(amd64));
     }
     // CDK 0.18 registers every method a gRPC processor advertises.
     for entry in entries.iter_mut().filter(|entry| entry.id == "cdk") {

@@ -1,161 +1,49 @@
 //! Dependency graph of the reserved Bark stack. These checks do not
 //! enable catalog support or substitute for managed runtime qualification.
 use crate::{
-    BitcoinNetwork, CellSpec, ComponentKind, ComponentSpec, DatabaseRole, DependencyBinding,
-    LinkKind, PaymentMethod, ValidationIssue,
+    BitcoinNetwork, CellSpec, ComponentKind, ComponentSpec, DependencyBinding, LinkKind,
+    ValidationIssue,
     processor_ids::{BARK_PROCESSOR, BARK_SERVER, CLN_HOLD},
 };
 
-use super::issue;
+use super::{
+    issue,
+    stack::{CHAIN, DATABASE, Requirement, bolt11_sat, validate_requirements},
+};
 
-#[derive(Clone, Copy)]
-enum Dependency {
-    Chain,
-    Ark,
-    Database,
-    Lightning,
-}
+const ARK: Requirement = Requirement {
+    link_kind: LinkKind::ArkBackend,
+    target_kind: ComponentKind::ArkServer,
+    target_impl: BARK_SERVER,
+    label: "ark/regtest",
+    binding: |binding| {
+        matches!(
+            binding,
+            DependencyBinding::Ark {
+                network: BitcoinNetwork::Regtest
+            }
+        )
+    },
+};
 
-impl Dependency {
-    const fn kind(self) -> LinkKind {
-        match self {
-            Self::Chain => LinkKind::ChainBackend,
-            Self::Ark => LinkKind::ArkBackend,
-            Self::Database => LinkKind::DatabaseBackend,
-            Self::Lightning => LinkKind::PaymentBackend,
-        }
-    }
-
-    const fn target(self) -> (ComponentKind, &'static str, &'static str) {
-        match self {
-            Self::Chain => (ComponentKind::Bitcoin, "bitcoin-core", "chain/regtest"),
-            Self::Ark => (ComponentKind::ArkServer, BARK_SERVER, "ark/regtest"),
-            Self::Database => (ComponentKind::Database, "postgresql", "database/primary"),
-            Self::Lightning => (ComponentKind::Lightning, CLN_HOLD, "bolt11/sat"),
-        }
-    }
-
-    fn matches(self, binding: Option<&DependencyBinding>) -> bool {
-        match (self, binding) {
-            (
-                Self::Chain,
-                Some(DependencyBinding::Chain {
-                    network: BitcoinNetwork::Regtest,
-                }),
-            )
-            | (
-                Self::Ark,
-                Some(DependencyBinding::Ark {
-                    network: BitcoinNetwork::Regtest,
-                }),
-            )
-            | (
-                Self::Database,
-                Some(DependencyBinding::Database {
-                    role: DatabaseRole::Primary,
-                    ..
-                }),
-            ) => true,
-            (
-                Self::Lightning,
-                Some(DependencyBinding::Payment {
-                    method: PaymentMethod::Bolt11,
-                    unit,
-                }),
-            ) => unit == "sat",
-            _ => false,
-        }
-    }
-
-    fn resolve<'a>(
-        self,
-        cell: &'a CellSpec,
-        component: &ComponentSpec,
-    ) -> Option<&'a ComponentSpec> {
-        let mut links = cell
-            .links
-            .iter()
-            .filter(|link| link.from == component.id && link.kind == self.kind());
-        let link = links.next()?;
-        if links.next().is_some() || !self.matches(link.binding.as_ref()) {
-            return None;
-        }
-        let (kind, implementation, _) = self.target();
-        cell.components.iter().find(|target| {
-            target.id == link.to && target.kind == kind && target.implementation == implementation
-        })
-    }
-}
+const LIGHTNING: Requirement = Requirement {
+    link_kind: LinkKind::PaymentBackend,
+    target_kind: ComponentKind::Lightning,
+    target_impl: CLN_HOLD,
+    label: "bolt11/sat",
+    binding: bolt11_sat,
+};
 
 pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssue>) {
     for (index, component) in cell.components.iter().enumerate() {
-        let (kind, dependencies): (_, &[Dependency]) = match component.implementation.as_str() {
-            BARK_PROCESSOR => (
-                ComponentKind::PaymentProcessor,
-                &[Dependency::Chain, Dependency::Ark],
-            ),
-            BARK_SERVER => (
-                ComponentKind::ArkServer,
-                &[
-                    Dependency::Chain,
-                    Dependency::Database,
-                    Dependency::Lightning,
-                ],
-            ),
-            CLN_HOLD => (ComponentKind::Lightning, &[Dependency::Chain]),
+        let (kind, requirements): (_, &[Requirement]) = match component.implementation.as_str() {
+            BARK_PROCESSOR => (ComponentKind::PaymentProcessor, &[CHAIN, ARK]),
+            BARK_SERVER => (ComponentKind::ArkServer, &[CHAIN, DATABASE, LIGHTNING]),
+            CLN_HOLD => (ComponentKind::Lightning, &[CHAIN]),
             _ => continue,
         };
         let path = format!("/components/{index}");
-        if component.kind != kind {
-            issue(
-                issues,
-                "bark_component_kind_mismatch",
-                &path,
-                format!(
-                    "{} requires component kind {kind:?}",
-                    component.implementation
-                ),
-            );
-        }
-        for dependency in dependencies {
-            if dependency.resolve(cell, component).is_none() {
-                let (_, implementation, binding) = dependency.target();
-                issue(
-                    issues,
-                    "bark_dependency_required",
-                    &path,
-                    format!(
-                        "{} requires exactly one {:?} link with {binding} binding to {implementation}",
-                        component.implementation,
-                        dependency.kind()
-                    ),
-                );
-            }
-        }
-        for link in cell.links.iter().filter(|link| link.from == component.id) {
-            if matches!(
-                link.kind,
-                LinkKind::ChainBackend
-                    | LinkKind::ArkBackend
-                    | LinkKind::SparkBackend
-                    | LinkKind::PaymentBackend
-                    | LinkKind::DatabaseBackend
-                    | LinkKind::AuthenticationBackend
-            ) && !dependencies
-                .iter()
-                .any(|dependency| dependency.kind() == link.kind)
-            {
-                issue(
-                    issues,
-                    "bark_unexpected_dependency",
-                    &path,
-                    format!(
-                        "{} does not use a {:?} dependency ({:?})",
-                        component.implementation, link.kind, link.id
-                    ),
-                );
-            }
-        }
+        validate_requirements(cell, component, &path, "bark", kind, requirements, issues);
         validate_chain(cell, component, &path, issues);
     }
 }
@@ -166,7 +54,7 @@ fn validate_chain(
     path: &str,
     issues: &mut Vec<ValidationIssue>,
 ) {
-    let Some(chain) = Dependency::Chain.resolve(cell, component) else {
+    let Some(chain) = CHAIN.resolve(cell, component) else {
         return;
     };
     if chain
@@ -185,12 +73,12 @@ fn validate_chain(
         );
     }
     let downstream = match component.implementation.as_str() {
-        BARK_PROCESSOR => Dependency::Ark.resolve(cell, component),
-        BARK_SERVER => Dependency::Lightning.resolve(cell, component),
+        BARK_PROCESSOR => ARK.resolve(cell, component),
+        BARK_SERVER => LIGHTNING.resolve(cell, component),
         _ => None,
     };
     if let Some(downstream) = downstream
-        && let Some(other_chain) = Dependency::Chain.resolve(cell, downstream)
+        && let Some(other_chain) = CHAIN.resolve(cell, downstream)
         && chain.id != other_chain.id
     {
         issue(

@@ -11,6 +11,14 @@ use super::{
     managed_field, required_config_value, service_conditions, typed_config_error,
 };
 
+/// The most operators one Spark federation may run.
+pub const SPARK_MAX_OPERATORS: u64 = 5;
+
+/// The longest database name an operators link may use: operator `i` creates
+/// `{name}_{i}` and `{name}_{i}_ephemeral`, and PostgreSQL identifiers end at
+/// 63 bytes.
+pub const SPARK_DATABASE_NAME_LIMIT: usize = 63 - "_4_ephemeral".len();
+
 /// A FROST federation: one pod and two PostgreSQL databases per operator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -31,6 +39,11 @@ pub(super) fn contracts() -> [ComponentBackendContract; 3] {
 }
 
 fn operators_contract() -> ComponentBackendContract {
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "the operator limit is a small integer"
+    )]
+    let max_operators = SPARK_MAX_OPERATORS as f64;
     let mut conditions = service_conditions(true, false);
     // State lives in the operators' PostgreSQL databases.
     conditions.remove(&ComponentConditionType::StorageReady);
@@ -46,7 +59,7 @@ fn operators_contract() -> ComponentBackendContract {
                     ConfigValueKind::Integer,
                     ConfigDefault::Literal(json!(3)),
                 )
-                .with_numeric_bounds(1.0, 5.0),
+                .with_numeric_bounds(1.0, max_operators),
             ),
             (
                 "threshold".into(),
@@ -55,7 +68,7 @@ fn operators_contract() -> ComponentBackendContract {
                     ConfigValueKind::Integer,
                     ConfigDefault::Literal(json!(2)),
                 )
-                .with_numeric_bounds(1.0, 5.0),
+                .with_numeric_bounds(1.0, max_operators),
             ),
         ]),
         BTreeMap::from([("grpc".into(), 8535), ("ssp".into(), 8536)]),

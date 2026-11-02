@@ -289,20 +289,35 @@ fn insert(text: &str, object: &Node, key: &str, value: &Value) -> Result<String>
         object.value.is_object(),
         "MCP servers must be a JSON object"
     );
-    let comma = if object.members.is_empty() || object.trailing_comma {
-        ""
-    } else {
-        ","
+    // The comma follows the last member's value, ahead of any comment.
+    let (text, close) = match object.members.values().map(|m| m.span.end).max() {
+        Some(end) if !object.trailing_comma => (
+            format!("{},{}", &text[..end], &text[end..]),
+            object.span.end,
+        ),
+        _ => (text.to_owned(), object.span.end - 1),
     };
-    let at = object.span.end - 1;
-    Ok(format!(
-        "{}{}\n  {}: {}\n{}",
-        &text[..at],
-        comma,
+    // Indent one level deeper than the line holding the closing brace.
+    let line = text[..close].rfind('\n').map_or(0, |at| at + 1);
+    let outer: String = text[line..close]
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect();
+    let member = format!(
+        "{outer}  {}: {}",
         serde_json::to_string(key)?,
-        serde_json::to_string_pretty(value)?,
-        &text[at..]
-    ))
+        pretty(value, &format!("{outer}  "))?
+    );
+    Ok(if text[line..close].trim().is_empty() {
+        format!("{}{member}\n{}", &text[..line], &text[line..])
+    } else {
+        format!("{}\n{member}\n{outer}{}", &text[..close], &text[close..])
+    })
+}
+
+/// Pretty JSON whose continuation lines start at `indent`.
+fn pretty(value: &Value, indent: &str) -> Result<String> {
+    Ok(serde_json::to_string_pretty(value)?.replace('\n', &format!("\n{indent}")))
 }
 
 pub(super) fn is_proofstorm(name: &str, value: &Value) -> bool {
@@ -342,10 +357,17 @@ pub(super) fn merge(
             if existing.value == *entry {
                 return Ok(text.into());
             }
+            // Align with the member's line, as insertion does.
+            let start = existing.span.start;
+            let line = text[..start].rfind('\n').map_or(0, |at| at + 1);
+            let indent: String = text[line..start]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect();
             format!(
                 "{}{}{}",
-                &text[..existing.span.start],
-                serde_json::to_string_pretty(entry)?,
+                &text[..start],
+                pretty(entry, &indent)?,
                 &text[existing.span.end..]
             )
         } else {

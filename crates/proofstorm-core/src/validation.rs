@@ -13,6 +13,8 @@ mod bark;
 mod cdk;
 #[path = "spark_validation.rs"]
 mod spark;
+#[path = "stack_validation.rs"]
+mod stack;
 pub(crate) use cdk::embedded_payment_tuples;
 #[path = "processor_validation.rs"]
 mod processor;
@@ -361,50 +363,26 @@ fn validate_database_role(
 
 fn validate_binding(index: usize, link: &LinkSpec, issues: &mut Vec<ValidationIssue>) {
     let path = format!("/links/{index}/binding");
-    match (&link.kind, &link.binding) {
-        (LinkKind::ChainBackend, Some(DependencyBinding::Chain { .. }))
-        | (LinkKind::ArkBackend, Some(DependencyBinding::Ark { .. }))
-        | (LinkKind::SparkBackend, Some(DependencyBinding::Spark { .. }))
-        | (LinkKind::PaymentBackend, Some(DependencyBinding::Payment { .. }))
-        | (LinkKind::DatabaseBackend, Some(DependencyBinding::Database { .. }))
-        | (LinkKind::AuthenticationBackend, Some(DependencyBinding::Authentication { .. })) => {}
-        (
-            LinkKind::ChainBackend
-            | LinkKind::ArkBackend
-            | LinkKind::SparkBackend
-            | LinkKind::PaymentBackend
-            | LinkKind::DatabaseBackend
-            | LinkKind::AuthenticationBackend,
-            None,
-        ) => {
-            issue(
-                issues,
-                "missing_dependency_binding",
-                path,
-                "backend links require a typed binding payload",
-            );
-        }
-        (
-            LinkKind::ChainBackend
-            | LinkKind::ArkBackend
-            | LinkKind::SparkBackend
-            | LinkKind::PaymentBackend
-            | LinkKind::DatabaseBackend
-            | LinkKind::AuthenticationBackend,
-            Some(_),
-        ) => issue(
-            issues,
-            "incompatible_dependency_binding",
-            path,
-            format!("binding payload does not match {:?}", link.kind),
-        ),
-        (_, Some(_)) => issue(
+    match &link.binding {
+        Some(_) if !link.kind.is_backend() => issue(
             issues,
             "unexpected_dependency_binding",
             path,
             "peer and network-path links cannot carry dependency binding payloads",
         ),
-        (_, None) => {}
+        None if link.kind.is_backend() => issue(
+            issues,
+            "missing_dependency_binding",
+            path,
+            "backend links require a typed binding payload",
+        ),
+        Some(binding) if binding.link_kind() != link.kind => issue(
+            issues,
+            "incompatible_dependency_binding",
+            path,
+            format!("binding payload does not match {:?}", link.kind),
+        ),
+        _ => {}
     }
     if let Some(DependencyBinding::Payment { unit, .. }) = &link.binding
         && !is_cashu_unit(unit)

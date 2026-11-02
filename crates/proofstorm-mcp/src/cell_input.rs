@@ -16,11 +16,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AddLinkInput {
+    /// Declares intended peers for topology checks; it does not connect them.
+    /// Connect natively, e.g. bitcoin-cli addnode.
     BitcoinPeer {
         id: String,
         from: String,
         to: String,
     },
+    /// Declares intended peers for topology checks; it does not connect them.
+    /// Connect natively, e.g. lncli connect or lightning-cli connect.
     LightningPeer {
         id: String,
         from: String,

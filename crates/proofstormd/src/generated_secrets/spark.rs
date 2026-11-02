@@ -1,17 +1,15 @@
 //! A Spark operator federation's identities are fixed when it is first created:
 //! operators sign together, and each operator database is sealed to its key.
 use kube::ResourceExt as _;
-use rcgen::{
-    BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
-    KeyUsagePurpose,
-};
+use proofstorm_core::SPARK_MAX_OPERATORS;
+use rcgen::{BasicConstraints, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose};
 use secp256k1::{Secp256k1, SecretKey};
 use serde::Serialize;
-use time::{Duration, OffsetDateTime};
 
 use super::{
     Api, BTreeMap, Error, Secret, component_name, ensure_generated_secret_with, hex, random_bytes,
 };
+use crate::management_tls::parameters;
 
 const KIND: &str = "spark-operators";
 /// Operators reach each other on this gRPC port.
@@ -36,17 +34,15 @@ pub(super) async fn ensure_operators(
 
 /// The template settings a federation is created with.
 struct Federation<'a> {
-    /// Stored beside the generated data and compared verbatim afterwards.
-    settings: [(&'static str, &'a str); 4],
-    operators: usize,
-    threshold: usize,
+    operators: u64,
+    threshold: u64,
     service: &'a str,
 }
 
 /// One `operators.json` entry; field order is the file's key order.
 #[derive(Serialize)]
 struct Operator {
-    id: usize,
+    id: u64,
     address: String,
     external_address: String,
     identity_public_key: String,
@@ -64,21 +60,26 @@ impl<'a> Federation<'a> {
                 Error::SecretContract(format!("Secret template {name:?} has no {key}"))
             })
         };
-        let operators_setting = setting("PROOFSTORM_SPARK_OPERATORS")?;
-        let threshold_setting = setting("PROOFSTORM_SPARK_THRESHOLD")?;
+        // Only canonical decimals, which `settings` renders back exactly.
+        let count = |key: &str| {
+            setting(key).map(|value| {
+                value
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|count| count.to_string() == value)
+            })
+        };
+        let operators = count("PROOFSTORM_SPARK_OPERATORS")?;
+        let threshold = count("PROOFSTORM_SPARK_THRESHOLD")?;
         let service = setting("PROOFSTORM_SPARK_SERVICE")?;
-        let operators = operators_setting
-            .parse::<usize>()
-            .ok()
-            .filter(|operators| (1..=5).contains(operators))
+        let operators = operators
+            .filter(|operators| (1..=SPARK_MAX_OPERATORS).contains(operators))
             .ok_or_else(|| {
                 Error::SecretContract(format!(
-                    "Secret template {name:?} needs 1 to 5 Spark operators"
+                    "Secret template {name:?} needs 1 to {SPARK_MAX_OPERATORS} Spark operators"
                 ))
             })?;
-        let threshold = threshold_setting
-            .parse::<usize>()
-            .ok()
+        let threshold = threshold
             .filter(|threshold| (1..=operators).contains(threshold))
             .ok_or_else(|| {
                 Error::SecretContract(format!(
@@ -91,24 +92,28 @@ impl<'a> Federation<'a> {
             )));
         }
         Ok(Self {
-            settings: [
-                ("PROOFSTORM_SECRET_KIND", KIND),
-                ("PROOFSTORM_SPARK_OPERATORS", operators_setting),
-                ("PROOFSTORM_SPARK_THRESHOLD", threshold_setting),
-                ("PROOFSTORM_SPARK_SERVICE", service),
-            ],
             operators,
             threshold,
             service,
         })
     }
 
+    /// Stored beside the generated data and compared verbatim afterwards.
+    fn settings(&self) -> [(&'static str, String); 4] {
+        [
+            ("PROOFSTORM_SECRET_KIND", KIND.into()),
+            ("PROOFSTORM_SPARK_OPERATORS", self.operators.to_string()),
+            ("PROOFSTORM_SPARK_THRESHOLD", self.threshold.to_string()),
+            ("PROOFSTORM_SPARK_SERVICE", self.service.into()),
+        ]
+    }
+
     /// Every key an intact Secret holds.
     fn keys(&self) -> Vec<String> {
         let mut keys: Vec<String> = self
-            .settings
-            .iter()
-            .map(|(key, _)| (*key).into())
+            .settings()
+            .into_iter()
+            .map(|(key, _)| key.into())
             .chain(["ca.crt", "operators.json", "threshold"].map(String::from))
             .collect();
         for index in 0..self.operators {
@@ -127,7 +132,7 @@ impl<'a> Federation<'a> {
         let data = secret.data.as_ref().ok_or_else(|| {
             Error::SecretContract(format!("Secret {name:?} has no generated data"))
         })?;
-        if self.settings.iter().any(|(key, value)| {
+        if self.settings().iter().any(|(key, value)| {
             data.get(*key).map(|stored| stored.0.as_slice()) != Some(value.as_bytes())
         }) {
             return Err(Error::SecretContract(format!(
@@ -165,7 +170,7 @@ impl<'a> Federation<'a> {
             ("threshold".into(), format!("{}\n", self.threshold)),
         ]);
         let secp = Secp256k1::signing_only();
-        let mut operators = Vec::with_capacity(self.operators);
+        let mut operators = Vec::new();
         for index in 0..self.operators {
             let identity = operator_key(name)?;
             let public_key = hex(&identity.public_key(&secp).serialize());
@@ -215,16 +220,6 @@ impl<'a> Federation<'a> {
         data.insert("operators.json".into(), operators);
         Ok(data)
     }
-}
-
-/// Mirrors the management TLS certificate shape.
-fn parameters(name: &str, names: Vec<String>) -> Result<CertificateParams, rcgen::Error> {
-    let mut params = CertificateParams::new(names)?;
-    params.distinguished_name.push(DnType::CommonName, name);
-    params.not_before = OffsetDateTime::now_utc() - Duration::days(1);
-    params.not_after = OffsetDateTime::now_utc() + Duration::days(365);
-    params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-    Ok(params)
 }
 
 /// Fewer than one in 2^127 random 32-byte strings is not a valid scalar.

@@ -26,6 +26,14 @@ mod bark;
 mod processor;
 #[path = "spark_catalog.rs"]
 mod spark;
+pub use bark::{
+    CLN_HOLD_VERSION as BARK_CLN_HOLD_VERSION, PROCESSOR_VERSION as BARK_PROCESSOR_VERSION,
+    SERVER_VERSION as BARK_SERVER_VERSION,
+};
+pub use spark::{
+    LDK_SERVER_VERSION as SPARK_LDK_SERVER_VERSION, OPERATORS_VERSION as SPARK_OPERATORS_VERSION,
+    PROCESSOR_VERSION as SPARK_PROCESSOR_VERSION, SSP_VERSION as SPARK_SSP_VERSION,
+};
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
@@ -1360,6 +1368,67 @@ fn redis_entry(
     )
 }
 
+/// Standalone LDK Server regtest nodes share one contract; the CDK processor
+/// and open-ssp each pin their own revision.
+fn ldk_server_entry(
+    amd64: bool,
+    backends: &BackendContractRegistry,
+    adapter_version: &str,
+    description: &str,
+    version: &str,
+    image: &str,
+) -> CatalogEntry {
+    catalog_entry_with_lifecycle(
+        amd64,
+        "ldk-server",
+        backends,
+        ComponentKind::Lightning,
+        description,
+        adapter_version,
+        version,
+        ReleaseChannel::Prerelease,
+        SupportLifecycle::Experimental,
+        image,
+        BTreeSet::from([
+            CatalogFeature::NativeCli,
+            CatalogFeature::NativeCliEntrypoints,
+            CatalogFeature::Regtest,
+            CatalogFeature::PersistentState,
+            CatalogFeature::Bolt11,
+            CatalogFeature::Bolt12,
+        ]),
+        vec![dependency(
+            LinkKind::ChainBackend,
+            "bitcoin-core",
+            &["31.1"],
+        )],
+        support_matrix(
+            &[StorageBackend::PersistentVolume],
+            &[PaymentMethod::Bolt11, PaymentMethod::Bolt12],
+            &[],
+            &["sat", "msat"],
+            &[],
+            &[],
+            vec![],
+        ),
+        vec![
+            ControlClass::Cell,
+            ControlClass::Target,
+            ControlClass::Workspace,
+        ],
+    )
+}
+
+/// Records an entry's pinned build provenance for this platform and folds it,
+/// with the image reference, into the entry's source digest.
+fn attach_provenance(entry: &mut CatalogEntry, encoded: &str, platform: &str) {
+    let mut provenance: BuildProvenance =
+        serde_json::from_str(encoded).expect("pinned build provenance");
+    provenance.platform = platform.into();
+    entry.source_digest = crate::digest_json(&(&entry.source_digest, &entry.image, &provenance));
+    entry.build_provenance = Some(provenance);
+}
+
 /// Preserve the upstream repository and digest while serving published images
 /// from the local registry. Locally packaged images already name that registry.
 pub(crate) fn mirror_image(image: &str) -> String {
@@ -1644,7 +1713,7 @@ fn catalog_runtime_endpoints(implementation: &str, amd64: bool) -> Vec<CatalogRu
                 "component_logs",
             ],
             &[
-                "Use workspace_upload to copy local scripts or binary files up to 16 MiB into /workspace without inline contents. Use workspace_file for small edits, reads and listing, and workspace_task for managed background tasks. Each task captures its source directory (default src), survives agent disconnection and never automatically replays after restart. Stop through workspace_task. Optional task control.components grants native command calls on named cell components: invoke $PROOFSTORM_CONTROL workspace call with JSON {call_id,component,command}; command uses the cell_exec contract. Reuse call_id only for an exact retry. Receipts are under output/<task_id>/control/<call_id>.json. Scope defaults to 256 calls and 30 seconds per command. control.lifecycle grants start/stop/restart targets; control.network grants exact partition pairs with max_fault_seconds (default 60, maximum 3600). Typed calls use {call_id,operation:{kind,...}}. Partitions expire and are healed on task exit; inspect task control_cleanup after stopping. Lifecycle effects persist. Use workspace_capture to attach source, inputs, selected output files and control receipts to an open run without stopping the task. Evidence exports include captures; download the resource before cell teardown. Runtime defaults to BusyBox; a pinned runtime_image supplies other languages. An optional service_port exposes one cell-local TCP endpoint.",
+                "Use workspace_upload to copy local scripts or binary files up to 16 MiB into /workspace without inline contents. Use workspace_file for small edits, reads and listing, and workspace_task for managed background tasks. Each task captures its source directory (default src), survives agent disconnection and never automatically replays after restart. Stop through workspace_task. Optional task control.components grants native command calls on named cell components: pass JSON {call_id,component,command} as one argument (not stdin): $PROOFSTORM_CONTROL workspace call '{...}'; command uses the cell_exec contract. Reuse call_id only for an exact retry. Receipts are under output/<task_id>/control/<call_id>.json. Scope defaults to 256 calls and 30 seconds per command. control.lifecycle grants start/stop/restart targets; control.network grants exact partition pairs with max_fault_seconds (default 60, maximum 3600). Typed calls use {call_id,operation:{kind,...}}. Partitions expire and are healed on task exit; inspect task control_cleanup after stopping. Lifecycle effects persist. Use workspace_capture to attach source, inputs, selected output files and control receipts to an open run without stopping the task. Evidence exports include captures; download the resource before cell teardown. Runtime defaults to BusyBox; a pinned runtime_image supplies other languages. An optional service_port exposes one cell-local TCP endpoint.",
             ],
         )],
         "redis" | "postgresql" => {

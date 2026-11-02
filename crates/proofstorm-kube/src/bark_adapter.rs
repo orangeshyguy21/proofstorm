@@ -11,36 +11,40 @@ use proofstorm_core::{
     processor_ids::{BARK_PROCESSOR, BARK_SERVER},
 };
 
+/// The one `kind` link from `from` with this binding, resolved to a component
+/// of the given kind and implementation. `from` is the plan's own component,
+/// except where a Spark processor reads its SSP's operator link.
 pub(super) fn dependency<'a>(
     plan: &'a ComponentPlanContract,
+    from: &str,
     kind: LinkKind,
     binding: &DependencyBinding,
     target_kind: ComponentKind,
     implementation: &str,
 ) -> Result<&'a TargetDescriptorContract, AdapterError> {
-    let links: Vec<_> = plan
+    let missing = || {
+        AdapterError::InvalidPlan(format!(
+            "component {from:?} requires one {kind:?} binding to {implementation}"
+        ))
+    };
+    let links = plan
         .relevant_links
         .iter()
-        .filter(|link| link.kind == kind)
-        .collect();
-    let target = links
-        .first()
-        .and_then(|link| plan.linked_targets.get(&link.id));
-    if links.len() != 1
-        || !target.is_some_and(|target| {
-            links[0].from == plan.component_id
-                && links[0].to == target.component_id
-                && links[0].binding.as_ref() == Some(binding)
+        .filter(|link| link.from == from && link.kind == kind)
+        .collect::<Vec<_>>();
+    let [link] = links.as_slice() else {
+        return Err(missing());
+    };
+    plan.linked_targets
+        .get(&link.id)
+        .filter(|target| {
+            link.binding.as_ref() == Some(binding)
+                && target.component_id == link.to
                 && target.kind == target_kind
                 && target.backend_id == implementation
                 && service_name(&target.component_id)
         })
-    {
-        return Err(AdapterError::InvalidPlan(format!(
-            "Bark component requires one {kind:?} binding to {implementation}"
-        )));
-    }
-    Ok(target.expect("validated target"))
+        .ok_or_else(missing)
 }
 
 pub(super) fn service_name(value: &str) -> bool {
@@ -67,6 +71,7 @@ pub fn render_processor(plan: &ComponentPlanContract) -> Result<RenderedComponen
     validate_identity(plan, config)?;
     let chain = dependency(
         plan,
+        &plan.component_id,
         LinkKind::ChainBackend,
         &DependencyBinding::Chain {
             network: BitcoinNetwork::Regtest,
@@ -76,6 +81,7 @@ pub fn render_processor(plan: &ComponentPlanContract) -> Result<RenderedComponen
     )?;
     let server = dependency(
         plan,
+        &plan.component_id,
         LinkKind::ArkBackend,
         &DependencyBinding::Ark {
             network: BitcoinNetwork::Regtest,
@@ -172,13 +178,13 @@ pub(super) fn required_port(
     target: &TargetDescriptorContract,
     name: &str,
 ) -> Result<u16, AdapterError> {
-    let port = target_port(target, name)?;
-    if port == 0 {
-        return Err(AdapterError::InvalidPlan(
-            "Bark dependency port must be nonzero".into(),
-        ));
+    match target_port(target, name)? {
+        0 => Err(AdapterError::InvalidPlan(format!(
+            "port {name:?} of {:?} must be nonzero",
+            target.component_id
+        ))),
+        port => Ok(port),
     }
-    Ok(port)
 }
 
 fn workload(

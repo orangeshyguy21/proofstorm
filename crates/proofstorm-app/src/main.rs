@@ -109,7 +109,7 @@ async fn main() -> Result<()> {
         );
         let target = proofstorm_app::dev_reset::describe(home)?;
         anyhow::ensure!(
-            target["kind"] == "checkout",
+            proofstorm_app::dev_reset::is_checkout(home),
             "dev reset requires a checkout; installed releases use storm setup --recreate"
         );
         if !confirm_reset(home, yes, args.json, "dev reset", "Build caches")? {

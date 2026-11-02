@@ -14,7 +14,9 @@ mod bark;
 pub use bark::{BarkProcessorConfig, BarkServerConfig};
 #[path = "spark_backend.rs"]
 mod spark;
-pub use spark::{OpenSspConfig, SparkOperatorsConfig};
+pub use spark::{
+    OpenSspConfig, SPARK_DATABASE_NAME_LIMIT, SPARK_MAX_OPERATORS, SparkOperatorsConfig,
+};
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
@@ -1140,7 +1142,8 @@ fn typed_config_error(component: &ComponentSpec, name: &str) -> String {
     )
 }
 
-pub(crate) fn is_postgres_identifier(value: &str) -> bool {
+#[must_use]
+pub fn is_postgres_identifier(value: &str) -> bool {
     value
         .bytes()
         .next()
@@ -1467,7 +1470,9 @@ fn validate_config_value(
     Ok(())
 }
 
+/// Every violated rule is reported at once, so one edit can fix them all.
 fn validate_config_rules(component: &ComponentSpec, rules: &[ConfigRule]) -> Result<(), String> {
+    let mut violations = Vec::new();
     for rule in rules {
         match rule {
             ConfigRule::MutuallyExclusive { fields } => {
@@ -1476,7 +1481,7 @@ fn validate_config_rules(component: &ComponentSpec, rules: &[ConfigRule]) -> Res
                     .filter(|field| component.config.contains_key(*field))
                     .collect::<Vec<_>>();
                 if present.len() > 1 {
-                    return Err(format!(
+                    violations.push(format!(
                         "config_mutually_exclusive: component {:?} fields {:?} cannot be set together",
                         component.id, present
                     ));
@@ -1489,7 +1494,7 @@ fn validate_config_rules(component: &ComponentSpec, rules: &[ConfigRule]) -> Res
             } if component.config.get(field) == Some(equals)
                 && !component.config.contains_key(required_field) =>
             {
-                return Err(config_diagnostic(
+                violations.push(config_diagnostic(
                     "conditional_required_field_missing",
                     component,
                     required_field,
@@ -1508,7 +1513,7 @@ fn validate_config_rules(component: &ComponentSpec, rules: &[ConfigRule]) -> Res
                     continue;
                 };
                 if minimum > maximum {
-                    return Err(format!(
+                    violations.push(format!(
                         "config_order_violation: component {:?} field /config/{minimum_field} must be less than or equal to /config/{maximum_field}",
                         component.id
                     ));
@@ -1516,7 +1521,11 @@ fn validate_config_rules(component: &ComponentSpec, rules: &[ConfigRule]) -> Res
             }
         }
     }
-    Ok(())
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(violations.join("; "))
+    }
 }
 
 fn config_diagnostic(code: &str, component: &ComponentSpec, field: &str, message: &str) -> String {
@@ -3746,6 +3755,20 @@ mod tests {
                 .expect_err("ordered mint bounds")
                 .starts_with("config_order_violation:")
         );
+
+        let mut capped = component("mint", "nutshell", ComponentKind::Mint);
+        for (field, value) in [
+            ("max_balance_sat", 50_000),
+            ("max_mint_sat", 60_000),
+            ("max_melt_sat", 70_000),
+        ] {
+            capped.config.insert(field.into(), json!(value));
+        }
+        let refused = registry
+            .validate_component_config(&capped)
+            .expect_err("both limits exceed the balance cap");
+        assert!(refused.contains("/config/max_mint_sat"), "{refused}");
+        assert!(refused.contains("/config/max_melt_sat"), "{refused}");
     }
 
     #[test]

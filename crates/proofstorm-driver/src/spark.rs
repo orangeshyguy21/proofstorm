@@ -4,7 +4,6 @@
 use std::{
     fmt::Write as _,
     fs,
-    io::Write as _,
     os::unix::{fs::FileTypeExt as _, process::CommandExt as _},
     path::Path,
     process::Command,
@@ -12,13 +11,13 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
+use proofstorm_core::{SPARK_MAX_OPERATORS, is_postgres_identifier};
 use serde_json::Value;
-use sha2::{Digest as _, Sha256};
 use tonic::transport::{Certificate, ClientTlsConfig, Endpoint};
 
 use crate::{
-    bark::{mnemonic, read_bounded},
     http::required,
+    state::{bind_marker, identity_record, mnemonic, read_bounded, write},
 };
 
 const OPERATORS: &str = "/spark-operators";
@@ -26,7 +25,6 @@ const CA: &str = "/spark-operators/ca.crt";
 const SOCKET: &str = "/run/spark/frost.sock";
 const OPERATOR_PORT: u16 = 8535;
 const SSP_PORT: u16 = 8536;
-const MAX_OPERATORS: usize = 5;
 const SSP_MNEMONIC: &str = "/ssp-identity/mnemonic";
 const ADMIN_TOKEN: &str = "/ssp-identity/admin-token";
 const SSP_MARKER: &str = ".proofstorm-open-ssp-identity";
@@ -123,24 +121,12 @@ fn line(bytes: &[u8]) -> Option<&str> {
     Some(value.strip_suffix('\n').unwrap_or(value))
 }
 
-/// PostgreSQL folds unquoted identifiers and limits them to 63 bytes.
-fn postgres_identifier(value: &str) -> bool {
-    value.len() <= 63
-        && value
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_lowercase())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-}
-
 fn parse_federation(list: &[u8], threshold: &[u8]) -> Result<Federation> {
     let entries: Vec<Entry> =
         serde_json::from_slice(list).context("parse the Spark operator list")?;
     ensure!(
-        (1..=MAX_OPERATORS).contains(&entries.len()),
-        "a Spark federation has 1 to {MAX_OPERATORS} operators"
+        (1..=SPARK_MAX_OPERATORS).contains(&(entries.len() as u64)),
+        "a Spark federation has 1 to {SPARK_MAX_OPERATORS} operators"
     );
     let mut operators: Vec<Operator> = Vec::with_capacity(entries.len());
     for (index, entry) in entries.into_iter().enumerate() {
@@ -213,8 +199,9 @@ fn database_urls(host: &str, port: &str, base: &str, index: usize) -> Result<[St
     ensure!(dns_name(host), "invalid Spark database host");
     let main = format!("{base}_{index}");
     let ephemeral = format!("{main}_ephemeral");
+    // PostgreSQL limits identifiers to 63 bytes; the ephemeral name is the longest.
     ensure!(
-        postgres_identifier(base) && postgres_identifier(&ephemeral),
+        is_postgres_identifier(base) && ephemeral.len() <= 63,
         "invalid Spark database name"
     );
     Ok([main, ephemeral].map(|database| {
@@ -395,56 +382,6 @@ fn admin_token(path: &Path) -> Result<String> {
         .context("open-ssp admin token is malformed")
 }
 
-fn identity_record(kind: &str, mnemonic: &str) -> String {
-    format!(
-        "proofstorm-{kind}/v1\n{:x}\n",
-        Sha256::digest(mnemonic.as_bytes())
-    )
-}
-
-/// Bind an owned volume to its seed once, as Bark does. The native layout is
-/// upstream's, so a bound volume is checked only by its marker.
-fn bind_identity(data: &Path, marker: &str, record: &str) -> Result<()> {
-    ensure!(
-        fs::symlink_metadata(data)?.is_dir(),
-        "Spark data volume must be an existing directory"
-    );
-    let marker = data.join(marker);
-    match fs::symlink_metadata(&marker) {
-        Ok(metadata) => {
-            ensure!(
-                metadata.is_file(),
-                "Spark identity marker must be a regular file"
-            );
-            ensure!(
-                read_bounded(&marker, 128)? == record.as_bytes(),
-                "Spark identity mismatch; refusing to replace existing state"
-            );
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            for entry in fs::read_dir(data)? {
-                let entry = entry?;
-                // A freshly formatted PVC can contain an empty filesystem recovery directory.
-                ensure!(
-                    entry.file_name() == "lost+found"
-                        && entry.file_type()?.is_dir()
-                        && fs::read_dir(entry.path())?.next().is_none(),
-                    "Spark state exists without its identity marker; refusing reinitialization"
-                );
-            }
-            let mut temporary = tempfile::NamedTempFile::new_in(data)?;
-            temporary.write_all(record.as_bytes())?;
-            temporary.as_file().sync_all()?;
-            temporary
-                .persist_noclobber(&marker)
-                .context("bind Spark identity once")?;
-            fs::File::open(data)?.sync_all()?;
-        }
-        Err(error) => return Err(error).context("inspect Spark identity marker"),
-    }
-    Ok(())
-}
-
 fn joined(federation: &Federation, item: impl Fn(&Operator) -> String) -> String {
     federation
         .operators
@@ -499,13 +436,18 @@ pub fn exec_open_ssp() -> Result<()> {
     let federation = federation(Path::new(OPERATORS))?;
     let token = admin_token(Path::new(ADMIN_TOKEN))?;
     let seed = mnemonic(Path::new(SSP_MNEMONIC))?;
-    bind_identity(
+    // The native layout is upstream's, so a bound volume is checked only by its marker.
+    bind_marker(
         Path::new("/data"),
         SSP_MARKER,
         &identity_record("open-ssp", &seed),
     )?;
-    replace_private(Path::new(SSP_SEED), format!("{seed}\n").as_bytes())?;
-    replace_private(Path::new(ADMIN_HEADER), admin_header(&token).as_bytes())?;
+    write(Path::new(SSP_SEED), format!("{seed}\n").as_bytes(), true)?;
+    write(
+        Path::new(ADMIN_HEADER),
+        admin_header(&token).as_bytes(),
+        true,
+    )?;
     Err(Command::new("open-ssp")
         .envs(ssp_environment(&federation, &token))
         .exec())
@@ -632,19 +574,6 @@ fn processor_config(port: u16, federation: &Federation, ssp: &str, identity: &st
     text
 }
 
-/// Atomically replace a file with one only its owner can read (mode 0600).
-fn replace_private(path: &Path, contents: &[u8]) -> Result<()> {
-    let parent = path.parent().context("Spark runtime directory missing")?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    temporary.write_all(contents)?;
-    temporary.as_file().sync_all()?;
-    temporary
-        .persist(path)
-        .context("replace Spark runtime file")?;
-    fs::File::open(parent)?.sync_all()?;
-    Ok(())
-}
-
 /// Bind the processor volume to its seed, configure it against the federation
 /// and SSP, and exec it. The seed reaches it only through its environment.
 /// # Errors
@@ -663,15 +592,16 @@ pub async fn exec_processor() -> Result<()> {
             "required Spark processor credential file is empty"
         );
     }
-    bind_identity(
+    bind_marker(
         Path::new("/data"),
         PROCESSOR_MARKER,
         &identity_record("spark-processor", &seed),
     )?;
     let identity = fetch_ssp_identity(ssp, Duration::from_secs(60)).await?;
-    replace_private(
+    write(
         &Path::new(PROCESSOR_RUN).join("config.toml"),
         processor_config(port, &federation, ssp, &identity).as_bytes(),
+        true,
     )?;
     Err(Command::new("cdk-payment-processor-spark")
         .current_dir(PROCESSOR_RUN)
@@ -983,10 +913,10 @@ mod tests {
         let record = identity_record("open-ssp", &seed(1));
         assert!(!record.contains(&seed(1)));
         assert_ne!(record, identity_record("spark-processor", &seed(1)));
-        bind_identity(dir.path(), SSP_MARKER, &record).unwrap();
+        bind_marker(dir.path(), SSP_MARKER, &record).unwrap();
         fs::write(dir.path().join("native-state"), b"retained").unwrap();
         for _ in 0..3 {
-            bind_identity(dir.path(), SSP_MARKER, &record).unwrap();
+            bind_marker(dir.path(), SSP_MARKER, &record).unwrap();
         }
         assert_eq!(
             fs::read(dir.path().join(SSP_MARKER)).unwrap(),
@@ -997,9 +927,9 @@ mod tests {
             b"retained"
         );
         let other = identity_record("open-ssp", &seed(2));
-        assert!(bind_identity(dir.path(), SSP_MARKER, &other).is_err());
+        assert!(bind_marker(dir.path(), SSP_MARKER, &other).is_err());
         // A volume bound for one component is not adopted by the other.
-        assert!(bind_identity(dir.path(), PROCESSOR_MARKER, &record).is_err());
+        assert!(bind_marker(dir.path(), PROCESSOR_MARKER, &record).is_err());
         assert_eq!(
             fs::read(dir.path().join(SSP_MARKER)).unwrap(),
             record.as_bytes()
@@ -1007,18 +937,18 @@ mod tests {
 
         let unbound = tempfile::tempdir().unwrap();
         fs::write(unbound.path().join("spark"), b"existing").unwrap();
-        assert!(bind_identity(unbound.path(), SSP_MARKER, &record).is_err());
+        assert!(bind_marker(unbound.path(), SSP_MARKER, &record).is_err());
         assert!(!unbound.path().join(SSP_MARKER).exists());
         let recovered = tempfile::tempdir().unwrap();
         fs::create_dir_all(recovered.path().join("lost+found/file")).unwrap();
-        assert!(bind_identity(recovered.path(), SSP_MARKER, &record).is_err());
+        assert!(bind_marker(recovered.path(), SSP_MARKER, &record).is_err());
 
         let redirected = tempfile::tempdir().unwrap();
         let elsewhere = redirected.path().join("elsewhere");
         fs::write(&elsewhere, &record).unwrap();
         std::os::unix::fs::symlink(&elsewhere, redirected.path().join(SSP_MARKER)).unwrap();
-        assert!(bind_identity(redirected.path(), SSP_MARKER, &record).is_err());
-        assert!(bind_identity(&elsewhere, SSP_MARKER, &record).is_err());
+        assert!(bind_marker(redirected.path(), SSP_MARKER, &record).is_err());
+        assert!(bind_marker(&elsewhere, SSP_MARKER, &record).is_err());
     }
 
     #[test]
@@ -1028,7 +958,7 @@ mod tests {
         let path = dir.path().join("spark.mnemonic");
         fs::write(&path, b"stale").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-        replace_private(&path, b"fresh\n").unwrap();
+        write(&path, b"fresh\n", true).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"fresh\n");
         // open-ssp refuses a seed file whose mode it cannot narrow to its owner.
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o077, 0);

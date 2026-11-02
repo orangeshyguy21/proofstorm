@@ -2,7 +2,7 @@
 use k8s_openapi::api::core::v1::PersistentVolumeClaim;
 
 use super::{
-    Api, BTreeMap, Error, Secret, component_name, ensure_generated_secret, random_bytes,
+    Api, BTreeMap, Error, Secret, component_name, ensure_generated_secret_with, random_bytes,
     random_hex, validate,
 };
 
@@ -73,11 +73,13 @@ pub(crate) async fn ensure(
             identity.label
         )));
     }
-    ensure_generated_secret(secrets, template, identity.required, || {
-        identity.generate(&name)
-    })
-    .await?;
-    identity.validate(&secrets.get(&name).await?)
+    ensure_generated_secret_with(
+        secrets,
+        template,
+        || identity.generate(&name),
+        |existing| identity.validate(existing),
+    )
+    .await
 }
 
 impl Identity {

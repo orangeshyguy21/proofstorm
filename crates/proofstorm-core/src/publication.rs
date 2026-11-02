@@ -217,16 +217,7 @@ fn runtime_image(component: &crate::ComponentSpec, entry: &CatalogEntry) -> Stri
 }
 
 fn is_rollout_relevant_link(kind: LinkKind) -> bool {
-    matches!(
-        kind,
-        LinkKind::ChainBackend
-            | LinkKind::ArkBackend
-            | LinkKind::SparkBackend
-            | LinkKind::PaymentBackend
-            | LinkKind::DatabaseBackend
-            | LinkKind::AuthenticationBackend
-            | LinkKind::NetworkPath
-    )
+    kind.is_backend() || kind == LinkKind::NetworkPath
 }
 
 /// Whether this catalog entry declares any NUT-21/22 authentication mode.
@@ -271,19 +262,13 @@ fn require_compatible_dependency(
     link: &LinkSpec,
     target: &CatalogEntry,
 ) -> Result<(), String> {
-    if matches!(
-        link.kind,
-        LinkKind::ChainBackend
-            | LinkKind::ArkBackend
-            | LinkKind::SparkBackend
-            | LinkKind::PaymentBackend
-            | LinkKind::DatabaseBackend
-            | LinkKind::AuthenticationBackend
-    ) && !entry.compatible_dependencies.iter().any(|support| {
-        support.link_kind == link.kind
-            && support.implementation == target.id
-            && support.versions.contains(&target.version)
-    }) {
+    if link.kind.is_backend()
+        && !entry.compatible_dependencies.iter().any(|support| {
+            support.link_kind == link.kind
+                && support.implementation == target.id
+                && support.versions.contains(&target.version)
+        })
+    {
         return Err(format!(
             "component {component_id:?} version {:?} does not declare {:?} compatibility with target {:?} version {:?}",
             entry.version, link.kind, link.to, target.version

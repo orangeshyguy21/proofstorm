@@ -16,6 +16,7 @@ pub use proofstorm_view::*;
 
 impl Cells {
     /// Only reads local history and existing runtime status. Never creates a session or job.
+    /// Pages by `limit` alone; byte-limited transports apply `bound_page_bytes` themselves.
     pub async fn environment(&self, query: &EnvironmentQuery) -> Result<EnvironmentView, Error> {
         query
             .validate()
@@ -85,7 +86,7 @@ impl Cells {
             .await
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
-        let mut view = EnvironmentView {
+        Ok(EnvironmentView {
             api_version:"proofstorm/environment/v1alpha1".into(),workspace_id:self.workspace.clone(),
             scope:"cells present in the selected cluster and tracked in this database and workspace; deleted and unmaterialized cells are excluded".into(),
             observation_started_at_unix:started,observation_finished_at_unix:now(),cells:Page {items:cells,next_cursor},
@@ -95,9 +96,7 @@ impl Cells {
                 resource_demand:"rendered desired requests/limits with namespace defaults; excludes transient action jobs. replicas is desired scale, not a running pod count. The protocol prober is one persistent worker per cell. Its desired scale is one; its live observation is null when unavailable. Compare observation generation with observed_generation before treating status as current.".into(),
                 resource_usage:"not collected".into(),protocol_traffic:"not collected".into(),attached_clients:"not tracked; advertised endpoints do not imply active tunnels or clients".into(),
             },
-        };
-        bound_page_bytes(&mut view, 24 * 1024)?;
-        Ok(view)
+        })
     }
 
     async fn environment_cell(
