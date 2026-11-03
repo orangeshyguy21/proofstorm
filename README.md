@@ -86,6 +86,9 @@ compatibility details.
 | CDK Bark processor | `cdk-bark-processor` | Experimental AMD64/ARM64: persistent Bark wallet and gRPC backend for CDK and Nutshell candidates, advertising bolt11, onchain and arkoor in sat (each selectable) |
 | Bark server | `bark-server` | Experimental AMD64/ARM64: Ark server backed by PostgreSQL and CLN/hold |
 | CLN with hold | `cln-hold` | Experimental AMD64/ARM64: Core Lightning with the hold-invoice plugin |
+| CDK Spark processor | `cdk-spark-processor` | Experimental AMD64/ARM64: gRPC BOLT11/sat backend for CDK, settling through a Spark SSP; melts carry no preimage |
+| Spark operators | `spark-operators` | Experimental AMD64/ARM64: regtest Spark operator federation (FROST signers) backed by PostgreSQL |
+| open-ssp | `open-ssp` | Experimental AMD64/ARM64: Spark Service Provider settling Lightning through LDK Server `0.1.0-762bc47` |
 | Nutshell mint | `nutshell` | LND / CLN; candidate builds may use a gRPC processor instead; Redis cache; 0.21.0 supports NUT-21 / NUT-22 auth |
 | Nutshell wallet | `nutshell-wallet` | Persistent Cashu wallet |
 | CDK CLI wallet | `cdk-cli-wallet` | Cashu wallet CLI |

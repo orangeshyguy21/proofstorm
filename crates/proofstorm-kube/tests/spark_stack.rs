@@ -1,4 +1,4 @@
-//! Spark renderer contracts on synthetic plans; the images are unpublished.
+//! Spark renderer contracts on synthetic plans with placeholder images.
 use proofstorm_core::{
     DependencyBinding, EffectiveComponentConfig, LinkKind, SparkOperatorsConfig,
     processor_ids::{OPEN_SSP, SPARK_OPERATORS, SPARK_PROCESSOR},

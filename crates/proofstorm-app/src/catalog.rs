@@ -428,13 +428,10 @@ mod tests {
     #[test]
     fn family_kind_origin_and_exact_filters_intersect() {
         let family = page(json!({"query":"CDK"}));
-        assert_eq!(family.matched_count, 4);
-        assert!(
-            family
-                .items
-                .iter()
-                .any(|entry| entry["id"] == "cdk-bark-processor")
-        );
+        assert_eq!(family.matched_count, 5);
+        for id in ["cdk-bark-processor", "cdk-spark-processor"] {
+            assert!(family.items.iter().any(|entry| entry["id"] == id));
+        }
         assert_eq!(
             page(json!({"query":"cdk","kinds":["mint"]})).matched_count,
             1

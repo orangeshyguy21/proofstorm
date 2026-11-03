@@ -103,11 +103,16 @@ fn planned_spark_cases_instantiate_every_exact_component_and_image() {
         Mode::Compatibility,
     )
     .unwrap();
-    // Spark cases are planned only for platforms with pinned images, so this
-    // checks nothing until spark_images.json is staged for publication.
-    for case in plan.cases.into_iter().filter(
-        |case| matches!(&case.scenario, Scenario::Gate { name, .. } if name == "spark-processor"),
-    ) {
+    // Both platforms' published images are pinned, so one case per platform.
+    let cases: Vec<_> = plan
+        .cases
+        .into_iter()
+        .filter(|case| {
+            matches!(&case.scenario, Scenario::Gate { name, .. } if name == "spark-processor")
+        })
+        .collect();
+    assert_eq!(cases.len(), 2);
+    for case in cases {
         assert!(case.required);
         let observer = crate::qualification::Observer::new(case.clone());
         let mut document = document().unwrap();

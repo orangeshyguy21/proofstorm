@@ -2,14 +2,21 @@
 
 ## Current status
 
-The images build from pinned sources with recorded patches. Proofstorm models,
-validates and renders the stack, but its catalog entries appear only for platforms
-pinned in `crates/proofstorm-core/src/spark_images.json`, which stays empty until the
-images are published. The managed `spark-processor` gate and its native image
-pipeline are described under [Build and validation](#build-and-validation).
+Experimental on Linux AMD64 and ARM64. The images build from pinned sources with
+recorded patches, are published to GHCR, and are pinned in
+`crates/proofstorm-core/src/spark_images.json`.
+[`spark-publication.json`](spark-publication.json) records each image's native build,
+managed qualification and anonymous-pull verification. The pipeline is described under
+[Build and validation](#build-and-validation).
 
-The gate passed a local managed qualification on native ARM64 (Docker Desktop on Apple
-silicon) on 2026-10-30, at commit `692da71`. It covered:
+On 2026-11-03 the managed `spark-processor` gate passed on GitHub-hosted native runners
+for both architectures
+([AMD64](https://github.com/orangeshyguy21/proofstorm/actions/runs/41679535155),
+[ARM64](https://github.com/orangeshyguy21/proofstorm/actions/runs/41679543872)), using
+the images of native builds
+([AMD64](https://github.com/orangeshyguy21/proofstorm/actions/runs/41672988279),
+[ARM64](https://github.com/orangeshyguy21/proofstorm/actions/runs/41672995260)). It
+covered:
 - settings and transport refusals
 - SSP funding and the channel
 - an unpaid quote, a mint paid while the processor was stopped, and two melts, across
@@ -17,8 +24,9 @@ silicon) on 2026-10-30, at commit `692da71`. It covered:
 - an unreachable melt that was never paid
 - cleanup
 
-Melts carried no payment preimage, as documented. AMD64 qualification needs a native
-AMD64 runner.
+Melts carried no payment preimage, as documented. The gate first passed locally on
+native ARM64 on 2026-10-30, at commit `692da71`. Ordinary native qualification now
+probes each published image and runs the gate in the compatibility and full suites.
 
 A Docker Compose probe (2026-10-29, native ARM64) passed:
 - a real BOLT11 mint and melt through a CDK 0.18.2 mint, this processor, three Spark
@@ -88,8 +96,9 @@ Both the pinned and current CDK LDK Server processors use `ldk-server-client@50f
 with an API key, so `ldk-server@0.1.0-50fe752` stays for them.
 
 Against `50fe752`, open-ssp exits at startup with `Invalid macaroon size or version`.
-The two versions are not interchangeable. Phase 2 must record which consumers link to
-which version.
+The two versions are not interchangeable, so the catalog carries both `ldk-server`
+entries: `0.1.0-762bc47` for open-ssp and `0.1.0-50fe752` for the CDK LDK Server
+processor. Both are published in the one `ldk-server` GHCR package.
 
 ## Known limitations
 
@@ -99,7 +108,8 @@ which version.
     `Lightning submission outcome unknown`.
   - The mint correctly marked the melt unpaid.
   - But the 500-sat preimage swap to the SSP stayed pending, with a 16-day expiry.
-- AMD64 has only the CI native builds below. The payment probe ran only on ARM64.
+  - The managed gate's unreachable melt left nothing pending, so this is not yet
+    reproduced under Proofstorm.
 
 ## Runtime notes for the managed components
 
@@ -223,6 +233,31 @@ The public artifact holds `status.json` (it must show `stage: complete` and exit
 `qualification.json`, the staged pins and candidate receipts, `catalog.patch`,
 `controller-source.json`, `cache-inputs.json` and `spark-run-identity.json`. Raw gate
 output and runtime homes are never uploaded.
+
+### Publication
+
+Publish only images whose managed qualification passed, from that same build run, on
+a maintainer host with GHCR write access. Never give registry credentials to the
+qualification runner. For each of the eight images:
+1. Download its build artifact and check `SHA256SUMS`. The archive's config digest,
+   layer IDs and `image.tar` checksum must equal the qualification receipt.
+2. Push the archive's OCI layout, byte for byte, to a throwaway `127.0.0.1` registry.
+   The manifest digest stays the archive's own.
+3. Run `just catalog-image prepare-copy 127.0.0.1:PORT/…/REPOSITORY@DIGEST PLATFORM WORK`,
+   then `just catalog-image publish WORK --confirm-namespace ghcr.io/orangeshyguy21/proofstorm`.
+   The copy is not rebuilt or executed.
+
+`spark-operator`, `open-ssp` and `cdk-spark-processor` must be **Public** GHCR packages.
+A new package starts private, so its anonymous check fails after upload: make it
+Public, then run `just catalog-image verify-work WORK`. Do not push again. The 762bc47
+LDK Server shares the existing `ldk-server` package.
+
+Pin the published digests in `spark_images.json`, not the staged qualification ones.
+They differ because publication keeps the archive's uncompressed layers; config bytes
+and layer IDs match. [`spark-publication.json`](spark-publication.json) records each
+image's build and qualification runs, both digests, and the anonymous registry and
+`docker pull` checks, and `catalog_distribution.rs` requires that record. Any change to
+a recipe, patch or pin repeats the build, qualification and publication.
 
 ### Local run on an ARM64 Mac
 

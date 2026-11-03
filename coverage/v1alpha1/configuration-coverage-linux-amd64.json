@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:32904a2f91f04d8b30f13366f41f17f0b628d66f4a515fc2974c67cba191b805",
+  "catalog_digest": "sha256:9e9cdea39a09837f92e681dff80c90376cb28eedd709ebbc98c36d8f011fabdf",
   "entries": [
     {
       "implementation": "bark-server",
@@ -412,6 +412,7 @@
           "bdk",
           "cdk-bark-processor",
           "cdk-ldk-server-processor",
+          "cdk-spark-processor",
           "cln",
           "ldk-node",
           "lnd"
@@ -437,6 +438,16 @@
               "implementation": "cdk-ldk-server-processor",
               "versions": [
                 "0.1.0-fe468ca"
+              ]
+            }
+          },
+          {
+            "method": "bolt11",
+            "unit": "sat",
+            "backend": {
+              "implementation": "cdk-spark-processor",
+              "versions": [
+                "0.1.0-d7244e2"
               ]
             }
           },
@@ -573,6 +584,13 @@
           "implementation": "cdk-bark-processor",
           "versions": [
             "0.1.0-fe468ca"
+          ]
+        },
+        {
+          "link_kind": "payment_backend",
+          "implementation": "cdk-spark-processor",
+          "versions": [
+            "0.1.0-d7244e2"
           ]
         }
       ]
@@ -894,6 +912,62 @@
           "implementation": "ldk-server",
           "versions": [
             "0.1.0-50fe752"
+          ]
+        }
+      ]
+    },
+    {
+      "implementation": "cdk-spark-processor",
+      "kind": "payment_processor",
+      "upstream_version": "0.1.0-d7244e2",
+      "release_channel": "prerelease",
+      "support_lifecycle": "experimental",
+      "config_version": "cdk-spark-processor/0.1/v1",
+      "config_schema_digest": "sha256:3c98ec15ab5179138f17f01329cb6fc188b0beddb8983f95218eae42f93908f8",
+      "image": "proofstorm-registry.localhost:5000/cdk-spark-processor@sha256:5038e39e53c23e5cbe05195c83a74585a531b2861d722dbec255c822e74a2bc5",
+      "fields": {
+        "backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "data_dir": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "mnemonic": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "spark_backend",
+          "implementation": "open-ssp",
+          "versions": [
+            "0.1.0-9c25f69"
           ]
         }
       ]
@@ -1257,6 +1331,60 @@
       "config_version": "ldk-server/0.1/v1",
       "config_schema_digest": "sha256:dfe3e4915d22b479bb96f12a9f19d27e5905941aef231fc0be4e5058e2be5d43",
       "image": "proofstorm-registry.localhost:5000/ldk-server@sha256:1a21ea3bdd9a73ce04e3e8159ebcd66fcfec25a649b71798d1f9bb3c454d94a3",
+      "fields": {
+        "alias": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [
+          "bolt11",
+          "bolt12"
+        ],
+        "payment_backends": [],
+        "units": [
+          "msat",
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "31.1"
+          ]
+        }
+      ]
+    },
+    {
+      "implementation": "ldk-server",
+      "kind": "lightning",
+      "upstream_version": "0.1.0-762bc47",
+      "release_channel": "prerelease",
+      "support_lifecycle": "experimental",
+      "config_version": "ldk-server/0.1/v1",
+      "config_schema_digest": "sha256:dfe3e4915d22b479bb96f12a9f19d27e5905941aef231fc0be4e5058e2be5d43",
+      "image": "proofstorm-registry.localhost:5000/ldk-server@sha256:b7de700705608fe801360459b3c510790190c2f9dfcb9c24f0c24017ea27ca8d",
       "fields": {
         "alias": {
           "classification": "agent_authorable",
@@ -2407,6 +2535,86 @@
       "compatible_dependencies": []
     },
     {
+      "implementation": "open-ssp",
+      "kind": "spark_server",
+      "upstream_version": "0.1.0-9c25f69",
+      "release_channel": "prerelease",
+      "support_lifecycle": "experimental",
+      "config_version": "open-ssp/0.1/v1",
+      "config_schema_digest": "sha256:8c672733cf9b559acd3da78998ada96ad2060c055bc3c8c5a27ba7ca456758ca",
+      "image": "proofstorm-registry.localhost:5000/open-ssp@sha256:98715af7b7847225186a7d031419e9255dcd1628f30f8cf6c444dc2fdfaa1cc8",
+      "fields": {
+        "backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "data_dir": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "max_swap_total_sats": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "native_settings": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [
+          "ldk-server"
+        ],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [
+          {
+            "method": "bolt11",
+            "unit": "sat",
+            "backend": {
+              "implementation": "ldk-server",
+              "versions": [
+                "0.1.0-762bc47"
+              ]
+            }
+          }
+        ],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "spark_backend",
+          "implementation": "spark-operators",
+          "versions": [
+            "0.0.0-5e0c879"
+          ]
+        },
+        {
+          "link_kind": "payment_backend",
+          "implementation": "ldk-server",
+          "versions": [
+            "0.1.0-762bc47"
+          ]
+        }
+      ]
+    },
+    {
       "implementation": "postgresql",
       "kind": "database",
       "upstream_version": "17.11",
@@ -2541,6 +2749,73 @@
         "compatible_wallet_adapters": []
       },
       "compatible_dependencies": []
+    },
+    {
+      "implementation": "spark-operators",
+      "kind": "spark_server",
+      "upstream_version": "0.0.0-5e0c879",
+      "release_channel": "prerelease",
+      "support_lifecycle": "experimental",
+      "config_version": "spark-operators/0.0/v1",
+      "config_schema_digest": "sha256:1580feacc86ef2d82d255f0e3900cdf8d241ae0d81c10e49162594e6b2fa986f",
+      "image": "proofstorm-registry.localhost:5000/spark-operator@sha256:36bbda523377e1b2a9c19f0c74baed8c8572aa301bb785396dda979783b867b1",
+      "fields": {
+        "backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "native_settings": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "operators": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "rpc_credentials": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "threshold": {
+          "classification": "agent_authorable",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "postgres"
+        ],
+        "payment_methods": [],
+        "payment_backends": [],
+        "units": [],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "31.1"
+          ]
+        },
+        {
+          "link_kind": "database_backend",
+          "implementation": "postgresql",
+          "versions": [
+            "17.11"
+          ]
+        }
+      ]
     },
     {
       "implementation": "workspace",

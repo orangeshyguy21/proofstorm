@@ -8,7 +8,7 @@ qualification therefore also prevents the existing release-promotion validator
 from accepting that `Checks` run.
 
 The planner reads both platform catalogs. It enumerates preferred and supported
-versions and the experimental LDK and Bark processor relationships exposed by CDK. Plans
+versions and the experimental LDK, Bark and Spark processor relationships exposed by CDK. Plans
 record exact image sources, component versions, storage/authentication choices,
 wallet pairings and coverage claims. The required compatibility suite exercises
 each supported pairing on native Linux AMD64 and ARM64. Main pushes, the weekly
@@ -34,6 +34,14 @@ Each of the three published Bark images also has a native offline identity probe
 in compatibility, full and documentation suites. The small pull suite retains its
 existing scope. This does not qualify BOLT12, on-chain melts, arkoor payments or
 uninterrupted payment notification delivery, and it runs no model benchmark.
+
+The Spark compatibility case runs the `spark-processor` gate on each native
+architecture: the CDK BOLT11/sat binding, three Spark operators, open-ssp, LDK Server
+`0.1.0-762bc47` and its channel, unpaid and interrupted mints reconciled across
+whole-stack restarts, peer-confirmed melts, an unreachable melt that is never paid,
+and owned cleanup. Each of the four published Spark images also has a native offline
+identity probe in compatibility, full and documentation suites. Melts carry no
+payment preimage, which the gate records rather than requires.
 
 Required CI checks Proofstorm's integration contract: image identity, startup,
 configuration, supported component pairings, ordinary payment/deposit flows,

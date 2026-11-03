@@ -68,6 +68,9 @@ fn only_platform_specific_component_builds_differ_between_catalogs() {
                 | "bark-server"
                 | "cdk-bark-processor"
                 | "cln-hold"
+                | "spark-operators"
+                | "open-ssp"
+                | "cdk-spark-processor"
         ) {
             assert_ne!(arm_entry.image, amd_entry.image);
             assert_ne!(arm_entry.source_digest, amd_entry.source_digest);

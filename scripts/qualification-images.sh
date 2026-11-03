@@ -68,7 +68,15 @@ if [[ "$kind" == image ]]; then
     redis) probe='redis-server --version'; expected="v=$version" ;;
     keycloak) probe='/opt/keycloak/bin/kc.sh --version'; expected="Keycloak $version" ;;
     workspace) probe='test -x /bin/sh; command -v sha256sum >/dev/null; command -v sleep >/dev/null; echo workspace-commands'; expected=workspace-commands ;;
-    ldk-server) probe='ldk-server --version && ldk-server-cli --version'; expected=$(printf 'ldk-server 0.1.0\nldk-server-cli 0.1.0') ;;
+    ldk-server)
+      if [[ "$version" == 0.1.0-762bc47 ]]; then
+        # Spark's macaroon-era build records its revision; its version reads "unknown".
+        probe='ldk-server --version && ldk-server-cli --version && cat /usr/local/share/ldk-server-revision'
+        expected=$(printf 'ldk-server 0.1.0 (unknown)\nldk-server-cli 0.1.0 (unknown)\n%s' 762bc473342c8f945475785ec6743a9b26f56aff)
+      else
+        probe='ldk-server --version && ldk-server-cli --version'; expected=$(printf 'ldk-server 0.1.0\nldk-server-cli 0.1.0')
+      fi
+      ;;
     cdk-ldk-server-processor) probe='test -x /usr/local/bin/cdk-payment-processor-ldk-server && cat /usr/local/share/processor-revision'; expected=fe468cad486157683eddbc0df4ff87ba71b6c0a3 ;;
     cdk-bark-processor)
       probe='test -x /usr/local/bin/cdk-payment-processor-bark && cat /usr/local/share/processor-revision /usr/local/share/processor-patch-sha256'
@@ -81,6 +89,17 @@ if [[ "$kind" == image ]]; then
     cln-hold)
       probe='lightningd --version && test -x /usr/local/bin/hold && cat /usr/local/share/hold-revision'
       expected=$(printf '%s\n%s' v26.06.7 af0055b132f3b9f24d0b1d478a15005fcf8f014f)
+      ;;
+    # The operator and open-ssp have no version command, and starting either reaches
+    # the network, so check executables and recorded build identities offline.
+    spark-operators)
+      probe='spark-frost-signer --version && test -x /usr/local/bin/spark-operator && test -x /usr/local/bin/atlas && test -s /opt/spark/migrations/atlas.sum && test -s /opt/spark/ephemeral_migrations/atlas.sum && cat /usr/local/share/spark-revision'
+      expected=$(printf 'spark-frost-signer 0.1.0\n%s' 5e0c879de2775f6a34aea6d3b0c455d065a3a70f)
+      ;;
+    open-ssp) probe='test -x /usr/local/bin/open-ssp && cat /usr/local/share/open-ssp-revision'; expected=9c25f69924490c22a66f03a98e5840015383dc79 ;;
+    cdk-spark-processor)
+      probe='test -x /usr/local/bin/cdk-payment-processor-spark && cat /usr/local/share/processor-revision /usr/local/share/processor-patch-sha256'
+      expected=$(printf '%s\n%s\n%s' d7244e261506b51d5b309a558bf19cd4ffc32f13 5c2bdd606e691c48adb31fd621081aeecf53d5550ee5fa1c3e1262c1afb053a6 499a3baa6e432020bf71ecf0656fdc4c3cb91acae89adaa6c5ae7032fe7c280d)
       ;;
     *) echo 'Missing catalog probe' >&2; exit 1 ;;
   esac
