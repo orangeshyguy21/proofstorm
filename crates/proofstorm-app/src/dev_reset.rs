@@ -34,8 +34,14 @@ fn reset_root(home: &Path) -> Option<&Path> {
     checkout(home).or_else(|| installed(home))
 }
 
+/// Whether `home` is a checkout's development home rather than an installed release.
+#[must_use]
+pub fn is_checkout(home: &Path) -> bool {
+    checkout(home).is_some()
+}
+
 fn resume_command(home: &Path) -> &'static str {
-    if checkout(home).is_some() {
+    if is_checkout(home) {
         "storm dev reset --yes"
     } else {
         "storm setup --recreate --yes"
@@ -113,17 +119,13 @@ pub(crate) fn check_pending(home: &Path) -> Result<()> {
 }
 
 // Outside `state`: the lock remains stable while that directory is archived.
-// Setup, registration and GUI startup use the same guard as reset.
-pub(crate) fn checkout_guard(home: &Path, resetting: bool) -> Result<Option<Connection>> {
+// Setup, registration and GUI startup take the same operation lock as reset.
+pub(crate) fn checkout_guard(home: &Path) -> Result<Option<Connection>> {
     let Some(work) = checkout(home).filter(|work| work.join("owner.json").exists()) else {
         return Ok(None);
     };
     target(home)?;
-    let db = operation_lock(work)?;
-    if !resetting {
-        check_pending(home)?;
-    }
-    Ok(Some(db))
+    operation_lock(work).map(Some)
 }
 
 fn operation_lock(work: &Path) -> Result<Connection> {
@@ -217,20 +219,14 @@ pub fn describe(home: &Path) -> Result<Value> {
         }
         Installation::load(home)?
     };
-    Ok(
-        json!({"home":home,"installation_id":installation.id,"cluster":installation.cluster_name(),
-        "kind":if source.is_some() { "checkout" } else { "installed" }}),
-    )
+    Ok(json!({"home":home,"installation_id":installation.id,"cluster":installation.cluster_name()}))
 }
 
 /// The caller must obtain explicit confirmation before entering this operation.
 pub async fn run(home: &Path, expected_id: &str, progress: &dyn Fn(&str)) -> Result<Value> {
     let source = target(home)?;
     let work = reset_root(home).context("reset root missing")?;
-    let _operation = match source {
-        Some(_) => checkout_guard(home, true)?.context("checkout lock missing")?,
-        None => operation_lock(work)?,
-    };
+    let _operation = operation_lock(work)?;
     ensure!(
         describe(home)?["installation_id"] == expected_id,
         "reset target changed since confirmation; retry"

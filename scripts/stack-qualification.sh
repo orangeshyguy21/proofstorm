@@ -113,10 +113,9 @@ if [[ -n "$local_run" ]]; then
   fi
 fi
 engine=$(timeout 30 docker info --format '{{.OSType}}/{{.Architecture}}')
-case "$platform:$engine" in
-  linux/amd64:linux/x86_64|linux/amd64:linux/amd64|linux/arm64:linux/aarch64|linux/arm64:linux/arm64) ;;
-  *) echo 'Docker engine is not native to the selected runner' >&2; exit 1 ;;
-esac
+qualification_native_engine "$platform" "$engine" || {
+  echo 'Docker engine is not native to the selected runner' >&2; exit 1;
+}
 stage=native-probes
 # A local run reuses an already pulled registry image instead of spending a pull.
 if [[ -z "$local_run" ]] || ! docker image inspect registry:2 >/dev/null 2>&1; then
@@ -124,16 +123,7 @@ if [[ -z "$local_run" ]] || ! docker image inspect registry:2 >/dev/null 2>&1; t
 fi
 container=$(docker create --name "$owner" --label "dev.proofstorm.qualification-cache=$owner" \
   --publish 127.0.0.1::5000 registry:2)
-docker start "$container" >/dev/null
-port=$(docker inspect --format '{{json .NetworkSettings.Ports}}' "$container" | jq -er '.["5000/tcp"]|select(length==1 and .[0].HostIp=="127.0.0.1")|.[0].HostPort')
-cache="127.0.0.1:$port"
-qualification_cache_endpoint "$cache"
-ready=false
-for _ in {1..30}; do
-  if curl -q --noproxy '*' --fail --silent --max-time 2 "http://$cache/v2/" >/dev/null; then ready=true; break; fi
-  sleep 1
-done
-[[ "$ready" == true ]] || exit 1
+cache=$(qualification_registry_start "$container")
 for repository in "${repositories[@]}"; do
   candidate="$work/candidates/$repository"
   artifact=$(jq -er '.artifact' "$candidate/handoff.json")

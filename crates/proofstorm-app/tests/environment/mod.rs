@@ -465,6 +465,74 @@ async fn environment_lists_only_current_cluster_cells_without_duplicates() {
 }
 
 #[tokio::test]
+async fn environment_pages_honor_limit_across_owners_and_page_size() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let cluster = Arc::new(Mutex::new(Cluster::default()));
+    let developer = service(store.clone(), cluster);
+    store.put_principal("agent").unwrap();
+    for cap in store.capabilities("local", "developer").unwrap() {
+        store.grant("local", "agent", cap).unwrap();
+    }
+    let agent = Cells::new(
+        store.clone(),
+        developer.runtime.clone(),
+        "local".into(),
+        "agent".into(),
+    );
+    let mut created = Vec::new();
+    for index in 0..16 {
+        let owner = if index % 2 == 0 { &developer } else { &agent };
+        let mut cell = spec();
+        cell.name = format!("cell-{index}");
+        created.push(owner.up(&cell.name, &cell).await.unwrap().cell.instance_id);
+    }
+    created.sort();
+    let ids = |view: &proofstorm_app::environment::EnvironmentView| {
+        view.cells
+            .items
+            .iter()
+            .map(|cell| cell.id.clone())
+            .collect::<Vec<_>>()
+    };
+    let all = developer
+        .environment(&EnvironmentQuery {
+            limit: 50,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(ids(&all), created);
+    assert!(all.cells.next_cursor.is_none());
+    // Larger than the transport byte budgets; this read is bounded by count only.
+    assert!(serde_json::to_vec(&all).unwrap().len() > 24 * 1024);
+    // Byte-limited transports (HTTP, MCP) still shrink their own pages with continuation.
+    let transport: proofstorm_app::environment::EnvironmentReadQuery =
+        serde_json::from_value(json!({"limit":50})).unwrap();
+    let bounded = developer
+        .environment_read(&transport, 24 * 1024)
+        .await
+        .unwrap();
+    assert!(serde_json::to_vec(&bounded).unwrap().len() <= 24 * 1024);
+    assert!(bounded["cells"]["next_cursor"].is_string());
+    let mut query = EnvironmentQuery {
+        limit: 3,
+        ..Default::default()
+    };
+    let mut paged = Vec::new();
+    loop {
+        let view = developer.environment(&query).await.unwrap();
+        assert_eq!(view.cells.items.len(), 3.min(created.len() - paged.len()));
+        paged.extend(ids(&view));
+        match view.cells.next_cursor {
+            Some(cursor) => query.cursor = cursor,
+            None => break,
+        }
+    }
+    assert_eq!(paged, created);
+}
+
+#[tokio::test]
 async fn environment_paging_crosses_runs_and_preserves_unknown_outcomes() {
     let store = Store::memory().unwrap();
     seed(&store);
@@ -773,7 +841,8 @@ async fn large_topology_pages_fit_the_shared_budget_without_losing_components_or
     };
     let mut components = Vec::new();
     loop {
-        let view = cells.environment(&query).await.unwrap();
+        let mut view = cells.environment(&query).await.unwrap();
+        proofstorm_app::environment::bound_page_bytes(&mut view, 24 * 1024).unwrap();
         assert!(serde_json::to_vec(&view).unwrap().len() <= 24 * 1024);
         let item = &view.cells.items[0];
         components.extend(item.components.items.iter().map(|c| c.id.clone()));
@@ -793,7 +862,8 @@ async fn large_topology_pages_fit_the_shared_budget_without_losing_components_or
     assert_eq!(components.len(), 64);
     let mut links = Vec::new();
     loop {
-        let view = cells.environment(&query).await.unwrap();
+        let mut view = cells.environment(&query).await.unwrap();
+        proofstorm_app::environment::bound_page_bytes(&mut view, 24 * 1024).unwrap();
         let item = &view.cells.items[0];
         links.extend(item.links.items.iter().map(|l| l.id.clone()));
         match &item.links.next_cursor {

@@ -86,11 +86,8 @@ impl CandidateInput {
                             .into(),
                     ),
                 };
-                if value.len() != 40 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
-                    return Err(
-                        "candidate_sha_invalid: full 40-character commit SHA required".into(),
-                    );
-                }
+                let sha = full_sha(value)
+                    .ok_or("candidate_sha_invalid: full 40-character commit SHA required")?;
                 let fork = match source {
                     Some(source) if !is_github_repository(source) => {
                         return Err(
@@ -104,7 +101,7 @@ impl CandidateInput {
                     _ => None,
                 };
                 Ok(Self::Commit {
-                    sha: Some(value.to_ascii_lowercase()),
+                    sha: Some(sha),
                     url: None,
                     repository: fork,
                 })

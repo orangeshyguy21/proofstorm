@@ -44,10 +44,9 @@ trap 'printf "%s candidate build failed. Retain %s; a complete handoff requires 
 source "$root/scripts/qualification-docker.sh"
 qualification_docker_config "$work/docker-config"
 engine=$(timeout 30 docker info --format '{{.OSType}}/{{.Architecture}}')
-case "$platform:$engine" in
-  linux/amd64:linux/x86_64|linux/amd64:linux/amd64|linux/arm64:linux/aarch64|linux/arm64:linux/arm64) ;;
-  *) echo 'Docker engine architecture differs from the native host' >&2; exit 1 ;;
-esac
+qualification_native_engine "$platform" "$engine" || {
+  echo 'Docker engine architecture differs from the native host' >&2; exit 1;
+}
 version=$(timeout 30 docker version --format '{{.Server.Version}}')
 revision=$(git -C "$root" rev-parse HEAD)
 jq -n --arg platform "$platform" --arg os "$host_os" --arg machine "$host_machine" --arg engine "$engine" \

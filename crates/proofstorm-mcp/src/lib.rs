@@ -871,7 +871,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "workspace_task",
-        description = "Start, inspect, stop, list or read logs of cell-owned workspace tasks. A task outlives this call and agent disconnection; timeout_seconds omitted means until stopped. Start snapshots the source directory (default src); same task_id and identical input return the original task even after interruption, changed input is refused. Tasks are never automatically replayed after a workspace restart. Returns a bounded control operation: operation_wait then inspect exit_code and stdout JSON for task state. A successful start is not task completion. Use a new request_id for each fresh read. Logs explicitly expose raw output. Stopping the control operation does not stop the task; use task action stop and wait for terminal task state. Optional control.components grants native calls through $PROOFSTORM_CONTROL workspace call with JSON {call_id,component,command}. Reuse call_id only for exact retries; receipts are output/<task_id>/control/<call_id>.json. control.lifecycle grants component start/stop/restart; control.network grants exact temporary partition pairs. Typed calls use {call_id,operation:{kind,...}}. Lifecycle needs component.control; partitions need network.partition and network.heal. Partitions heal on task exit or expiry; task status control_cleanup reports pending_faults and observed task_phase. Lifecycle effects persist."
+        description = "Start, inspect, stop, list or read logs of cell-owned workspace tasks. A task outlives this call and agent disconnection; timeout_seconds omitted means until stopped. Start snapshots the source directory (default src); same task_id and identical input return the original task even after interruption, changed input is refused. Tasks are never automatically replayed after a workspace restart. Returns a bounded control operation: operation_wait then inspect exit_code and stdout JSON for task state. A successful start is not task completion. Use a new request_id for each fresh read. Logs explicitly expose raw output. Stopping the control operation does not stop the task; use task action stop and wait for terminal task state. Optional control.components grants native calls: pass JSON {call_id,component,command} as one argument (not stdin) to $PROOFSTORM_CONTROL workspace call. Reuse call_id only for exact retries; receipts are output/<task_id>/control/<call_id>.json. control.lifecycle grants component start/stop/restart; control.network grants exact temporary partition pairs. Typed calls use {call_id,operation:{kind,...}}. Lifecycle needs component.control; partitions need network.partition and network.heal. Partitions heal on task exit or expiry; task status control_cleanup reports pending_faults and observed task_phase. Lifecycle effects persist."
     )]
     async fn proofstorm_workspace_task(
         &self,
@@ -1141,9 +1141,9 @@ impl ProofstormMcp {
         .await
         .map_err(app_error)?;
         if !candidate.phase.terminal() {
-            runtime
-                .apply_candidate_build(&candidate, bundle.as_deref())
-                .await?;
+            // load_bundle replaced the request's source with the bundle's identity.
+            let bundle = bundle.as_deref().zip(request.source.as_ref());
+            runtime.apply_candidate_build(&candidate, bundle).await?;
         }
         Ok(Json(compact_candidate_build(&candidate, false)))
     }
@@ -1371,7 +1371,7 @@ impl ProofstormMcp {
 
     #[tool(
         name = "run_start",
-        description = "Start an optional evidence run bound to one cell. Omit run_id on ordinary commands for automatic grouping. Finishing this run seals its evidence while the cell continues running."
+        description = "Start an optional evidence run bound to one cell. Only commands that pass its run_id are recorded in it; commands without run_id go to the automatic run. Finishing this run seals its evidence while the cell continues running."
     )]
     fn proofstorm_run_start(
         &self,
@@ -1997,17 +1997,7 @@ fn topology_summary(cell: &CellSpec) -> TopologySummary {
         .map(|component| component.id.clone())
         .collect::<Vec<_>>();
     let link_ids = links.iter().map(|link| link.id.clone()).collect::<Vec<_>>();
-    let backend_links = links.iter().filter(|link| {
-        matches!(
-            link.kind,
-            LinkKind::ChainBackend
-                | LinkKind::ArkBackend
-                | LinkKind::SparkBackend
-                | LinkKind::PaymentBackend
-                | LinkKind::DatabaseBackend
-                | LinkKind::AuthenticationBackend
-        )
-    });
+    let backend_links = links.iter().filter(|link| link.kind.is_backend());
     let backend_link_count = backend_links.clone().count();
     let bound_backend_link_count = backend_links.filter(|link| link.binding.is_some()).count();
     let mut warnings = Vec::new();
@@ -2972,10 +2962,11 @@ impl KubernetesRuntime {
         self.shared.private_access(grant).await.map_err(app_error)
     }
 
+    /// `bundle` holds a bundle's bytes and the source identity derived from them.
     async fn apply_candidate_build(
         &self,
         candidate: &CandidateBuild,
-        bundle: Option<&[u8]>,
+        bundle: Option<(&[u8], &proofstorm_core::CandidateInput)>,
     ) -> Result<(), ErrorData> {
         let builds = Api::<ProofstormCandidateBuild>::namespaced(
             self.shared.client.clone(),
@@ -3008,16 +2999,15 @@ impl KubernetesRuntime {
                 .await
                 .map_err(kube_error)?
         };
-        let Some(source @ proofstorm_core::CandidateInput::Bundle { commit, .. }) =
+        let Some(source @ proofstorm_core::CandidateInput::Bundle { .. }) =
             candidate.provenance.as_ref().map(|p| &p.requested_source)
         else {
             return Ok(());
         };
         // The pod waits for this Secret; owning it lets removal of the build delete it.
         let bytes = bundle
-            .filter(|bytes| {
-                proofstorm_core::CandidateInput::from_bundle(bytes, commit).as_ref() == Ok(source)
-            })
+            .filter(|(_, derived)| *derived == source)
+            .map(|(bytes, _)| bytes)
             .ok_or_else(|| {
                 coded_invalid_request(
                     "candidate_bundle_required",

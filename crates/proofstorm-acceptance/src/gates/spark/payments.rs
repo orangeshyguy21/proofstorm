@@ -42,14 +42,22 @@ pub(super) fn check_invoice<'a>(
     expect::string(decoded, "/payment_hash")
 }
 
-/// Whether the SSP node still holds `hash`'s invoice unpaid.
-pub(super) fn receive_unpaid(details: &Value, hash: &str, amount_msat: u64) -> Result<bool> {
-    Ok(!settled(details, hash, "INBOUND", amount_msat)?)
+/// Whether a node still holds `hash`'s invoice unpaid: it has no record of the
+/// payment yet (`None`, see [`inbound`]) or only a pending one.
+pub(super) fn receive_unpaid(
+    details: Option<&Value>,
+    hash: &str,
+    amount_msat: u64,
+) -> Result<bool> {
+    match details {
+        Some(details) => Ok(!settled(details, hash, "INBOUND", amount_msat)?),
+        None => Ok(true),
+    }
 }
 
 /// Whether one LDK payment record for `hash` has succeeded in `direction` for
-/// exactly `amount_msat`. Pending is `false`, and so is a `null` payment: the
-/// node has no record of it yet. A failure is an error.
+/// exactly `amount_msat`. Pending is `false`; a missing record or a failure is
+/// an error.
 pub(super) fn settled(
     details: &Value,
     hash: &str,
@@ -58,10 +66,8 @@ pub(super) fn settled(
 ) -> Result<bool> {
     let payment = details
         .get("payment")
-        .context("native payment details are missing")?;
-    if payment.is_null() {
-        return Ok(false);
-    }
+        .filter(|payment| !payment.is_null())
+        .context("native payment record is missing")?;
     ensure!(
         payment
             .pointer("/kind/kind/bolt11/hash")
@@ -88,8 +94,8 @@ pub(super) fn settled(
 pub(super) const LIST_PAYMENTS: &str = "list-payments --number-of-payments 1000";
 
 /// The record paying `hash` in a `list-payments` result (its `list`), in the shape
-/// `get-payment-details` prints: `null` when the node has none.
-pub(super) fn inbound(list: &Value, hash: &str) -> Result<Value> {
+/// `get-payment-details` prints, or `None` while the node has no record of it.
+pub(super) fn inbound(list: &Value, hash: &str) -> Result<Option<Value>> {
     let payments = match list.get("list") {
         Some(Value::Array(payments)) => payments.as_slice(),
         None => &[],
@@ -105,7 +111,7 @@ pub(super) fn inbound(list: &Value, hash: &str) -> Result<Value> {
         })
         .collect::<Vec<_>>();
     ensure!(matches.len() <= 1, "several native payments share one hash");
-    Ok(json!({"payment": matches.first().map_or(Value::Null, |payment| (*payment).clone())}))
+    Ok(matches.first().map(|payment| json!({"payment": payment})))
 }
 
 /// Poll a node's own record of one payment until it has succeeded.
@@ -127,10 +133,14 @@ fn wait_payment(
             format!("{LDK} get-payment-details {}", native::quote(payment))
         },
         |v| {
+            // An inbound payment has no record until it arrives; an outbound one must.
             let details = if direction == "INBOUND" {
                 inbound(v, hash)?
             } else {
-                v.clone()
+                Some(v.clone())
+            };
+            let Some(details) = details else {
+                return Ok(None);
             };
             Ok(settled(&details, hash, direction, amount_msat)?.then_some(details))
         },
@@ -420,10 +430,10 @@ pub(super) fn unreachable(
             hash,
         )?;
         ensure!(
-            !settled(&island, hash, "INBOUND", UNREACHABLE_SAT * 1000)?,
+            receive_unpaid(island.as_ref(), hash, UNREACHABLE_SAT * 1000)?,
             "the channel-less island received a payment"
         );
-        context.record(&format!("{label}-recipient.json"), &island)?;
+        context.record(&format!("{label}-recipient.json"), &json!(island))?;
         // Reconcile any proofs the wallet still marks pending against the
         // mint, as the manual probe did, before requiring every proof back.
         native::execute(

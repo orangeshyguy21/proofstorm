@@ -21,7 +21,10 @@ const KEYS: &[&str] = &[
     "client.key",
 ];
 
-fn parameters(name: &str, names: Vec<String>) -> Result<CertificateParams, rcgen::Error> {
+pub(crate) fn parameters(
+    name: &str,
+    names: Vec<String>,
+) -> Result<CertificateParams, rcgen::Error> {
     let mut params = CertificateParams::new(names)?;
     params.distinguished_name.push(DnType::CommonName, name);
     params.not_before = OffsetDateTime::now_utc() - Duration::days(1);

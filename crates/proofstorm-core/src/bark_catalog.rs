@@ -1,8 +1,8 @@
 //! Experimental Bark support with published native AMD64 and ARM64 images.
 use super::{
-    BTreeSet, BackendContractRegistry, BuildProvenance, CatalogEntry, CatalogFeature,
-    CatalogRuntimeEndpoint, ComponentKind, ControlClass, LinkKind, PaymentMethod, ReleaseChannel,
-    StorageBackend, SupportLifecycle, catalog_entry_with_lifecycle, dependency, payment_binding,
+    BTreeSet, BackendContractRegistry, CatalogEntry, CatalogFeature, CatalogRuntimeEndpoint,
+    ComponentKind, ControlClass, LinkKind, PaymentMethod, ReleaseChannel, StorageBackend,
+    SupportLifecycle, attach_provenance, catalog_entry_with_lifecycle, dependency, payment_binding,
     runtime_endpoint, support_matrix,
 };
 use crate::{
@@ -19,9 +19,9 @@ struct Images {
     cln: String,
 }
 
-pub(super) const PROCESSOR_VERSION: &str = "0.1.0-fe468ca";
-const SERVER_VERSION: &str = "0.7.0-6188e2d";
-const CLN_HOLD_VERSION: &str = "26.06.7-hold.0.3.3";
+pub const PROCESSOR_VERSION: &str = "0.1.0-fe468ca";
+pub const SERVER_VERSION: &str = "0.7.0-6188e2d";
+pub const CLN_HOLD_VERSION: &str = "26.06.7-hold.0.3.3";
 const QUALIFICATION: &str = "Experimental support on Linux AMD64 and ARM64. Published native images passed managed BOLT11/sat payment/restart qualification with original-quote reconciliation. Ordinary native qualification covers the distributed pins.";
 
 #[allow(
@@ -156,12 +156,7 @@ pub(super) fn extend(
             CLN_HOLD => include_str!("../../../docker/payment/cln-hold-provenance.json"),
             _ => continue,
         };
-        let mut provenance: BuildProvenance =
-            serde_json::from_str(encoded).expect("pinned Bark build provenance");
-        provenance.platform = platform.into();
-        entry.source_digest =
-            crate::digest_json(&(&entry.source_digest, &entry.image, &provenance));
-        entry.build_provenance = Some(provenance);
+        attach_provenance(entry, encoded, platform);
     }
     // CDK 0.18 registers every method a gRPC processor advertises,
     // including on-chain and custom methods.

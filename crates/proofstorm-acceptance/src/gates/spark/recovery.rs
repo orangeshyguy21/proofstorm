@@ -123,13 +123,13 @@ pub(super) fn unpaid(
         before == after,
         "native unpaid receive changed across backend restarts"
     );
-    context.record("spark-unpaid-receive-recovered.json", &after)?;
+    context.record("spark-unpaid-receive-recovered.json", &json!(after))?;
     balance(context, client, "spark-unpaid-no-credit", 0)
 }
 
 /// open-ssp creates the quote's invoice on its own LDK node for the
 /// processor's payment hash. That node must not have received it.
-fn unpaid_receive(client: &mut McpClient, hash: &str, phase: &str) -> Result<Value> {
+fn unpaid_receive(client: &mut McpClient, hash: &str, phase: &str) -> Result<Option<Value>> {
     let details = payments::inbound(
         &native::json_output(
             client,
@@ -142,7 +142,7 @@ fn unpaid_receive(client: &mut McpClient, hash: &str, phase: &str) -> Result<Val
         hash,
     )?;
     ensure!(
-        payments::receive_unpaid(&details, hash, UNPAID_SAT * 1000)?,
+        payments::receive_unpaid(details.as_ref(), hash, UNPAID_SAT * 1000)?,
         "unpaid quote's invoice was paid"
     );
     Ok(details)

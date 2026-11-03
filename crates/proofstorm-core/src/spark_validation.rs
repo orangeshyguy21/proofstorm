@@ -2,159 +2,59 @@
 //! to its SSP and reaches the operators through the SSP's own link, so the two
 //! can never name different federations.
 use crate::{
-    BitcoinNetwork, CellSpec, ComponentKind, ComponentSpec, DatabaseRole, DependencyBinding,
-    LinkKind, PaymentMethod, ValidationIssue,
+    BitcoinNetwork, CellSpec, ComponentKind, ComponentSpec, DependencyBinding, LinkKind,
+    SPARK_DATABASE_NAME_LIMIT, ValidationIssue,
     processor_ids::{OPEN_SSP, SPARK_OPERATORS, SPARK_PROCESSOR},
 };
 
-use super::issue;
+use super::{
+    issue,
+    stack::{CHAIN, DATABASE, Requirement, bolt11_sat, validate_requirements},
+};
 
-#[derive(Clone, Copy)]
-enum Dependency {
-    Chain,
-    Database,
-    Operators,
-    Ssp,
-    Lightning,
+fn spark_regtest(binding: &DependencyBinding) -> bool {
+    matches!(
+        binding,
+        DependencyBinding::Spark {
+            network: BitcoinNetwork::Regtest
+        }
+    )
 }
 
-impl Dependency {
-    const fn kind(self) -> LinkKind {
-        match self {
-            Self::Chain => LinkKind::ChainBackend,
-            Self::Database => LinkKind::DatabaseBackend,
-            Self::Operators | Self::Ssp => LinkKind::SparkBackend,
-            Self::Lightning => LinkKind::PaymentBackend,
-        }
-    }
+const OPERATORS: Requirement = Requirement {
+    link_kind: LinkKind::SparkBackend,
+    target_kind: ComponentKind::SparkServer,
+    target_impl: SPARK_OPERATORS,
+    label: "spark/regtest",
+    binding: spark_regtest,
+};
 
-    const fn target(self) -> (ComponentKind, &'static str, &'static str) {
-        match self {
-            Self::Chain => (ComponentKind::Bitcoin, "bitcoin-core", "chain/regtest"),
-            Self::Database => (ComponentKind::Database, "postgresql", "database/primary"),
-            Self::Operators => (ComponentKind::SparkServer, SPARK_OPERATORS, "spark/regtest"),
-            Self::Ssp => (ComponentKind::SparkServer, OPEN_SSP, "spark/regtest"),
-            Self::Lightning => (ComponentKind::Lightning, "ldk-server", "bolt11/sat"),
-        }
-    }
+const SSP: Requirement = Requirement {
+    link_kind: LinkKind::SparkBackend,
+    target_kind: ComponentKind::SparkServer,
+    target_impl: OPEN_SSP,
+    label: "spark/regtest",
+    binding: spark_regtest,
+};
 
-    fn matches(self, binding: Option<&DependencyBinding>) -> bool {
-        match (self, binding) {
-            (
-                Self::Chain,
-                Some(DependencyBinding::Chain {
-                    network: BitcoinNetwork::Regtest,
-                }),
-            )
-            | (
-                Self::Operators | Self::Ssp,
-                Some(DependencyBinding::Spark {
-                    network: BitcoinNetwork::Regtest,
-                }),
-            )
-            | (
-                Self::Database,
-                Some(DependencyBinding::Database {
-                    role: DatabaseRole::Primary,
-                    ..
-                }),
-            ) => true,
-            (
-                Self::Lightning,
-                Some(DependencyBinding::Payment {
-                    method: PaymentMethod::Bolt11,
-                    unit,
-                }),
-            ) => unit == "sat",
-            _ => false,
-        }
-    }
-
-    fn resolve<'a>(
-        self,
-        cell: &'a CellSpec,
-        component: &ComponentSpec,
-    ) -> Option<&'a ComponentSpec> {
-        let mut links = cell
-            .links
-            .iter()
-            .filter(|link| link.from == component.id && link.kind == self.kind());
-        let link = links.next()?;
-        if links.next().is_some() || !self.matches(link.binding.as_ref()) {
-            return None;
-        }
-        let (kind, implementation, _) = self.target();
-        cell.components.iter().find(|target| {
-            target.id == link.to && target.kind == kind && target.implementation == implementation
-        })
-    }
-}
+const LIGHTNING: Requirement = Requirement {
+    link_kind: LinkKind::PaymentBackend,
+    target_kind: ComponentKind::Lightning,
+    target_impl: "ldk-server",
+    label: "bolt11/sat",
+    binding: bolt11_sat,
+};
 
 pub(super) fn validate_topology(cell: &CellSpec, issues: &mut Vec<ValidationIssue>) {
     for (index, component) in cell.components.iter().enumerate() {
-        let (kind, dependencies): (_, &[Dependency]) = match component.implementation.as_str() {
-            SPARK_PROCESSOR => (ComponentKind::PaymentProcessor, &[Dependency::Ssp]),
-            OPEN_SSP => (
-                ComponentKind::SparkServer,
-                &[Dependency::Operators, Dependency::Lightning],
-            ),
-            SPARK_OPERATORS => (
-                ComponentKind::SparkServer,
-                &[Dependency::Chain, Dependency::Database],
-            ),
+        let (kind, requirements): (_, &[Requirement]) = match component.implementation.as_str() {
+            SPARK_PROCESSOR => (ComponentKind::PaymentProcessor, &[SSP]),
+            OPEN_SSP => (ComponentKind::SparkServer, &[OPERATORS, LIGHTNING]),
+            SPARK_OPERATORS => (ComponentKind::SparkServer, &[CHAIN, DATABASE]),
             _ => continue,
         };
         let path = format!("/components/{index}");
-        if component.kind != kind {
-            issue(
-                issues,
-                "spark_component_kind_mismatch",
-                &path,
-                format!(
-                    "{} requires component kind {kind:?}",
-                    component.implementation
-                ),
-            );
-        }
-        for dependency in dependencies {
-            if dependency.resolve(cell, component).is_none() {
-                let (_, implementation, binding) = dependency.target();
-                issue(
-                    issues,
-                    "spark_dependency_required",
-                    &path,
-                    format!(
-                        "{} requires exactly one {:?} link with {binding} binding to {implementation}",
-                        component.implementation,
-                        dependency.kind()
-                    ),
-                );
-            }
-        }
-        for link in cell.links.iter().filter(|link| link.from == component.id) {
-            if matches!(
-                link.kind,
-                LinkKind::ChainBackend
-                    | LinkKind::ArkBackend
-                    | LinkKind::SparkBackend
-                    | LinkKind::PaymentBackend
-                    | LinkKind::DatabaseBackend
-                    | LinkKind::AuthenticationBackend
-            ) && !dependencies
-                .iter()
-                .any(|dependency| dependency.kind() == link.kind)
-            {
-                issue(
-                    issues,
-                    "spark_unexpected_dependency",
-                    &path,
-                    format!(
-                        "{} does not use a {:?} dependency ({:?})",
-                        component.implementation, link.kind, link.id
-                    ),
-                );
-            }
-        }
+        validate_requirements(cell, component, &path, "spark", kind, requirements, issues);
         match component.implementation.as_str() {
             OPEN_SSP => validate_shared_chain(cell, component, &path, issues),
             SPARK_OPERATORS => validate_database_names(cell, component, &path, issues),
@@ -171,21 +71,19 @@ fn validate_database_names(
     path: &str,
     issues: &mut Vec<ValidationIssue>,
 ) {
-    const LONGEST_SUFFIX: usize = "_4_ephemeral".len();
     for name in cell
         .links
         .iter()
         .filter(|link| link.from == operators.id && link.kind == LinkKind::DatabaseBackend)
         .filter_map(crate::LinkSpec::database_name)
     {
-        if name.len() + LONGEST_SUFFIX > 63 {
+        if name.len() > SPARK_DATABASE_NAME_LIMIT {
             issue(
                 issues,
                 "spark_database_name_too_long",
                 path,
                 format!(
-                    "operators create {name}_<n>_ephemeral databases; keep the database name at most {} bytes",
-                    63 - LONGEST_SUFFIX
+                    "operators create {name}_<n>_ephemeral databases; keep the database name at most {SPARK_DATABASE_NAME_LIMIT} bytes"
                 ),
             );
         }
@@ -200,13 +98,12 @@ fn validate_shared_chain(
     path: &str,
     issues: &mut Vec<ValidationIssue>,
 ) {
-    let chain = |dependency: Dependency| {
-        dependency
+    let chain = |requirement: Requirement| {
+        requirement
             .resolve(cell, ssp)
-            .and_then(|target| Dependency::Chain.resolve(cell, target))
+            .and_then(|target| CHAIN.resolve(cell, target))
     };
-    if let (Some(operators), Some(lightning)) =
-        (chain(Dependency::Operators), chain(Dependency::Lightning))
+    if let (Some(operators), Some(lightning)) = (chain(OPERATORS), chain(LIGHTNING))
         && operators.id != lightning.id
     {
         issue(

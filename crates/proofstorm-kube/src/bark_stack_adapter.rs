@@ -40,16 +40,10 @@ fn validate(
         || plan.workload.kind != WorkloadControllerKind::StatefulSet
         || plan.storage.len() != 1
         || plan.storage[0].claim_name != format!("data-{}-0", plan.component_id)
-        || plan.relevant_links.iter().any(|link| {
-            matches!(
-                link.kind,
-                LinkKind::ChainBackend
-                    | LinkKind::ArkBackend
-                    | LinkKind::PaymentBackend
-                    | LinkKind::DatabaseBackend
-                    | LinkKind::AuthenticationBackend
-            ) && !links.contains(&link.kind)
-        })
+        || plan
+            .relevant_links
+            .iter()
+            .any(|link| link.kind.is_backend() && !links.contains(&link.kind))
     {
         return Err(AdapterError::InvalidPlan(
             "Bark stack identity, storage or dependency contract mismatch".into(),
@@ -58,7 +52,7 @@ fn validate(
     Ok(())
 }
 
-fn workload(plan: &ComponentPlanContract, command: &str, readiness: &Value) -> Value {
+pub(super) fn workload(plan: &ComponentPlanContract, command: &str, readiness: &Value) -> Value {
     stateful_set(
         &plan.instance_key,
         &instance_namespace(&plan.instance_key),
@@ -72,12 +66,23 @@ fn workload(plan: &ComponentPlanContract, command: &str, readiness: &Value) -> V
     )
 }
 
-fn config(
+pub(super) fn config_map(
     plan: &ComponentPlanContract,
     data: &Value,
 ) -> Result<k8s_openapi::api::core::v1::ConfigMap, AdapterError> {
     resource(json!({"apiVersion":"v1","kind":"ConfigMap",
         "metadata":metadata(&format!("{}-config", plan.component_id),&plan.instance_key,&instance_namespace(&plan.instance_key),Some(&plan.component_id)),"data":data}))
+}
+
+/// An opaque Secret template named `<component>-<suffix>`; the controller fills it.
+pub(super) fn secret(
+    plan: &ComponentPlanContract,
+    suffix: &str,
+    data: &Value,
+) -> Result<k8s_openapi::api::core::v1::Secret, AdapterError> {
+    resource(json!({"apiVersion":"v1","kind":"Secret","type":"Opaque",
+        "metadata":metadata(&format!("{}-{suffix}", plan.component_id),&plan.instance_key,&instance_namespace(&plan.instance_key),Some(&plan.component_id)),
+        "stringData":data}))
 }
 
 fn tls_volume(id: &str, role: &str, client_only: bool) -> Value {
@@ -118,6 +123,7 @@ pub fn render_cln_hold(plan: &ComponentPlanContract) -> Result<RenderedComponent
     }
     let chain = dependency(
         plan,
+        &plan.component_id,
         LinkKind::ChainBackend,
         &DependencyBinding::Chain {
             network: BitcoinNetwork::Regtest,
@@ -134,14 +140,16 @@ pub fn render_cln_hold(plan: &ComponentPlanContract) -> Result<RenderedComponent
         "network=regtest\nlightning-dir=/data\nalias={alias}\nbitcoin-rpcconnect={}\nbitcoin-rpcport={rpc}\nbitcoin-rpcuser={RPC_USER}\nbitcoin-rpcpassword={RPC_PASSWORD}\nbind-addr=0.0.0.0:9735\nannounce-addr={id}:9735\ngrpc-host=0.0.0.0\ngrpc-port=9988\nplugin=/usr/local/bin/hold\nhold-grpc-host=0.0.0.0\nhold-grpc-port=9292\nhold-database=sqlite:///data/regtest/hold/hold.sqlite3\nautoconnect-seeker-peers=0\n",
         chain.component_id
     );
-    rendered.config_maps.push(config(
+    rendered.config_maps.push(config_map(
         plan,
         &json!({"lightning.conf":native,"rpc.cookie":format!("{RPC_USER}:{RPC_PASSWORD}\n")}),
     )?);
     for role in ["cln", "hold"] {
-        rendered.secrets.push(resource(json!({"apiVersion":"v1","kind":"Secret","type":"Opaque",
-            "metadata":metadata(&format!("{id}-{role}-tls"),&plan.instance_key,&instance_namespace(&plan.instance_key),Some(id)),
-            "stringData":{"PROOFSTORM_SECRET_KIND":format!("bark-{role}-tls"),"PROOFSTORM_TLS_SERVER_NAME":id}}))?);
+        rendered.secrets.push(secret(
+            plan,
+            &format!("{role}-tls"),
+            &json!({"PROOFSTORM_SECRET_KIND":format!("bark-{role}-tls"),"PROOFSTORM_TLS_SERVER_NAME":id}),
+        )?);
     }
     let mut workload = workload(
         plan,
@@ -185,6 +193,7 @@ pub fn render_server(plan: &ComponentPlanContract) -> Result<RenderedComponent, 
     };
     let chain = dependency(
         plan,
+        &plan.component_id,
         LinkKind::ChainBackend,
         &DependencyBinding::Chain {
             network: BitcoinNetwork::Regtest,
@@ -194,6 +203,7 @@ pub fn render_server(plan: &ComponentPlanContract) -> Result<RenderedComponent, 
     )?;
     let cln = dependency(
         plan,
+        &plan.component_id,
         LinkKind::PaymentBackend,
         &DependencyBinding::Payment {
             method: PaymentMethod::Bolt11,
@@ -202,11 +212,11 @@ pub fn render_server(plan: &ComponentPlanContract) -> Result<RenderedComponent, 
         ComponentKind::Lightning,
         CLN_HOLD,
     )?;
-    let database = server_database(plan)?;
+    let database = primary_database(plan, 63)?;
     let env = server_env(chain, cln, &database, fees)?;
     let mut rendered = RenderedComponent::default();
     rendered.services.push(resource(service_from_plan(plan))?);
-    rendered.config_maps.push(config(
+    rendered.config_maps.push(config_map(
         plan,
         &json!({"rpc.cookie":format!("{RPC_USER}:{RPC_PASSWORD}\n")}),
     )?);
@@ -232,51 +242,51 @@ pub fn render_server(plan: &ComponentPlanContract) -> Result<RenderedComponent, 
     Ok(rendered)
 }
 
-fn server_database(plan: &ComponentPlanContract) -> Result<super::PostgresDatabase, AdapterError> {
-    let database_link = plan
+/// The plan's one primary `PostgreSQL` database. Its name must be an
+/// identifier of at most `max_len` bytes.
+pub(super) fn primary_database(
+    plan: &ComponentPlanContract,
+    max_len: usize,
+) -> Result<super::PostgresDatabase, AdapterError> {
+    let missing = || {
+        AdapterError::InvalidPlan(format!(
+            "component {:?} requires one primary PostgreSQL database binding",
+            plan.component_id
+        ))
+    };
+    let binding = plan
         .relevant_links
         .iter()
         .find(|link| link.kind == LinkKind::DatabaseBackend)
-        .ok_or_else(|| AdapterError::InvalidPlan("Bark database binding missing".into()))?;
-    let database_binding = database_link
-        .binding
-        .as_ref()
-        .ok_or_else(|| AdapterError::InvalidPlan("Bark database binding missing".into()))?;
+        .and_then(|link| link.binding.as_ref())
+        .filter(|binding| {
+            matches!(
+                binding,
+                DependencyBinding::Database {
+                    role: DatabaseRole::Primary,
+                    ..
+                }
+            )
+        })
+        .ok_or_else(missing)?;
     dependency(
         plan,
+        &plan.component_id,
         LinkKind::DatabaseBackend,
-        database_binding,
+        binding,
         ComponentKind::Database,
         "postgresql",
     )?;
-    if !matches!(
-        database_binding,
-        DependencyBinding::Database {
-            role: DatabaseRole::Primary,
-            ..
-        }
-    ) {
-        return Err(AdapterError::InvalidPlan(
-            "Bark requires a primary database".into(),
-        ));
-    }
-    let name = database_link.database_name().unwrap_or_default();
-    if name.is_empty()
-        || name.len() > 63
-        || !name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    let database =
+        super::linked_postgres_database(plan, DatabaseRole::Primary)?.ok_or_else(missing)?;
+    if database.database.len() > max_len
+        || !proofstorm_core::is_postgres_identifier(&database.database)
+        || database.port == 0
     {
-        return Err(AdapterError::InvalidPlan(
-            "Bark database name must be a PostgreSQL identifier".into(),
-        ));
-    }
-    let database = super::linked_postgres_database(plan, DatabaseRole::Primary)?
-        .ok_or_else(|| AdapterError::InvalidPlan("Bark database missing".into()))?;
-    if database.port == 0 {
-        return Err(AdapterError::InvalidPlan(
-            "Bark database port must be nonzero".into(),
-        ));
+        return Err(AdapterError::InvalidPlan(format!(
+            "component {:?} needs a PostgreSQL identifier of at most {max_len} bytes as its database name, on a nonzero port",
+            plan.component_id
+        )));
     }
     Ok(database)
 }

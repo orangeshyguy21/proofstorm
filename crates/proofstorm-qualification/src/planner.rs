@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail, ensure};
 use proofstorm_core::{
-    AuthenticationMode, CatalogEntry, CatalogPlatform, CatalogResponse, ComponentKind,
-    StorageBackend, SupportLifecycle, catalog_image_source, digest_json,
-    distributed_catalog_for_platform,
+    AuthenticationMode, BARK_CLN_HOLD_VERSION, BARK_PROCESSOR_VERSION, BARK_SERVER_VERSION,
+    CatalogEntry, CatalogPlatform, CatalogResponse, ComponentKind, SPARK_LDK_SERVER_VERSION,
+    SPARK_OPERATORS_VERSION, SPARK_PROCESSOR_VERSION, SPARK_SSP_VERSION, StorageBackend,
+    SupportLifecycle, catalog_image_source, digest_json, distributed_catalog_for_platform,
 };
 use serde::Serialize;
 
@@ -243,6 +244,38 @@ impl Builder<'_> {
             baseline,
         );
         Ok(())
+    }
+
+    /// An experimental payment processor gate: the processor and its stack's
+    /// behavior, the mint's dependency on the processor and every mint payment
+    /// binding the processor backs.
+    fn processor_gate(
+        &mut self,
+        name: &str,
+        mint: &CatalogEntry,
+        processor: &CatalogEntry,
+        stack: &[&CatalogEntry],
+        other_components: &[&str],
+    ) -> Result<()> {
+        let mut claims = behavioral(processor);
+        for entry in stack {
+            claims.extend(behavioral(entry));
+        }
+        claims.extend(dependencies(mint, &[component(processor)?]));
+        for binding in &mint.support_matrix.payment_bindings {
+            if binding.backend.implementation == processor.id {
+                for version in &binding.backend.versions {
+                    claims.insert(claim(
+                        mint,
+                        "payment",
+                        &(&binding.method, &binding.unit, &processor.id, version),
+                    ));
+                }
+            }
+        }
+        let mut subjects = vec![mint, processor];
+        subjects.extend_from_slice(stack);
+        self.gate(name, &subjects, other_components, claims, false)
     }
 
     fn mint(&mut self, mint: &CatalogEntry) -> Result<()> {
@@ -582,52 +615,22 @@ impl Builder<'_> {
             .iter()
             .find(|entry| entry.id == "ldk-server")
             .context("missing node")?;
-        let mut claims = behavioral(processor);
-        claims.extend(behavioral(node));
-        let backend = vec![component(processor)?];
-        claims.extend(dependencies(mint, &backend));
-        for binding in &mint.support_matrix.payment_bindings {
-            if binding.backend.implementation == processor.id {
-                for version in &binding.backend.versions {
-                    claims.insert(claim(
-                        mint,
-                        "payment",
-                        &(&binding.method, &binding.unit, &processor.id, version),
-                    ));
-                }
-            }
-        }
-        self.gate(
+        self.processor_gate(
             "ldk-server-processor",
-            &[mint, processor, node],
+            mint,
+            processor,
+            &[node],
             &["bitcoin-core", "cdk-cli-wallet"],
-            claims,
-            false,
         )?;
-        let processor = entry(self.catalog, "cdk-bark-processor", "0.1.0-fe468ca")?;
-        let server = entry(self.catalog, "bark-server", "0.7.0-6188e2d")?;
-        let lightning = entry(self.catalog, "cln-hold", "26.06.7-hold.0.3.3")?;
-        let mut claims = behavioral(processor);
-        claims.extend(behavioral(server));
-        claims.extend(behavioral(lightning));
-        claims.extend(dependencies(mint, &[component(processor)?]));
-        for binding in &mint.support_matrix.payment_bindings {
-            if binding.backend.implementation == processor.id {
-                for version in &binding.backend.versions {
-                    claims.insert(claim(
-                        mint,
-                        "payment",
-                        &(&binding.method, &binding.unit, &processor.id, version),
-                    ));
-                }
-            }
-        }
-        self.gate(
+        self.processor_gate(
             "bark-processor",
-            &[mint, processor, server, lightning],
+            mint,
+            entry(self.catalog, "cdk-bark-processor", BARK_PROCESSOR_VERSION)?,
+            &[
+                entry(self.catalog, "bark-server", BARK_SERVER_VERSION)?,
+                entry(self.catalog, "cln-hold", BARK_CLN_HOLD_VERSION)?,
+            ],
             &["bitcoin-core", "postgresql", "cln", "cdk-cli-wallet"],
-            claims,
-            false,
         )?;
         // Spark entries ship only for platforms pinned in spark_images.json, so
         // its managed gate is scheduled exactly where they exist.
@@ -637,33 +640,17 @@ impl Builder<'_> {
             .iter()
             .any(|entry| entry.id == "cdk-spark-processor")
         {
-            let processor = entry(self.catalog, "cdk-spark-processor", "0.1.0-d7244e2")?;
-            let ssp = entry(self.catalog, "open-ssp", "0.1.0-9c25f69")?;
-            let operators = entry(self.catalog, "spark-operators", "0.0.0-5e0c879")?;
-            // The SSP's node, its channel peer and the unreachable island.
-            let lightning = entry(self.catalog, "ldk-server", "0.1.0-762bc47")?;
-            let mut claims = behavioral(processor);
-            claims.extend(behavioral(ssp));
-            claims.extend(behavioral(operators));
-            claims.extend(behavioral(lightning));
-            claims.extend(dependencies(mint, &[component(processor)?]));
-            for binding in &mint.support_matrix.payment_bindings {
-                if binding.backend.implementation == processor.id {
-                    for version in &binding.backend.versions {
-                        claims.insert(claim(
-                            mint,
-                            "payment",
-                            &(&binding.method, &binding.unit, &processor.id, version),
-                        ));
-                    }
-                }
-            }
-            self.gate(
+            self.processor_gate(
                 "spark-processor",
-                &[mint, processor, ssp, operators, lightning],
+                mint,
+                entry(self.catalog, "cdk-spark-processor", SPARK_PROCESSOR_VERSION)?,
+                &[
+                    entry(self.catalog, "open-ssp", SPARK_SSP_VERSION)?,
+                    entry(self.catalog, "spark-operators", SPARK_OPERATORS_VERSION)?,
+                    // The SSP's node, its channel peer and the unreachable island.
+                    entry(self.catalog, "ldk-server", SPARK_LDK_SERVER_VERSION)?,
+                ],
                 &["bitcoin-core", "postgresql", "cdk-cli-wallet"],
-                claims,
-                false,
             )?;
         }
         for (gate, components, baseline) in [

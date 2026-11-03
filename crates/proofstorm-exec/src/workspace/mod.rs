@@ -63,7 +63,9 @@ pub(super) fn entry(mut args: impl Iterator<Item = String>) -> Result<()> {
             request.validate()?;
             println!("{}", exchange(&json!({"kind":"bridge","request":request}))?);
         }
-        "call" => control::call(&args.next().ok_or("control call missing")?)?,
+        "call" => control::call(&args.next().ok_or(
+            "control call missing; pass the JSON as one argument: $PROOFSTORM_CONTROL workspace call '{...}'",
+        )?)?,
         #[cfg(target_os = "linux")]
         "upload" => {
             let encoded = args.next().ok_or("upload metadata missing")?;

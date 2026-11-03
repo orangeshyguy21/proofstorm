@@ -255,6 +255,33 @@ fn json_edits_reject_ambiguous_manual_modified_and_duplicate_entries() {
 }
 
 #[test]
+fn json_insertion_indents_new_members_at_their_level() {
+    let entry = json!({"type":"local"});
+    let key = agents::key(Harness::Opencode);
+    let created = json_config::merge(None, key, &entry, &[], true).unwrap();
+    assert_eq!(
+        created,
+        "{\n  \"mcp\": {\n    \"servers\": {\n      \"proofstorm\": {\n        \"type\": \"local\"\n      }\n    }\n  }\n}\n"
+    );
+    // The comma lands after the last value, not inside its trailing comment.
+    let nested =
+        "{\n  \"mcp\": {\n    \"servers\": {\n      \"other\": {} // keep\n    }\n  }\n}\n";
+    assert_eq!(
+        json_config::merge(Some(nested), key, &entry, &[], true).unwrap(),
+        "{\n  \"mcp\": {\n    \"servers\": {\n      \"other\": {}, // keep\n      \"proofstorm\": {\n        \"type\": \"local\"\n      }\n    }\n  }\n}\n"
+    );
+    // Replacing an owned entry in place keeps the layout insertion produced.
+    let entry = json!({"type":"local","command":["/bin/proofstorm-mcp"]});
+    let created = json_config::merge(None, key, &entry, &[], true).unwrap();
+    let manual = created.replace("proofstorm-mcp", "manual-mcp");
+    let owned = json_config::value(&manual, true).unwrap()["mcp"]["servers"]["proofstorm"].clone();
+    assert_eq!(
+        json_config::merge(Some(&manual), key, &entry, &[owned], true).unwrap(),
+        created
+    );
+}
+
+#[test]
 fn jsonc_insertion_handles_empty_trailing_commas_escaped_keys_and_arrays() {
     let entry = json!({"command":["/a path/it's/proofstorm-mcp","--home","/home"]});
     let key = agents::key(Harness::Opencode);

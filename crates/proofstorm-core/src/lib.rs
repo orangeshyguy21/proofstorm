@@ -42,9 +42,10 @@ pub use backend::{
     ExecutionStorageTemplateSource, KeycloakConfig, LdkServerProcessorConfig,
     LinkedStateObservationContract, LndConfig, NutshellMintConfig, OpenSspConfig,
     OperationAdmissionContract, OperationClass, PostgresConfig, ProtocolProbeContract,
-    ProtocolProbePlan, ReadinessPrerequisite, RedisConfig, SparkOperatorsConfig,
-    StorageObservationContract, StorageRequirementTemplate, TargetDescriptorContract,
-    WorkloadControllerKind, WorkloadObservationContract, WorkspaceConfig, default_backend_registry,
+    ProtocolProbePlan, ReadinessPrerequisite, RedisConfig, SPARK_DATABASE_NAME_LIMIT,
+    SPARK_MAX_OPERATORS, SparkOperatorsConfig, StorageObservationContract,
+    StorageRequirementTemplate, TargetDescriptorContract, WorkloadControllerKind,
+    WorkloadObservationContract, WorkspaceConfig, default_backend_registry, is_postgres_identifier,
 };
 pub use candidate::{
     CANDIDATE_BUILD_API_VERSION, CANDIDATE_BUNDLE_MAX_BYTES, CandidateBuild, CandidateBuildPhase,
@@ -54,11 +55,13 @@ pub use candidate::{
 #[cfg(feature = "test-catalogs")]
 pub use catalog::catalog_with_spark_test_images;
 pub use catalog::{
-    AuthenticationMode, BuildProvenance, CDK_MINT_IMAGE, CDK_VERSION, CLN_VERSION,
-    CatalogDependencySupport, CatalogEndpointCondition, CatalogEntry, CatalogFeature,
-    CatalogImplementationSupport, CatalogOrigin, CatalogPaymentBindingSupport, CatalogPlatform,
-    CatalogResponse, CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport,
-    LND_VERSION, ReleaseChannel, StorageBackend, SupportLifecycle, catalog_for_platform,
+    AuthenticationMode, BARK_CLN_HOLD_VERSION, BARK_PROCESSOR_VERSION, BARK_SERVER_VERSION,
+    BuildProvenance, CDK_MINT_IMAGE, CDK_VERSION, CLN_VERSION, CatalogDependencySupport,
+    CatalogEndpointCondition, CatalogEntry, CatalogFeature, CatalogImplementationSupport,
+    CatalogOrigin, CatalogPaymentBindingSupport, CatalogPlatform, CatalogResponse,
+    CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport, LND_VERSION,
+    ReleaseChannel, SPARK_LDK_SERVER_VERSION, SPARK_OPERATORS_VERSION, SPARK_PROCESSOR_VERSION,
+    SPARK_SSP_VERSION, StorageBackend, SupportLifecycle, catalog_for_platform,
     catalog_image_source, default_catalog, distributed_catalog, distributed_catalog_for_platform,
     validate_catalog_component, validate_component_config, validate_new_cell_versions,
 };

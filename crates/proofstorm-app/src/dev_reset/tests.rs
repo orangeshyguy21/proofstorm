@@ -150,14 +150,15 @@ fn reset_refuses_symlinks_foreign_archives_and_unremoved_runtime() {
 #[test]
 fn reset_barrier_blocks_setup_and_gui_until_recovery_and_survives_archiving() {
     let fixture = Fixture::new();
-    let guard = checkout_guard(&fixture.home, true).unwrap();
+    let work = fixture.source.join(".proofstorm-dev");
+    let guard = operation_lock(&work).unwrap();
     assert!(Installation::lock(&fixture.home).is_err());
     drop(guard);
-    let pending = fixture.source.join(".proofstorm-dev").join(JOURNAL);
+    let pending = work.join(JOURNAL);
     save(&pending, &fixture.journal()).unwrap();
     assert!(Installation::lock(&fixture.home).is_err());
     assert!(crate::artifacts::check_checkout(&fixture.home).is_err());
-    assert!(checkout_guard(&fixture.home, true).unwrap().is_some());
+    assert!(operation_lock(&work).is_ok());
 }
 
 #[test]
@@ -177,7 +178,7 @@ fn installed_release_resets_beside_its_home_and_blocks_setup_until_finished() {
     fs::write(home.join("tools/helper"), "pinned tool").unwrap();
     fs::write(installation.database(), "old database fixture").unwrap();
     let target = describe(&home).unwrap();
-    assert_eq!(target["kind"], "installed");
+    assert!(!is_checkout(&home));
     assert_eq!(target["installation_id"], installation.id);
 
     let pending = managed.join(JOURNAL);

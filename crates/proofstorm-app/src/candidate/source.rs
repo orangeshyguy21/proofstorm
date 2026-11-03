@@ -122,28 +122,19 @@ where
     Fut: std::future::Future<Output = Result<Value, Error>>,
 {
     for prerequisite in prerequisites {
-        let object = get(
-            repository.into(),
-            vec!["git".into(), "commits".into(), prerequisite.clone()],
-        )
-        .await
-        .map_err(|error| {
-            if !error.message.contains("404") {
-                return error;
-            }
-            Error::problem(
-                "candidate_bundle_base_missing",
-                format!(
-                    "Bundle prerequisite {prerequisite} is not a public commit of {repository}; base the bundle on pushed public history"
-                ),
-            )
-        })?;
-        if sha(&object["sha"])? != *prerequisite {
-            return Err(Error::problem(
-                "candidate_source_invalid",
-                "GitHub returned a different commit",
-            ));
-        }
+        confirm_commit(repository, prerequisite, &get)
+            .await
+            .map_err(|error| {
+                if !error.message.contains("404") {
+                    return error;
+                }
+                Error::problem(
+                    "candidate_bundle_base_missing",
+                    format!(
+                        "Bundle prerequisite {prerequisite} is not a public commit of {repository}; base the bundle on pushed public history"
+                    ),
+                )
+            })?;
     }
     Ok((
         format!("https://github.com/{repository}.git"),
@@ -182,8 +173,18 @@ where
             "Commit repository must be a public fork of the component's canonical repository",
         ));
     };
+    confirm_commit(fork, commit, &get).await?;
+    Ok((format!("https://github.com/{name}.git"), commit.into()))
+}
+
+/// Read `commit` from `repository` and require GitHub to return exactly it.
+async fn confirm_commit<F, Fut>(repository: &str, commit: &str, get: &F) -> Result<(), Error>
+where
+    F: Fn(String, Vec<String>) -> Fut,
+    Fut: std::future::Future<Output = Result<Value, Error>>,
+{
     let object = get(
-        fork.into(),
+        repository.into(),
         vec!["git".into(), "commits".into(), commit.into()],
     )
     .await?;
@@ -193,7 +194,7 @@ where
             "GitHub returned a different commit",
         ));
     }
-    Ok((format!("https://github.com/{name}.git"), commit.into()))
+    Ok(())
 }
 
 fn sha(value: &Value) -> Result<String, Error> {

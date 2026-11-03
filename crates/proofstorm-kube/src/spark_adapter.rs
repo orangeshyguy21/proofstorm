@@ -4,21 +4,20 @@
 use super::{
     AdapterError, ComponentKind, ComponentPlanContract, DependencyBinding,
     EffectiveComponentConfig, LinkKind, PostgresDatabase, RPC_PASSWORD, RPC_USER,
-    RenderedComponent, TargetDescriptorContract, Value, bark::service_name, container_security,
-    install_component_driver, instance_namespace, json, linked_postgres_database, metadata,
-    plan_execution_credential, processor, require_plan_backend, resource, service_from_plan,
-    stateful_set, target_port,
+    RenderedComponent, Value,
+    bark::{dependency, required_port, service_name},
+    bark_stack::{config_map, primary_database, secret, workload},
+    container_security, install_component_driver, json, plan_execution_credential, processor,
+    require_plan_backend, resource, service_from_plan,
 };
 use proofstorm_core::{
-    BitcoinNetwork, DatabaseRole, PaymentMethod,
+    BitcoinNetwork, PaymentMethod, SPARK_DATABASE_NAME_LIMIT, SPARK_MAX_OPERATORS,
     processor_ids::{OPEN_SSP, SPARK_OPERATORS, SPARK_PROCESSOR},
 };
 
 const OPERATORS_MOUNT: &str = "/spark-operators";
 /// What consumers may read of a federation; its keys never leave its own pods.
 const PUBLIC_FILES: [&str; 3] = ["ca.crt", "operators.json", "threshold"];
-/// Operators append `_<n>_ephemeral` to their linked database name.
-const DATABASE_NAME_LIMIT: usize = 63 - "_4_ephemeral".len();
 
 fn spark_regtest() -> DependencyBinding {
     DependencyBinding::Spark {
@@ -75,71 +74,6 @@ fn validate(
     Ok(())
 }
 
-/// The one `kind` link from `from` with this binding, resolved to a component
-/// of the given kind and implementation.
-fn dependency<'a>(
-    plan: &'a ComponentPlanContract,
-    from: &str,
-    kind: LinkKind,
-    binding: &DependencyBinding,
-    target_kind: ComponentKind,
-    implementation: &str,
-) -> Result<&'a TargetDescriptorContract, AdapterError> {
-    let links = plan
-        .relevant_links
-        .iter()
-        .filter(|link| link.from == from && link.kind == kind)
-        .collect::<Vec<_>>();
-    let [link] = links.as_slice() else {
-        return Err(missing(from, kind, implementation));
-    };
-    plan.linked_targets
-        .get(&link.id)
-        .filter(|target| {
-            link.binding.as_ref() == Some(binding)
-                && target.component_id == link.to
-                && target.kind == target_kind
-                && target.backend_id == implementation
-                && service_name(&target.component_id)
-        })
-        .ok_or_else(|| missing(from, kind, implementation))
-}
-
-fn missing(from: &str, kind: LinkKind, implementation: &str) -> AdapterError {
-    AdapterError::InvalidPlan(format!(
-        "Spark component {from:?} requires one {kind:?} binding to {implementation}"
-    ))
-}
-
-fn port(target: &TargetDescriptorContract, name: &str) -> Result<u16, AdapterError> {
-    match target_port(target, name)? {
-        0 => Err(AdapterError::InvalidPlan(format!(
-            "Spark port {name:?} of {:?} must be nonzero",
-            target.component_id
-        ))),
-        port => Ok(port),
-    }
-}
-
-fn config_map(
-    plan: &ComponentPlanContract,
-    data: &Value,
-) -> Result<k8s_openapi::api::core::v1::ConfigMap, AdapterError> {
-    resource(json!({"apiVersion":"v1","kind":"ConfigMap",
-        "metadata":metadata(&format!("{}-config", plan.component_id),&plan.instance_key,&instance_namespace(&plan.instance_key),Some(&plan.component_id)),
-        "data":data}))
-}
-
-fn secret(
-    plan: &ComponentPlanContract,
-    suffix: &str,
-    data: &Value,
-) -> Result<k8s_openapi::api::core::v1::Secret, AdapterError> {
-    resource(json!({"apiVersion":"v1","kind":"Secret","type":"Opaque",
-        "metadata":metadata(&format!("{}-{suffix}", plan.component_id),&plan.instance_key,&instance_namespace(&plan.instance_key),Some(&plan.component_id)),
-        "stringData":data}))
-}
-
 /// A consumer's read-only view of its federation: the CA, the operator list and the threshold.
 fn public_operators_volume(operators: &str) -> Value {
     json!({"name":"spark-operators","secret":{"secretName":format!("{operators}-identity"),"defaultMode":288,
@@ -188,52 +122,6 @@ fn wait_for(
         "command":command,"securityContext":container_security(),"volumeMounts":volume_mounts})
 }
 
-/// The operators' primary database binding, whose name prefixes each operator's databases.
-fn operator_database(plan: &ComponentPlanContract) -> Result<PostgresDatabase, AdapterError> {
-    let link = plan
-        .relevant_links
-        .iter()
-        .find(|link| link.kind == LinkKind::DatabaseBackend)
-        .ok_or_else(|| missing(&plan.component_id, LinkKind::DatabaseBackend, "postgresql"))?;
-    let binding = link
-        .binding
-        .as_ref()
-        .filter(|binding| {
-            matches!(
-                binding,
-                DependencyBinding::Database {
-                    role: DatabaseRole::Primary,
-                    ..
-                }
-            )
-        })
-        .ok_or_else(|| missing(&plan.component_id, LinkKind::DatabaseBackend, "postgresql"))?;
-    dependency(
-        plan,
-        &plan.component_id,
-        LinkKind::DatabaseBackend,
-        binding,
-        ComponentKind::Database,
-        "postgresql",
-    )?;
-    let database = linked_postgres_database(plan, DatabaseRole::Primary)?
-        .ok_or_else(|| missing(&plan.component_id, LinkKind::DatabaseBackend, "postgresql"))?;
-    let name = &database.database;
-    if name.is_empty()
-        || name.len() > DATABASE_NAME_LIMIT
-        || !name.as_bytes()[0].is_ascii_lowercase()
-        || !name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-        || database.port == 0
-    {
-        return Err(AdapterError::InvalidPlan(format!(
-            "Spark operator database name must be a PostgreSQL identifier of at most {DATABASE_NAME_LIMIT} bytes"
-        )));
-    }
-    Ok(database)
-}
-
 /// Render the operator federation: one pod per operator with a FROST signer
 /// sidecar, stable per-pod DNS names, and its own pair of databases.
 /// # Errors
@@ -250,13 +138,13 @@ pub fn render_operators(plan: &ComponentPlanContract) -> Result<RenderedComponen
             "Spark operator configuration missing".into(),
         ));
     };
-    if !(1..=5).contains(&config.operators)
+    if !(1..=SPARK_MAX_OPERATORS).contains(&config.operators)
         || !(1..=config.operators).contains(&config.threshold)
         || u64::from(plan.workload.desired_replicas) != config.operators
     {
-        return Err(AdapterError::InvalidPlan(
-            "Spark federation needs 1 to 5 operators and a threshold of at most that many".into(),
-        ));
+        return Err(AdapterError::InvalidPlan(format!(
+            "Spark federation needs 1 to {SPARK_MAX_OPERATORS} operators and a threshold of at most that many"
+        )));
     }
     let id = &plan.component_id;
     let chain = dependency(
@@ -269,11 +157,11 @@ pub fn render_operators(plan: &ComponentPlanContract) -> Result<RenderedComponen
         ComponentKind::Bitcoin,
         "bitcoin-core",
     )?;
-    let rpc = port(chain, "rpc")?;
-    let zmq = port(chain, "zmq_block")?;
-    let database = operator_database(plan)?;
-    let grpc = port(&plan.target_descriptor, "grpc")?;
-    let ssp = port(&plan.target_descriptor, "ssp")?;
+    let rpc = required_port(chain, "rpc")?;
+    let zmq = required_port(chain, "zmq_block")?;
+    let database = primary_database(plan, SPARK_DATABASE_NAME_LIMIT)?;
+    let grpc = required_port(&plan.target_descriptor, "grpc")?;
+    let ssp = required_port(&plan.target_descriptor, "ssp")?;
     let mut rendered = RenderedComponent::default();
     // Headless, so each operator has a stable name its peers and clients dial.
     let mut service = service_from_plan(plan);
@@ -311,19 +199,10 @@ fn operators_workload(
     ssp: u16,
 ) -> Value {
     let id = &plan.component_id;
-    let mut workload = stateful_set(
-        &plan.instance_key,
-        &instance_namespace(&plan.instance_key),
-        id,
-        &plan.execution_context.image,
-        Some(vec![
-            crate::drivers::DRIVER_PATH.into(),
-            "exec-spark-operator".into(),
-        ]),
-        &[],
-        "/data",
+    let mut workload = workload(
+        plan,
+        "exec-spark-operator",
         &json!({"exec":{"command":[crate::drivers::DRIVER_PATH,"spark-operator-ready"]},"timeoutSeconds":3}),
-        Some(plan),
     );
     workload["spec"]["replicas"] = json!(plan.workload.desired_replicas);
     // Every operator must run for the federation's key generation.
@@ -409,9 +288,9 @@ pub fn render_ssp(plan: &ComponentPlanContract) -> Result<RenderedComponent, Ada
             "open-ssp LDK credential target mismatch".into(),
         ));
     }
-    let http = port(&plan.target_descriptor, "http")?;
-    let node_rpc = port(node, "rpc")?;
-    let operator_grpc = port(operators, "grpc")?;
+    let http = required_port(&plan.target_descriptor, "http")?;
+    let node_rpc = required_port(node, "rpc")?;
+    let operator_grpc = required_port(operators, "grpc")?;
     let mut rendered = RenderedComponent::default();
     rendered.services.push(resource(service_from_plan(plan))?);
     rendered.secrets.push(secret(
@@ -419,19 +298,10 @@ pub fn render_ssp(plan: &ComponentPlanContract) -> Result<RenderedComponent, Ada
         "identity",
         &json!({"PROOFSTORM_SECRET_KIND":"open-ssp"}),
     )?);
-    let mut workload = stateful_set(
-        &plan.instance_key,
-        &instance_namespace(&plan.instance_key),
-        id,
-        &plan.execution_context.image,
-        Some(vec![
-            crate::drivers::DRIVER_PATH.into(),
-            "exec-open-ssp".into(),
-        ]),
-        &[],
-        "/data",
+    let mut workload = workload(
+        plan,
+        "exec-open-ssp",
         &json!({"exec":{"command":[crate::drivers::DRIVER_PATH,"open-ssp-ready"]},"timeoutSeconds":5}),
-        Some(plan),
     );
     let pod = &mut workload["spec"]["template"]["spec"];
     pod["containers"][0]["env"] =
@@ -533,9 +403,9 @@ pub fn render_processor(plan: &ComponentPlanContract) -> Result<RenderedComponen
         ComponentKind::SparkServer,
         SPARK_OPERATORS,
     )?;
-    let grpc = port(&plan.target_descriptor, "grpc")?;
-    let ssp_http = port(ssp, "http")?;
-    let operator_grpc = port(operators, "grpc")?;
+    let grpc = required_port(&plan.target_descriptor, "grpc")?;
+    let ssp_http = required_port(ssp, "http")?;
+    let operator_grpc = required_port(operators, "grpc")?;
     let mut rendered = RenderedComponent::default();
     rendered.services.push(resource(service_from_plan(plan))?);
     rendered.secrets.push(secret(
@@ -548,19 +418,10 @@ pub fn render_processor(plan: &ComponentPlanContract) -> Result<RenderedComponen
         "payment-tls",
         &json!({"PROOFSTORM_SECRET_KIND":"payment-processor-tls","PROOFSTORM_TLS_SERVER_NAME":id}),
     )?);
-    let mut workload = stateful_set(
-        &plan.instance_key,
-        &instance_namespace(&plan.instance_key),
-        id,
-        &plan.execution_context.image,
-        Some(vec![
-            crate::drivers::DRIVER_PATH.into(),
-            "exec-spark-processor".into(),
-        ]),
-        &[],
-        "/data",
+    let mut workload = workload(
+        plan,
+        "exec-spark-processor",
         &json!({"exec":{"command":[crate::drivers::DRIVER_PATH,"processor-settings",format!("https://127.0.0.1:{grpc}"),"/processor-client/tls",SPARK_PROCESSOR]},"timeoutSeconds":3}),
-        Some(plan),
     );
     let pod = &mut workload["spec"]["template"]["spec"];
     pod["containers"][0]["env"] = json!(env(&[

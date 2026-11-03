@@ -73,20 +73,7 @@ container=$(docker create --pull=never --name "$owner" \
   --label "dev.proofstorm.qualification-cache=$owner" --publish 127.0.0.1::5000 \
   --tmpfs /tmp --mount "type=bind,source=$work/registry.json,target=/etc/docker/registry/config.yml,readonly" \
   "${storage_args[@]}" registry:2)
-docker start "$container" >/dev/null
-if ! port=$(docker inspect --format '{{json .NetworkSettings.Ports}}' "$container" | jq -er '.["5000/tcp"]|select(length==1 and .[0].HostIp=="127.0.0.1")|.[0].HostPort'); then
-  docker logs "$container" >&2
-  echo 'Cache registry did not expose its single loopback port' >&2
-  exit 1
-fi
-cache="127.0.0.1:$port"
-qualification_cache_endpoint "$cache"
-ready=false
-for _ in {1..30}; do
-  if curl -q --noproxy '*' --fail --silent --max-time 2 "http://$cache/v2/" >/dev/null; then ready=true; break; fi
-  sleep 1
-done
-[[ "$ready" == true ]] || exit 1
+cache=$(qualification_registry_start "$container")
 
 # Verify native manifests, configs and layer availability, as well as the full
 # index digest. Buildx copies all index children, retaining every original pin.
