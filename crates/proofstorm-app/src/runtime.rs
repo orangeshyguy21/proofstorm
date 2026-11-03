@@ -10,8 +10,9 @@ use proofstorm_core::{
     PrivateAccessGrant, PublishedRevision, TeardownReceipt as CoreTeardownReceipt,
 };
 use proofstorm_kube::{
-    ACTION_CANCEL_ANNOTATION, ActionPhase, CellAction, CellPhase, ProofstormCell,
-    ProofstormCellAction, ProofstormCellActionSpec, ProofstormCellSpec,
+    ACTION_CANCEL_ANNOTATION, ActionPhase, CellAction, CellPhase,
+    FINISHED_ACTION_RETENTION_SECONDS, ProofstormCell, ProofstormCellAction,
+    ProofstormCellActionSpec, ProofstormCellSpec,
 };
 use std::collections::BTreeMap;
 
@@ -188,12 +189,14 @@ impl Runtime {
             .await
             .map_err(kube_error)?
         else {
-            // The runtime resource is gone (cell closed, or garbage collected)
-            // before the journal saw a terminal phase. A running operation
-            // whose resource vanished is a terminal outcome, never a live
-            // one; a pending operation may simply not be applied yet.
-            return Ok((operation.phase == OperationPhase::Running)
-                .then(|| (OperationPhase::Failed, missing_action_artifact(operation))));
+            // The runtime resource is gone (cell closed, or expired by proofstormd)
+            // before the journal saw a terminal phase.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| {
+                    i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+                });
+            return Ok(vanished_action_outcome(operation, now));
         };
         let Some(status) = action.status else {
             return Ok(None);
@@ -553,6 +556,20 @@ pub fn terminal_action_observation(
         },
     ))
 }
+/// A running operation whose resource vanished is a terminal outcome, never a
+/// live one. A pending operation may simply not be applied yet, unless it is
+/// older than proofstormd keeps finished actions.
+fn vanished_action_outcome(
+    operation: &CellOperation,
+    now_unix: i64,
+) -> Option<(OperationPhase, serde_json::Value)> {
+    let expired = now_unix
+        > operation
+            .accepted_at_unix
+            .saturating_add(FINISHED_ACTION_RETENTION_SECONDS);
+    (operation.phase == OperationPhase::Running || expired)
+        .then(|| (OperationPhase::Failed, missing_action_artifact(operation)))
+}
 #[must_use]
 pub fn missing_action_artifact(operation: &CellOperation) -> serde_json::Value {
     serde_json::json!({
@@ -616,4 +633,40 @@ pub fn runtime_action_resource(
         ),
     ]));
     resource
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_vanished_pending_action_fails_once_it_could_have_expired() {
+        let mut operation = CellOperation {
+            revision_digest: String::new(),
+            id: "op".into(),
+            workspace_id: "workspace".into(),
+            instance_id: "instance".into(),
+            experiment_id: "run".into(),
+            session_id: "session".into(),
+            principal_id: "principal".into(),
+            sequence: 1,
+            kind: proofstorm_core::OperationKind::ComponentExecLive,
+            capability: proofstorm_core::Capability::ComponentExecLive,
+            resource_name: "op-resource".into(),
+            request_digest: "sha256:request".into(),
+            request: serde_json::json!({}),
+            phase: OperationPhase::Pending,
+            accepted_at_unix: 1_000,
+            started_at_unix: None,
+            completed_at_unix: None,
+            artifact: None,
+        };
+        let deadline = 1_000 + FINISHED_ACTION_RETENTION_SECONDS;
+        assert_eq!(vanished_action_outcome(&operation, deadline), None);
+        let (phase, artifact) = vanished_action_outcome(&operation, deadline + 1).unwrap();
+        assert_eq!(phase, OperationPhase::Failed);
+        assert_eq!(artifact["code"], "action_runtime_not_found");
+        operation.phase = OperationPhase::Running;
+        assert!(vanished_action_outcome(&operation, 1_000).is_some());
+    }
 }

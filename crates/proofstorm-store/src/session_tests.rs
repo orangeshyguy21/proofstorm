@@ -602,3 +602,21 @@ fn closing_and_recreation_preserve_the_cell_incarnation_boundary() {
     assert_ne!(op.experiment_id, replacement.experiment_id);
     assert_ne!(op.session_id, replacement.session_id);
 }
+
+#[test]
+fn admission_reads_the_last_sequence_from_an_index() {
+    let store = Store::memory().unwrap();
+    let plan: String = store
+        .lock()
+        .unwrap()
+        .query_row(
+            &format!("EXPLAIN QUERY PLAN {LAST_SEQUENCE}"),
+            params!["workspace", "instance"],
+            |row| row.get(3),
+        )
+        .unwrap();
+    assert!(
+        plan.contains("COVERING INDEX actions_by_instance_sequence"),
+        "{plan}"
+    );
+}

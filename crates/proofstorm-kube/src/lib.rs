@@ -17,6 +17,9 @@ pub const LIFECYCLE_SEQUENCE_ANNOTATION: &str = "proofstorm.dev/lifecycle-sequen
 pub const LIFECYCLE_RESTART_ANNOTATION: &str = "proofstorm.dev/restart-token";
 pub const REVISION_DIGEST_ANNOTATION: &str = "proofstorm.dev/revision-digest";
 pub const ROLLOUT_DIGEST_ANNOTATION: &str = "proofstorm.dev/rollout-digest";
+/// proofstormd deletes finished one-off actions this long after completion. The
+/// journal keeps their results; the controller caches every action it retains.
+pub const FINISHED_ACTION_RETENTION_SECONDS: i64 = 3600;
 
 pub use adapter::{
     AdapterError, COMPONENT_LABEL, ComponentObservationResources, PROTOCOL_PROBER_LABEL,

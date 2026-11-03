@@ -47,9 +47,10 @@ use proofstorm_kube::{
     AuthenticationConformanceResult, AuthenticationProtectedSpendResult,
     AuthenticationReplayResult, AuthenticationSessionFailureStage, BACKEND_ID_ANNOTATION,
     CANDIDATE_CANCEL_ANNOTATION, COMPONENT_LABEL, CellAction, CellPhase,
-    ComponentObservationResources, EXECUTION_STATE_CONTRACT_ANNOTATION, INSTANCE_LABEL,
-    LIFECYCLE_RESTART_ANNOTATION, LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION,
-    ProofstormCandidateBuild, ProofstormCandidateBuildStatus, ProofstormCell, ProofstormCellAction,
+    ComponentObservationResources, EXECUTION_STATE_CONTRACT_ANNOTATION,
+    FINISHED_ACTION_RETENTION_SECONDS, INSTANCE_LABEL, LIFECYCLE_RESTART_ANNOTATION,
+    LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, ProofstormCandidateBuild,
+    ProofstormCandidateBuildStatus, ProofstormCell, ProofstormCellAction,
     ProofstormCellActionStatus, ProofstormCellStatus, action_result_container,
     compile_component_plans, evaluate_action_admission, instance_namespace,
     observe_component_statuses, render_candidate_build_job, render_cell, render_cell_action_job,
@@ -567,7 +568,7 @@ async fn reconcile_action(
         if workspace_bridge::is_controlled_start(&action) {
             return workspace_bridge::reconcile(&action, &context).await;
         }
-        return Ok(Action::await_change());
+        return expire_finished_action(&action, &context).await;
     }
     if action.annotations().contains_key(ACTION_CANCEL_ANNOTATION) {
         if matches!(action.spec.action, CellAction::ComponentExecLive(_))
@@ -1252,6 +1253,62 @@ const fn is_terminal_action(phase: ActionPhase) -> bool {
         phase,
         ActionPhase::Succeeded | ActionPhase::Failed | ActionPhase::Cancelled
     )
+}
+
+/// When a finished action may be deleted. Only one-off actions qualify: nothing
+/// replays them later. Network faults, component controls, workspace task records
+/// and private custody stay for the life of the cell.
+fn finished_action_expiry(action: &ProofstormCellAction) -> Option<i64> {
+    let one_off = match &action.spec.action {
+        CellAction::ComponentExecLive(request) => {
+            request.private_payload.is_none()
+                && action.spec.access_scope.is_none()
+                && !workspace_bridge::is_controlled_start(action)
+                && !action
+                    .annotations()
+                    .contains_key(workspace_bridge::PARENT_ANNOTATION)
+        }
+        CellAction::ComponentLogs(_)
+        | CellAction::ComponentForensics(_)
+        | CellAction::ReachabilityOracle(_)
+        | CellAction::AuthenticationConformance(_)
+        | CellAction::AuthenticationProtectedSpend(_)
+        | CellAction::AuthenticationReplay(_) => true,
+        _ => false,
+    };
+    let status = action.status.as_ref()?;
+    (one_off && is_terminal_action(status.phase)).then(|| {
+        status
+            .completed_at_unix
+            .unwrap_or(action.spec.accepted_at_unix)
+            + FINISHED_ACTION_RETENTION_SECONDS
+    })
+}
+
+async fn expire_finished_action(
+    action: &ProofstormCellAction,
+    context: &Context,
+) -> Result<Action, Error> {
+    let Some(expiry) = finished_action_expiry(action) else {
+        return Ok(Action::await_change());
+    };
+    let remaining = expiry - now_unix();
+    if remaining > 0 {
+        return Ok(Action::requeue(Duration::from_secs(
+            remaining.unsigned_abs(),
+        )));
+    }
+    let namespace = action
+        .namespace()
+        .ok_or_else(|| Error::MissingNamespace(action.name_any()))?;
+    match Api::<ProofstormCellAction>::namespaced(context.client.clone(), &namespace)
+        .delete(&action.name_any(), &DeleteParams::default())
+        .await
+    {
+        Ok(_) => Ok(Action::await_change()),
+        Err(kube::Error::Api(error)) if error.code == 404 => Ok(Action::await_change()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn action_execution_started(status: Option<&ProofstormCellActionStatus>) -> bool {
@@ -2876,6 +2933,47 @@ mod tests {
                 ),
             },
         )
+    }
+
+    #[test]
+    fn only_finished_one_off_actions_expire() {
+        let finished = |mut action: ProofstormCellAction| {
+            action.status = Some(ProofstormCellActionStatus {
+                phase: ActionPhase::Succeeded,
+                completed_at_unix: Some(100),
+                ..ProofstormCellActionStatus::default()
+            });
+            action
+        };
+        let spend = protected_spend_action();
+        assert_eq!(finished_action_expiry(&spend), None);
+        assert_eq!(
+            finished_action_expiry(&finished(spend.clone())),
+            Some(100 + FINISHED_ACTION_RETENTION_SECONDS)
+        );
+        let mut exec = spend.clone();
+        exec.spec.action =
+            CellAction::ComponentExecLive(proofstorm_kube::ComponentExecLiveAction {
+                private_payload: None,
+                component: "wallet".into(),
+                script: "true".into(),
+                argv: vec![],
+                timeout_seconds: 30,
+                output: proofstorm_core::native::NativeOutput::default(),
+            });
+        assert!(finished_action_expiry(&finished(exec.clone())).is_some());
+        let mut child = exec;
+        child
+            .annotations_mut()
+            .insert(workspace_bridge::PARENT_ANNOTATION.into(), "parent".into());
+        assert_eq!(finished_action_expiry(&finished(child)), None);
+        let mut partition = spend;
+        partition.spec.action =
+            CellAction::NetworkPartition(proofstorm_kube::NetworkPartitionAction {
+                from_component: "a".into(),
+                to_component: "b".into(),
+            });
+        assert_eq!(finished_action_expiry(&finished(partition)), None);
     }
 
     #[test]
