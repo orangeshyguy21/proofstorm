@@ -44,12 +44,17 @@ pub fn run(context: &GateContext) -> Result<()> {
         json!({"request_id":"7101","run_id":EXPERIMENT}),
     );
     // A failed assertion must still retire the disposable cell through its finalizer.
-    client.call("cell_remove", json!({"name":INSTANCE}))?;
-    let closed = cell::wait_closed(&mut client, INSTANCE)?;
-    if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {
-        bail!("CDK mint identity gate did not verify teardown");
-    }
-    result
+    super::with_cleanup(
+        || result,
+        || {
+            client.call("cell_remove", json!({"name":INSTANCE}))?;
+            let closed = cell::wait_closed(&mut client, INSTANCE)?;
+            if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {
+                bail!("CDK mint identity gate did not verify teardown");
+            }
+            Ok(())
+        },
+    )
 }
 
 fn secret_args(mint: &str, namespace: &str) -> [String; 6] {

@@ -51,7 +51,7 @@ pub fn run(context: &GateContext, scenario: Scenario) -> Result<()> {
         );
     }
     drop(client);
-    support::with_cleanup(|| result, || cleanup.finish())?;
+    super::with_cleanup(|| result, || cleanup.finish())?;
     println!(
         "{} passed, including evidence and verified teardown",
         scenario.name()
