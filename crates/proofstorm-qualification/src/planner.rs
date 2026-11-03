@@ -698,7 +698,7 @@ pub fn plan(identity: Identity, mode: Mode) -> Result<Plan> {
     plan_for(identity, mode, catalog)
 }
 
-/// [`plan`] over an explicit catalog source, so tests can pin unpublished stacks.
+/// [`plan`] over an explicit catalog source, so tests can use placeholder stack pins.
 fn plan_for(
     identity: Identity,
     mode: Mode,
@@ -805,7 +805,7 @@ mod tests {
     }
 
     #[test]
-    fn unpinned_spark_adds_no_case_component_or_obligation() {
+    fn distributed_spark_pins_plan_one_gate_per_platform() {
         for mode in [
             Mode::Pull,
             Mode::Documentation,
@@ -814,25 +814,15 @@ mod tests {
         ] {
             let plan = plan(identity(), mode).unwrap();
             for platform in ["linux/amd64", "linux/arm64"] {
-                let pinned = catalog(platform)
-                    .unwrap()
-                    .entries
-                    .iter()
-                    .any(|entry| entry.id == "cdk-spark-processor");
-                assert_eq!(spark_gates(&plan, platform).len(), usize::from(pinned));
-                if !pinned {
-                    assert!(
-                        plan.cases
-                            .iter()
-                            .filter(|case| case.platform == platform)
-                            .all(|case| !case.components.iter().any(spark_component))
-                    );
-                    assert!(
-                        plan.obligations[platform]
-                            .iter()
-                            .all(|claim| !claim.contains("spark") && !claim.contains("762bc47"))
-                    );
-                }
+                assert!(
+                    catalog(platform)
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .any(|entry| entry.id == "cdk-spark-processor"),
+                    "{platform} distributes the published Spark pins"
+                );
+                assert_eq!(spark_gates(&plan, platform).len(), 1);
             }
         }
     }

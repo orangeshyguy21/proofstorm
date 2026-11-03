@@ -75,16 +75,21 @@ pub fn run(context: &GateContext) -> Result<()> {
         )?,
     )?;
     // A failed assertion must still retire the disposable cell through its finalizer.
-    client.call("cell_remove", json!({"name":INSTANCE}))?;
-    let closed = cell::wait_closed(&mut client, INSTANCE)?;
-    fs::write(
-        directory.join("closed.json"),
-        serde_json::to_vec_pretty(&closed)?,
-    )?;
-    if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {
-        bail!("cross-implementation gate did not verify teardown");
-    }
-    result.context("cross-implementation wallet regression failed")
+    super::with_cleanup(
+        || result.context("cross-implementation wallet regression failed"),
+        || {
+            client.call("cell_remove", json!({"name":INSTANCE}))?;
+            let closed = cell::wait_closed(&mut client, INSTANCE)?;
+            fs::write(
+                directory.join("closed.json"),
+                serde_json::to_vec_pretty(&closed)?,
+            )?;
+            if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {
+                bail!("cross-implementation gate did not verify teardown");
+            }
+            Ok(())
+        },
+    )
 }
 
 fn exercise(context: &GateContext) -> Result<()> {

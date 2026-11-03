@@ -24,6 +24,20 @@ fn identity(harness: Harness) -> (&'static str, &'static str, Option<&'static st
     }
 }
 
+/// Where a harness's native app may be installed, in search order.
+pub(super) fn bundles(harness: Harness) -> Vec<PathBuf> {
+    let names = match harness {
+        Harness::Codex => vec!["Codex.app", "ChatGPT.app"],
+        _ => vec![identity(harness).0],
+    };
+    let mut roots = vec![PathBuf::from("/Applications")];
+    roots.extend(std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Applications")));
+    roots
+        .iter()
+        .flat_map(|root| names.iter().map(move |name| root.join(name)))
+        .collect()
+}
+
 pub(super) fn validate(harness: Harness, info: &Value) -> Result<String> {
     let (_, bundle, link, minimum) = identity(harness);
     ensure!(
@@ -42,21 +56,17 @@ pub(super) fn validate(harness: Harness, info: &Value) -> Result<String> {
     let version = info["CFBundleShortVersionString"]
         .as_str()
         .context("desktop version missing")?;
+    // These apps update themselves, so newer releases are accepted: the identity
+    // and project link checked above are what launching relies on.
     let numbers = version
         .split('.')
-        .map(str::parse::<u64>)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+        .map_while(|part| part.parse::<u64>().ok())
+        .collect::<Vec<_>>();
     ensure!(
-        numbers.len() != 3 || numbers[0] <= minimum[0],
-        "{} desktop {version} is newer than this alpha's verified desktop version; update {} or run {} agent open without --desktop in a terminal",
+        !numbers.is_empty() && numbers.as_slice() >= minimum.as_slice(),
+        "{} desktop {version} is older than {}; update it before opening a project",
         harness.name(),
-        crate::command_name(),
-        crate::command_name()
-    );
-    ensure!(
-        numbers.len() == 3 && numbers[0] == minimum[0] && numbers.as_slice() >= minimum.as_slice(),
-        "update {} desktop before opening a project; this alpha requires a verified desktop version",
-        harness.name()
+        minimum.map(|n| n.to_string()).join(".")
     );
     Ok(version.into())
 }
@@ -86,13 +96,8 @@ pub(super) fn detect(harness: Harness, project: &Path) -> Result<LaunchPlan> {
         "native agent buttons currently support macOS; run {} agent open without --desktop in a terminal",
         crate::command_name()
     );
-    let (filename, _, _, _) = identity(harness);
-    let mut apps = vec![PathBuf::from("/Applications").join(filename)];
-    if let Some(home) = std::env::var_os("HOME") {
-        apps.push(PathBuf::from(home).join("Applications").join(filename));
-    }
     let mut last_error = None;
-    for app in apps {
+    for app in bundles(harness) {
         let plist = app.join("Contents/Info.plist");
         if !plist.is_file() {
             continue;

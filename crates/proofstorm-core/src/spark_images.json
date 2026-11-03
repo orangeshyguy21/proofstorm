@@ -1,1 +1,14 @@
-{}
+{
+  "linux/amd64": {
+    "operators": "proofstorm-registry.localhost:5000/spark-operator@sha256:36bbda523377e1b2a9c19f0c74baed8c8572aa301bb785396dda979783b867b1",
+    "ssp": "proofstorm-registry.localhost:5000/open-ssp@sha256:98715af7b7847225186a7d031419e9255dcd1628f30f8cf6c444dc2fdfaa1cc8",
+    "processor": "proofstorm-registry.localhost:5000/cdk-spark-processor@sha256:5038e39e53c23e5cbe05195c83a74585a531b2861d722dbec255c822e74a2bc5",
+    "ldk_server": "proofstorm-registry.localhost:5000/ldk-server@sha256:b7de700705608fe801360459b3c510790190c2f9dfcb9c24f0c24017ea27ca8d"
+  },
+  "linux/arm64": {
+    "operators": "proofstorm-registry.localhost:5000/spark-operator@sha256:d5684f6fe8c6cf42fea3c052283206ecd6cb188c43baa2f3e0f19016165d7df4",
+    "ssp": "proofstorm-registry.localhost:5000/open-ssp@sha256:38c3ea9addf07141375de19a08333ec7f62e0e982b6aad86af615c724c162845",
+    "processor": "proofstorm-registry.localhost:5000/cdk-spark-processor@sha256:26739d760b67a0bd6814232cb0e18b488397c01a6b330e053aabf7ae786454c4",
+    "ldk_server": "proofstorm-registry.localhost:5000/ldk-server@sha256:aad2ad69c1a92cb4e7343a098ee6974ada50a464da123ad72a5937e2e2a335ee"
+  }
+}

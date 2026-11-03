@@ -1,6 +1,6 @@
 # OpenCode and Claude Code alpha adapters
 
-Generated project attachments support Codex, OpenCode 2.x and Claude Code 2.x. No global agent configuration, model, provider, login,
+Generated project attachments support Codex, OpenCode 2 or newer and Claude Code 2 or newer. No global agent configuration, model, provider, login,
 permission mode, or project trust choice is changed.
 
 Proofstorm is optional for agent startup. Codex attachments explicitly set
@@ -59,10 +59,13 @@ Multiple duplicates and inherited/global connections still require manual review
 | Agent | Project configuration | Launch |
 | --- | --- | --- |
 | Codex | `.codex/config.toml` | Terminal by default; `--desktop` for native app |
-| OpenCode 2.x | `mcp.servers` in existing `opencode.jsonc`, otherwise `opencode.json` | Terminal by default; `--desktop` opens native OpenCode 2.x, with limitation below |
-| Claude Code 2.x | `.mcp.json` | Terminal by default; `--desktop` for native Claude 2.7032.0+ (2.x) |
+| OpenCode 2+ | `mcp.servers` in existing `opencode.jsonc`, otherwise `opencode.json` | Terminal by default; `--desktop` opens native OpenCode 2.0.0+, with limitation below |
+| Claude Code 2+ | `.mcp.json` | Terminal by default; `--desktop` for native Claude 2.7032.0+ |
 
 GUI launch buttons always request the native app, independently of the CLI default.
+Detection checks each app's identity and the launch interface it uses, with only a
+minimum version, so self-updates keep working. An installed app that fails these
+checks is listed in the GUI with the reason instead of being hidden.
 OpenCode 2 desktop has no project link, so the app opens and the folder must be
 opened inside OpenCode. The CLI and desktop app share one OpenCode background
 service, which reads the same project configuration either way.

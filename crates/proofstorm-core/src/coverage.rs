@@ -122,7 +122,7 @@ mod tests {
             default_backend_registry(),
         )
         .expect("coverage manifest");
-        assert_eq!(manifest.entries.len(), 26);
+        assert_eq!(manifest.entries.len(), 30);
         let cdk = manifest
             .entries
             .iter()
@@ -152,7 +152,8 @@ mod tests {
                 "ldk-node".into(),
                 "lnd".into(),
                 "cdk-ldk-server-processor".into(),
-                "cdk-bark-processor".into()
+                "cdk-bark-processor".into(),
+                "cdk-spark-processor".into()
             ]
             .into()
         );
@@ -169,7 +170,8 @@ mod tests {
                 "cln",
                 "lnd",
                 "cdk-ldk-server-processor",
-                "cdk-bark-processor"
+                "cdk-bark-processor",
+                "cdk-spark-processor"
             ]
             .into()
         );

@@ -579,16 +579,23 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
         &json!({"passed": result.is_ok(),
         "error": result.as_ref().err().map(|error| format!("{error:#}"))}),
     )?;
-    client.call("cell_remove", json!({"name":INSTANCE}))?;
-    let closed = cell::wait_closed(&mut client, INSTANCE)?;
-    save(&directory, "closed", &closed)?;
-    if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {
-        bail!("cleanup did not prove absence: {closed}");
-    }
-    result.context(format!(
-        "CDK wallet gate failed; evidence: {}",
-        directory.display()
-    ))?;
+    super::with_cleanup(
+        || {
+            result.context(format!(
+                "CDK wallet gate failed; evidence: {}",
+                directory.display()
+            ))
+        },
+        || {
+            client.call("cell_remove", json!({"name":INSTANCE}))?;
+            let closed = cell::wait_closed(&mut client, INSTANCE)?;
+            save(&directory, "closed", &closed)?;
+            if closed.pointer("/teardown_receipt/verified_absent") != Some(&json!(true)) {
+                bail!("cleanup did not prove absence: {closed}");
+            }
+            Ok(())
+        },
+    )?;
     evidence.context("required evidence export failed")?;
     println!(
         "CDK wallet checkpoint passed; evidence: {}",

@@ -62,9 +62,10 @@ Select `linux/amd64` or `linux/arm64` explicitly. Buildx must support that platf
 and the host must be able to execute its native probes (directly or by emulation).
 Available recipes: `bitcoin-core`, `cdk-mint`, `nutshell-mint`, `cdk-cli-wallet`,
 `cocod-wallet`, `ldk-server`, `cdk-ldk-server-processor`, `cdk-bark-processor`,
-`bark-server`, and `cln-hold`. Bark remains a local preview; its separate
-[native candidate build workflow](payment/BARK.md#native-candidate-image-handoff)
-retains images for later managed qualification. The `cdk-mint` image serves all
+`bark-server`, `cln-hold`, `spark-operator`, `open-ssp`, and `cdk-spark-processor`.
+Bark and Spark images come from their own
+[native candidate build workflows](payment/BARK.md#native-candidate-image-handoff),
+which retain images for managed qualification before publication. The `cdk-mint` image serves all
 three CDK mint presets; backend and storage configuration choose what runs.
 Historical standard-image receipts remain readable. Controller builds remain in the existing
 [`release-controller-*` flow](../scripts/RELEASING.md).

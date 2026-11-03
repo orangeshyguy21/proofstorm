@@ -166,27 +166,10 @@ impl Drop for CellCleanup<'_> {
     }
 }
 
-pub(super) fn with_cleanup<T>(
-    body: impl FnOnce() -> Result<T>,
-    cleanup: impl FnOnce() -> Result<()>,
-) -> Result<T> {
-    let result = body();
-    let cleaned = cleanup();
-    match (result, cleaned) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(error)) => Err(error.context("gate passed but cleanup failed")),
-        (Err(error), Err(cleanup)) => {
-            Err(error.context(format!("cleanup also failed: {cleanup:#}")))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::cell::Cell;
 
     #[test]
     fn cleanup_requires_both_workspace_and_instance_identity() {
@@ -195,22 +178,5 @@ mod tests {
         assert!(!owns_cell(&cell, "run-b", "cell"));
         assert!(!owns_cell(&cell, "run-a", "other"));
         assert!(!owns_cell(&json!({}), "run-a", "cell"));
-    }
-
-    #[test]
-    fn cleanup_runs_on_error_and_cannot_hide_either_failure() {
-        let called = Cell::new(false);
-        let result: Result<()> = with_cleanup(
-            || bail!("scenario failed"),
-            || {
-                called.set(true);
-                bail!("cleanup failed")
-            },
-        );
-        let message = format!("{:#}", result.unwrap_err());
-        assert!(called.get());
-        assert!(message.contains("scenario failed") && message.contains("cleanup failed"));
-        assert!(with_cleanup(|| Ok(()), || bail!("cleanup failed")).is_err());
-        assert!(with_cleanup(|| Ok(()), || Ok(())).is_ok());
     }
 }

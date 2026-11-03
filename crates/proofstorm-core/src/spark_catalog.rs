@@ -1,6 +1,5 @@
-//! Experimental Spark stack. Entries exist only for platforms whose images are
-//! pinned in `spark_images.json`, which stays empty until the images are
-//! published and a managed gate has qualified them.
+//! Experimental Spark stack. Entries exist only for platforms whose published,
+//! managed-qualified images are pinned in `spark_images.json`.
 use super::{
     BTreeSet, BackendContractRegistry, CatalogEntry, CatalogFeature, CatalogRuntimeEndpoint,
     ComponentKind, ControlClass, LinkKind, PaymentMethod, ReleaseChannel, StorageBackend,
@@ -28,7 +27,7 @@ pub const SSP_VERSION: &str = "0.1.0-9c25f69";
 /// open-ssp's LDK client authenticates with macaroons, which the API-key-era
 /// `ldk-server` that the CDK LDK Server processor needs does not issue.
 pub const LDK_SERVER_VERSION: &str = "0.1.0-762bc47";
-const QUALIFICATION: &str = "Experimental. A Docker Compose probe on native ARM64 passed BOLT11/sat mint, melt, an unreachable melt and restarts through this stack; no managed qualification has run yet.";
+const QUALIFICATION: &str = "Experimental support on Linux AMD64 and ARM64. Published native images passed managed BOLT11/sat qualification: mint and melt across full-stack restarts, an interrupted mint, an unreachable melt that is never paid, and transport refusals. Melts carry no payment preimage. Ordinary native qualification covers the distributed pins.";
 const LDK_SERVER_GUIDANCE: &str = "Pinned upstream revision 762bc473342c8f945475785ec6743a9b26f56aff for open-ssp. It authenticates with macaroons, so the CDK LDK Server processor, which needs an API key, uses 0.1.0-50fe752 instead. Native entrypoint: ldk-server-cli --config /config/config.toml --base-url 127.0.0.1:3536; the CLI reads the admin macaroon and TLS certificate from /data through that config. Use amounts with explicit sat/msat suffixes. Channel recipe for an SSP node: onchain-receive, send to it from bitcoin-core and mine 6 blocks, take the peer's node_id from its get-node-info, then open-channel <peer node_id> <peer component>:9735 2000000sat --push-to-counterparty 1000000sat --announce-channel so both directions have liquidity, mine 6 blocks and wait until list-channels shows the channel is_channel_ready and is_usable. Keep credentials out of command arguments and public output.";
 
 fn platform(amd64: bool) -> &'static str {
@@ -227,28 +226,26 @@ mod tests {
     use crate::{CatalogPlatform, catalog_for_platform, processor_ids::SPARK_PROCESSOR};
 
     #[test]
-    fn spark_entries_ship_only_for_pinned_platforms() {
+    fn both_platforms_ship_their_published_spark_pins() {
         for (platform, amd64) in [
             (CatalogPlatform::LinuxAmd64, true),
             (CatalogPlatform::LinuxArm64, false),
         ] {
+            assert!(super::pinned(amd64).is_some(), "{platform:?} Spark pins");
             let catalog = catalog_for_platform(platform);
             let shipped = |id: &str| catalog.entries.iter().any(|entry| entry.id == id);
-            let pinned = super::pinned(amd64).is_some();
             for id in [super::SPARK_OPERATORS, super::OPEN_SSP, SPARK_PROCESSOR] {
-                assert_eq!(shipped(id), pinned, "{id} on {platform:?}");
+                assert!(shipped(id), "{id} on {platform:?}");
             }
-            // The CDK mint binds the processor only alongside it.
             let cdk = catalog
                 .entries
                 .iter()
                 .find(|entry| entry.id == "cdk")
                 .unwrap();
-            assert_eq!(
+            assert!(
                 cdk.support_matrix
                     .payment_backends
-                    .contains(SPARK_PROCESSOR),
-                pinned
+                    .contains(SPARK_PROCESSOR)
             );
         }
     }

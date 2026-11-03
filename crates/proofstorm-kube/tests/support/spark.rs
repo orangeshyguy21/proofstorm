@@ -1,4 +1,4 @@
-//! Unpublished fixtures; no catalog image or architecture qualification.
+//! Synthetic fixtures with placeholder images; no catalog image or architecture qualification.
 use proofstorm_core::{
     CellSpec, ComponentPlanContract, ComponentPlanInput, LinkedStateObservationContract,
     TargetDescriptorContract, default_backend_registry, default_catalog, resolve_lock,

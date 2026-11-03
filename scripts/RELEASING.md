@@ -6,9 +6,10 @@ authorizes a draft. Publishing the downloadable release remains a manual decisio
 
 ## Everyday flow
 
-The distributed Bark pins have passed the separate
-[native qualification and public image handoff](BARK-RELEASING.md).
-Ordinary Checks now require their native image probes and managed payment gate
+The distributed Bark and Spark pins have passed the separate native qualification
+and public image handoff ([Bark](BARK-RELEASING.md),
+[Spark](../docker/payment/SPARK.md#publication)).
+Ordinary Checks now require their native image probes and managed payment gates
 on both architectures in the compatibility suite. Changes to these images must
 repeat the candidate handoff before updating pins; Checks do not publish images.
 

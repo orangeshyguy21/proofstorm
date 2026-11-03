@@ -359,13 +359,18 @@ pub fn run(context: &GateContext) -> Result<()> {
             &json!({"passed":result.is_ok(),"error":result.as_ref().err().map(|e|format!("{e:#}"))}),
         )?,
     )?;
-    client.call("cell_remove", json!({"name":INSTANCE}))?;
-    let closed = cell::wait_closed(&mut client, INSTANCE)?;
-    ensure!(
-        closed["teardown_receipt"]["verified_absent"] == true,
-        "gate cell cleanup unverified"
-    );
-    result?;
+    super::with_cleanup(
+        || result,
+        || {
+            client.call("cell_remove", json!({"name":INSTANCE}))?;
+            let closed = cell::wait_closed(&mut client, INSTANCE)?;
+            ensure!(
+                closed["teardown_receipt"]["verified_absent"] == true,
+                "gate cell cleanup unverified"
+            );
+            Ok(())
+        },
+    )?;
     println!(
         "Dynamic cell preservation gate passed: {}",
         directory.display()

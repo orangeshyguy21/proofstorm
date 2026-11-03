@@ -2272,8 +2272,8 @@ mod tests {
     )]
     fn catalog_support_summary_is_exact_and_invariants_fail_closed() {
         let catalog = catalog_for_platform(CatalogPlatform::LinuxArm64);
-        assert_eq!(catalog.entries.len(), 26);
-        assert_eq!(catalog.implementations.len(), 17);
+        assert_eq!(catalog.entries.len(), 30);
+        assert_eq!(catalog.implementations.len(), 20);
         let lnd = catalog
             .implementations
             .iter()
@@ -2294,6 +2294,9 @@ mod tests {
                     | "bark-server"
                     | "cln-hold"
                     | "cdk-bark-processor"
+                    | "spark-operators"
+                    | "open-ssp"
+                    | "cdk-spark-processor"
             ) || support.implementation == "lnd"
                 || matches!(
                     support.implementation.as_str(),

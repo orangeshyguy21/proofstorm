@@ -355,20 +355,30 @@ fn literal_paths_versions_and_terminal_quoting_fail_safe() {
         entry["cwd"] = json!(format!("/tmp/{marker}"));
         assert!(agents::entry(harness, &entry).is_err());
     }
-    assert!(launch::supported_version(Harness::Opencode, "opencode v2.0.29\n").is_ok());
+    // A minimum only: self-updating agents must keep working after an update.
+    for good in ["opencode v2.0.29\n", "opencode v3.0.0", "opencode v12.4.1"] {
+        assert!(launch::supported_version(Harness::Opencode, good).is_ok());
+    }
     for bad in [
         "1.18.30",
         "2.0.29",
         "opencode v1.18.30",
-        "opencode v3.0.0",
         "opencode v2.beta",
         "opencode 2.0.29",
         "",
     ] {
         assert!(launch::supported_version(Harness::Opencode, bad).is_err());
     }
-    assert!(launch::supported_version(Harness::Claude, "2.1.69 (Claude Code)").is_ok());
-    assert!(launch::supported_version(Harness::Claude, "3.0.0 (Claude Code)").is_err());
+    for good in [
+        "2.1.69 (Claude Code)",
+        "3.0.0 (Claude Code)",
+        "10.2.3 (Claude Code)",
+    ] {
+        assert!(launch::supported_version(Harness::Claude, good).is_ok());
+    }
+    for bad in ["1.0.128 (Claude Code)", "2.1.69", "2.x (Claude Code)"] {
+        assert!(launch::supported_version(Harness::Claude, bad).is_err());
+    }
     let plan = launch::LaunchPlan {
         executable: "/a path/it's/claude".into(),
         project: "/project/$(no); it's".into(),
@@ -455,28 +465,36 @@ fn desktop_project_links_encode_paths_without_prompts_or_shells() {
 }
 
 #[test]
-fn desktop_detection_requires_identity_scheme_and_tested_version() {
-    for (agent, bundle, version, old) in [
+fn desktop_detection_requires_identity_scheme_and_minimum_version() {
+    for (agent, bundle, version, newer, old) in [
         (
             Harness::Opencode,
             "ai.opencode.desktop",
             "2.0.29",
+            "3.0.0",
             "1.18.30",
         ),
         (
             Harness::Claude,
             "com.anthropic.claudefordesktop",
             "2.7032.0",
+            "4.4212.0",
             "2.0.0",
         ),
     ] {
         let info = json!({"CFBundleIdentifier":bundle,"CFBundleURLTypes":[{"CFBundleURLSchemes":[agent.name()]}],"CFBundleShortVersionString":version});
         assert_eq!(desktop::validate(agent, &info).unwrap(), version);
+        // Desktop apps update themselves; a newer release must stay usable.
+        for newer in [newer, "99.0", "5.1.2-beta"] {
+            let mut updated = info.clone();
+            updated["CFBundleShortVersionString"] = json!(newer);
+            assert_eq!(desktop::validate(agent, &updated).unwrap(), newer);
+        }
         for (key, value) in [
             ("CFBundleIdentifier", json!("imposter")),
             ("CFBundleShortVersionString", json!(old)),
-            ("CFBundleShortVersionString", json!("3.0.0")),
             ("CFBundleShortVersionString", json!("2.beta.0")),
+            ("CFBundleShortVersionString", json!("beta")),
         ] {
             let mut bad = info.clone();
             bad[key] = value;

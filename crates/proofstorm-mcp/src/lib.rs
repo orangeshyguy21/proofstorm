@@ -3420,13 +3420,13 @@ mod tests {
         assert!(backend.supports(NetworkFaultFeature::Partition));
         assert!(!backend.supports(NetworkFaultFeature::Delay));
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 26);
+        assert_eq!(catalog.entries.len(), 30);
         assert!(catalog.entries.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
                 && entry.image.contains("@sha256:")
         }));
-        assert_eq!(catalog.implementations.len(), 17);
+        assert_eq!(catalog.implementations.len(), 20);
         assert_support_defaults(catalog);
         let cdk = catalog
             .entries
@@ -3442,38 +3442,7 @@ mod tests {
             ]
             .into()
         );
-        assert_eq!(
-            cdk.support_matrix.payment_methods,
-            [
-                proofstorm_core::PaymentMethod::Bolt11,
-                proofstorm_core::PaymentMethod::Bolt12,
-                proofstorm_core::PaymentMethod::Onchain,
-                proofstorm_core::PaymentMethod::Custom("arkoor".into()),
-            ]
-            .into()
-        );
-        assert_eq!(
-            cdk.support_matrix.payment_backends,
-            [
-                "bdk".into(),
-                "cln".into(),
-                "ldk-node".into(),
-                "lnd".into(),
-                "cdk-ldk-server-processor".into(),
-                "cdk-bark-processor".into()
-            ]
-            .into()
-        );
-        assert!(cdk.support_matrix.units.contains("sat"));
-        assert_eq!(cdk.support_matrix.payment_bindings.len(), 7);
-        assert!(cdk.support_matrix.payment_bindings.iter().all(|binding| {
-            binding.unit == "sat"
-                && (binding.method == proofstorm_core::PaymentMethod::Bolt11
-                    || matches!(
-                        binding.backend.implementation.as_str(),
-                        "cdk-ldk-server-processor" | "cdk-bark-processor"
-                    ))
-        }));
+        assert_cdk_payments(cdk);
         assert_eq!(
             cdk.support_matrix.compatible_wallet_adapters[0].implementation,
             "nutshell-wallet"
@@ -3507,6 +3476,42 @@ mod tests {
         assert_eq!(reader.tool_names(), vec!["cell_read", "cell_search"]);
     }
 
+    fn assert_cdk_payments(cdk: &proofstorm_core::CatalogEntry) {
+        assert_eq!(
+            cdk.support_matrix.payment_methods,
+            [
+                proofstorm_core::PaymentMethod::Bolt11,
+                proofstorm_core::PaymentMethod::Bolt12,
+                proofstorm_core::PaymentMethod::Onchain,
+                proofstorm_core::PaymentMethod::Custom("arkoor".into()),
+            ]
+            .into()
+        );
+        assert_eq!(
+            cdk.support_matrix.payment_backends,
+            [
+                "bdk".into(),
+                "cln".into(),
+                "ldk-node".into(),
+                "lnd".into(),
+                "cdk-ldk-server-processor".into(),
+                "cdk-bark-processor".into(),
+                "cdk-spark-processor".into()
+            ]
+            .into()
+        );
+        assert!(cdk.support_matrix.units.contains("sat"));
+        assert_eq!(cdk.support_matrix.payment_bindings.len(), 8);
+        assert!(cdk.support_matrix.payment_bindings.iter().all(|binding| {
+            binding.unit == "sat"
+                && (binding.method == proofstorm_core::PaymentMethod::Bolt11
+                    || matches!(
+                        binding.backend.implementation.as_str(),
+                        "cdk-ldk-server-processor" | "cdk-bark-processor"
+                    ))
+        }));
+    }
+
     fn assert_support_defaults(catalog: &proofstorm_core::CatalogResponse) {
         assert!(catalog.implementations.iter().all(|support| {
             matches!(
@@ -3517,6 +3522,9 @@ mod tests {
                     | "cdk-bark-processor"
                     | "bark-server"
                     | "cln-hold"
+                    | "spark-operators"
+                    | "open-ssp"
+                    | "cdk-spark-processor"
             ) || support.preferred_version.as_ref().is_some_and(|version| {
                 support.supported_versions.contains(version)
                     && (matches!(
@@ -3584,7 +3592,7 @@ mod tests {
         page.items = items;
         let page: CatalogListResponse =
             serde_json::from_value(serde_json::to_value(page).unwrap()).unwrap();
-        assert_eq!(page.items.len(), 20);
+        assert_eq!(page.items.len(), 24);
         assert!(page.next_cursor.is_none());
         assert!(read_query::wire_size(&page).unwrap() <= MAX_AGENT_RESPONSE_BYTES);
         assert!(page.items.iter().all(|entry| {
@@ -3599,6 +3607,9 @@ mod tests {
                             | "cdk-bark-processor"
                             | "bark-server"
                             | "cln-hold"
+                            | "spark-operators"
+                            | "open-ssp"
+                            | "cdk-spark-processor"
                     ) && entry.support_lifecycle == SupportLifecycle::Experimental
                     || entry.id == "lnd"
                         && entry.version == "0.20.5-beta"
