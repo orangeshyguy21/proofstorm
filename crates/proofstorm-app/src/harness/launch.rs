@@ -81,16 +81,35 @@ fn codex_desktop(mut apps: Vec<PathBuf>, path_cli: Option<&Path>) -> Option<(Pat
         if !app.join("Contents/Info.plist").is_file() {
             return None;
         }
-        [
-            "Contents/Resources/codex",
-            "Contents/Resources/codex-cli/bin/codex",
-            "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
-        ]
-        .into_iter()
-        .map(|relative| app.join(relative))
-        .find(|path| executable(path))
-        .map(|cli| (app, cli))
+        bundled_cli(&app.join("Contents/Resources")).map(|cli| (app, cli))
     })
+}
+
+/// The bundle layout moves between Codex releases, so search for the CLI
+/// instead of naming its path: the shallowest executable `codex`, by name order.
+fn bundled_cli(resources: &Path) -> Option<PathBuf> {
+    let mut level = vec![resources.to_path_buf()];
+    for _ in 0..6 {
+        let mut entries = level
+            .iter()
+            .filter_map(|dir| std::fs::read_dir(dir).ok())
+            .flatten()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .collect::<Vec<_>>();
+        entries.sort();
+        if let Some(cli) = entries
+            .iter()
+            .find(|path| path.file_name().is_some_and(|name| name == "codex") && executable(path))
+        {
+            return Some(cli.clone());
+        }
+        // Never follow symlinks out of the bundle.
+        level = entries
+            .into_iter()
+            .filter(|path| path.symlink_metadata().is_ok_and(|m| m.is_dir()))
+            .collect();
+    }
+    None
 }
 
 pub fn detect(project: &Path, cli: bool) -> Result<LaunchPlan> {
@@ -98,16 +117,7 @@ pub fn detect(project: &Path, cli: bool) -> Result<LaunchPlan> {
         cli || cfg!(target_os = "macos"),
         "native Codex launch currently supports macOS; omit --desktop to use the CLI"
     );
-    let mut apps = vec![
-        PathBuf::from("/Applications/Codex.app"),
-        PathBuf::from("/Applications/ChatGPT.app"),
-    ];
-    if let Some(home) = std::env::var_os("HOME") {
-        apps.extend([
-            PathBuf::from(&home).join("Applications/Codex.app"),
-            PathBuf::from(home).join("Applications/ChatGPT.app"),
-        ]);
-    }
+    let apps = super::desktop::bundles(super::Harness::Codex);
     let path_cli = std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths)
             .filter(|p| p.is_absolute())
@@ -127,11 +137,16 @@ pub fn detect(project: &Path, cli: bool) -> Result<LaunchPlan> {
         &executable,
         if cli { &["--help"] } else { &["app", "--help"] },
     )?;
+    // Check the generated usage line for the arguments passed below, not prose.
     ensure!(
         if cli {
             help.contains("--cd")
         } else {
-            help.contains("[PATH]") && help.contains("Workspace path")
+            help.lines().any(|line| {
+                line.trim_start().starts_with("Usage:")
+                    && line.contains(" app ")
+                    && line.contains("[PATH]")
+            })
         },
         "this Codex version does not expose the supported project launch option"
     );
@@ -188,6 +203,15 @@ pub fn run(plan: &LaunchPlan) -> Result<()> {
     Ok(())
 }
 
+/// Whether the native app is installed, so a failed detection can be reported
+/// instead of hidden.
+#[must_use]
+pub fn installed(harness: super::Harness) -> bool {
+    super::desktop::bundles(harness)
+        .iter()
+        .any(|app| app.join("Contents/Info.plist").is_file())
+}
+
 /// Select the terminal interface when `cli` is true, otherwise the native app.
 pub fn detect_for(harness: super::Harness, project: &Path, cli: bool) -> Result<LaunchPlan> {
     if harness == super::Harness::Codex {
@@ -229,21 +253,31 @@ pub fn detect_for(harness: super::Harness, project: &Path, cli: bool) -> Result<
     })
 }
 
+/// A minimum only: `OpenCode` 1.x cannot read the `mcp.servers` layout. Newer
+/// releases are accepted, since the help check proves the launch interface.
 pub(super) fn supported_version(harness: super::Harness, version: &str) -> Result<()> {
     let version = version.trim();
-    let valid = match harness {
-        super::Harness::Opencode => version.strip_prefix("opencode v").is_some_and(|version| {
-            version.starts_with("2.")
-                && version
-                    .split('.')
-                    .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
-        }),
-        super::Harness::Claude => version.starts_with("2.") && version.ends_with(" (Claude Code)"),
-        super::Harness::Codex => version.starts_with("codex-cli "),
+    let number = match harness {
+        super::Harness::Opencode => version.strip_prefix("opencode v"),
+        super::Harness::Claude => version.strip_suffix(" (Claude Code)"),
+        super::Harness::Codex => {
+            ensure!(
+                version.starts_with("codex-cli "),
+                "unrecognized Codex executable"
+            );
+            return Ok(());
+        }
     };
+    let major = number
+        .filter(|number| {
+            number
+                .split('.')
+                .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .and_then(|number| number.split('.').next()?.parse::<u64>().ok());
     ensure!(
-        valid,
-        "unsupported {} version; this alpha supports OpenCode 2.x and Claude Code 2.x only",
+        major.is_some_and(|major| major >= 2),
+        "unsupported {} version {version}; this alpha needs OpenCode or Claude Code 2 or newer",
         harness.name()
     );
     Ok(())
@@ -302,6 +336,15 @@ mod tests {
             fs::remove_file(app.join("Contents/Info.plist")).unwrap();
             assert!(codex_desktop(vec![app], None).is_none());
         }
+    }
+
+    #[test]
+    fn codex_discovery_survives_a_moved_bundle_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let (app, cli) = fixture(root.path(), "Contents/Resources/next/tools/bin/codex");
+        // A non-executable file of the same name, shallower, is not the CLI.
+        fs::write(app.join("Contents/Resources/codex"), "fixture").unwrap();
+        assert_eq!(codex_desktop(vec![app.clone()], None), Some((app, cli)));
     }
 
     #[test]

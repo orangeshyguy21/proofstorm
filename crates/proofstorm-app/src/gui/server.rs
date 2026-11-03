@@ -100,17 +100,25 @@ impl Session {
     pub(super) fn context(&self) -> Value {
         let runtime = Installation::load(&self.home)
             .and_then(|i| crate::bootstrap::check_installed_runtime(&i));
-        let agents = [
+        let mut agents = Vec::new();
+        // Installed apps that fail detection are reported with the reason, not hidden.
+        let mut unavailable = Vec::new();
+        for agent in [
             crate::harness::Harness::Codex,
             crate::harness::Harness::Opencode,
             crate::harness::Harness::Claude,
-        ]
-        .into_iter()
-        .filter(|agent| crate::harness::launch::detect_for(*agent, &self.home, false).is_ok())
-        .collect::<Vec<_>>();
+        ] {
+            match crate::harness::launch::detect_for(agent, &self.home, false) {
+                Ok(_) => agents.push(agent),
+                Err(error) if crate::harness::launch::installed(agent) => {
+                    unavailable.push(json!({"agent":agent,"reason":format!("{error:#}")}));
+                }
+                Err(_) => {}
+            }
+        }
         json!({"managed":true,"home":self.home,"recent_projects":self.recent(),"csrf":self.record.token,
             "runtime_ready":runtime.is_ok(),"runtime_error":runtime.err().map(|e|format!("{e:#}")),
-            "codex_available":agents.contains(&crate::harness::Harness::Codex),"agents":agents,
+            "codex_available":agents.contains(&crate::harness::Harness::Codex),"agents":agents,"unavailable":unavailable,
             "activation_generation":self.activation.lock().unwrap().generation})
     }
     pub(super) async fn open_project(

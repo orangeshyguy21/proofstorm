@@ -412,7 +412,16 @@ fn AgentLauncher() -> impl IntoView {
                 </button>
                 <div class="gui-check" aria-live="polite">
                     <Show when=move ||context.get().is_none() && error.get().is_none()><p class="gui-muted">"Looking for installed apps…"</p></Show>
-                    <Show when=move ||context.get().is_some_and(|ctx|ctx["agents"].as_array().is_some_and(Vec::is_empty))><p class="gui-muted">"No supported native apps found. Install Codex, OpenCode or Claude in Applications, then reopen this page."</p></Show>
+                    <Show when=move ||context.get().is_some_and(|ctx|ctx["agents"].as_array().is_some_and(Vec::is_empty) && ctx["unavailable"].as_array().is_none_or(Vec::is_empty))><p class="gui-muted">"No supported native apps found. Install Codex, OpenCode or Claude in Applications, then reopen this page."</p></Show>
+                    {move ||context.get().and_then(|ctx|ctx["unavailable"].as_array().cloned()).unwrap_or_default().into_iter().map(|item| {
+                        let agent = match item["agent"].as_str() {
+                            Some("codex") => "Codex",
+                            Some("opencode") => "OpenCode",
+                            Some("claude") => "Claude Code",
+                            _ => "An agent",
+                        };
+                        view!{<p class="gui-muted">{format!("{agent} is installed but can’t be opened from here: {}", item["reason"].as_str().unwrap_or_default())}</p>}
+                    }).collect_view()}
                     <Show when=move ||busy.get()><p class="gui-muted"><span class="gui-connecting" aria-hidden="true"></span>{move ||if picking.get() {"Choose a folder in the macOS dialog…"} else {"Connecting proofstorm and opening your project…"}}</p></Show>
                     {move ||conflict.get().map(|existing|view! {
                         <div class="gui-conflict">
