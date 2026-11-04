@@ -46,6 +46,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 const MAX_ARTIFACT_BYTES: usize = 32 * 1024;
+// Admission holds the write lock while it reads this; `actions_by_instance_sequence`
+// keeps it an index lookup instead of a scan of the cell's whole history.
+const LAST_SEQUENCE: &str = "SELECT COALESCE(MAX(sequence), 0) FROM actions
+     WHERE workspace_id = ?1 AND instance_id = ?2";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -296,6 +300,8 @@ impl Store {
              );
              CREATE INDEX IF NOT EXISTS actions_by_instance_activity
                ON actions(workspace_id, instance_id, accepted_at DESC, id DESC);
+             CREATE INDEX IF NOT EXISTS actions_by_instance_sequence
+               ON actions(workspace_id, instance_id, sequence);
              CREATE INDEX IF NOT EXISTS sessions_by_instance
                ON sessions(workspace_id, instance_id, id);
              CREATE TABLE IF NOT EXISTS private_access_grants (
@@ -1548,12 +1554,10 @@ impl Store {
             ));
         }
         transaction.execute("UPDATE sessions SET last_activity_at=MAX(last_activity_at,?1) WHERE workspace_id=?2 AND id=?3",params![accepted_at,workspace,session_id])?;
-        let last_sequence = transaction.query_row(
-            "SELECT COALESCE(MAX(sequence), 0) FROM actions
-             WHERE workspace_id = ?1 AND instance_id = ?2",
-            params![workspace, instance_id],
-            |row| row.get::<_, i64>(0),
-        )?;
+        let last_sequence =
+            transaction.query_row(LAST_SEQUENCE, params![workspace, instance_id], |row| {
+                row.get::<_, i64>(0)
+            })?;
         let sequence = u64::try_from(last_sequence + 1)
             .map_err(|_| StoreError::InvalidStoredVersion(last_sequence))?;
         let revision_digest = updates::admit_operation(

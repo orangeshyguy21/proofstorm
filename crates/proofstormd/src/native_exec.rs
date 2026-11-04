@@ -127,6 +127,15 @@ fn cached_native_receipt(
     Some(receipt)
 }
 
+/// Output of `mktemp -d /tmp/proofstorm-exec.XXXXXXXX`: one directory, no traversal.
+fn is_exec_directory(directory: &str) -> bool {
+    directory
+        .strip_prefix("/tmp/proofstorm-exec.")
+        .is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_alphanumeric())
+        })
+}
+
 fn helper_args(reference: &NativeExecutionRef, mode: &str) -> Vec<String> {
     vec![
         format!("{}/runner", reference.directory),
@@ -320,6 +329,30 @@ pub async fn reconcile(
                     },
                 )
                 .await?;
+                // The receipt is now durable in the action status, so the in-pod
+                // directory and its runner copy can go. Task starts keep theirs:
+                // the task outlives this receipt.
+                if same_pod
+                    && clean
+                    && !custody_pending
+                    && super::workspace_bridge::controlled_start(action, cell).is_none()
+                    && is_exec_directory(&reference.directory)
+                {
+                    let _ = exec(
+                        &pods,
+                        &reference.pod,
+                        &reference.container,
+                        vec![
+                            "/bin/sh".into(),
+                            "-c".into(),
+                            "rm -rf -- \"$1\"".into(),
+                            "proofstorm-exec".into(),
+                            reference.directory.clone(),
+                        ],
+                        None,
+                    )
+                    .await;
+                }
                 return Ok(Action::await_change());
             }
             if receipt.get("runner_error").is_some() {
@@ -416,11 +449,7 @@ pub async fn reconcile(
     .await?;
     let directory = String::from_utf8(directory)
         .map_err(|_| Error::LiveExec("invalid supervisor directory".into()))?;
-    if !directory.starts_with("/tmp/proofstorm-exec.")
-        || !directory
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"/.-".contains(&b))
-    {
+    if !is_exec_directory(&directory) {
         return Err(Error::LiveExec("invalid supervisor directory".into()));
     }
     let reference = NativeExecutionRef {
@@ -507,6 +536,20 @@ pub async fn reconcile(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_a_single_mktemp_directory_is_removable() {
+        assert!(is_exec_directory("/tmp/proofstorm-exec.Ab12Cd34"));
+        for directory in [
+            "/tmp/proofstorm-exec.",
+            "/tmp/proofstorm-exec../etc",
+            "/tmp/proofstorm-exec.Ab12/..",
+            "/tmp/proofstorm-exec.Ab-12",
+            "/tmp/other.Ab12Cd34",
+            "/",
+        ] {
+            assert!(!is_exec_directory(directory), "{directory}");
+        }
+    }
     #[test]
     fn known_native_completion_survives_failed_collection_and_status_loss() {
         let first = json!({"supervisor_version":"proofstorm-exec/v1","exit_code":0,"exit_signal":null,"cleanup_verified":true,"payload_manifest":{"bytes":3,"sha256":"source-hash"},"transfer_error":"temporary collection failure","private_files_retired":false});
