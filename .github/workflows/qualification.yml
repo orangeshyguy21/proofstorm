@@ -168,7 +168,9 @@ jobs:
     needs: [plan, build, images, preflight]
     strategy:
       fail-fast: false
-      max-parallel: 8
+      # One wave: at 8, arm64 shards waited up to 79 min for a slot on main.
+      # GitHub's free plan runs about 20 jobs per account at once anyway.
+      max-parallel: 20
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
