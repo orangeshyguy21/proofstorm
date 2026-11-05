@@ -11,7 +11,128 @@ use proofstorm_core::native::{NativeCommand, cap_public_streams};
 use proofstorm_kube::NativeExecutionRef;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Semaphore;
+
+/// Native exec work this controller runs at once, in two separate pools so
+/// neither can starve the other. A start uploads the runner and, under load,
+/// can take the whole transport timeout; so can a receipt poll. Without caps,
+/// starts took every action-controller slot and starved status polls, cancels
+/// and all other actions (PS-44). Together the pools leave controller slots for
+/// everything else. A cancel of a running command bypasses both.
+pub(super) const NATIVE_POLL_CONCURRENCY: usize = 6;
+pub(super) const NATIVE_START_CONCURRENCY: usize = 4;
+/// Starts into one component at once. A component whose execs hang (frozen,
+/// overloaded) then holds at most this many start permits, and starts into
+/// every other component keep going.
+pub(super) const NATIVE_STARTS_PER_COMPONENT: usize = 2;
+const _: () = assert!(NATIVE_STARTS_PER_COMPONENT < NATIVE_START_CONCURRENCY);
+
+/// Shared limits on native exec work. Reconciles take permits without waiting:
+/// a reconcile that finds none requeues shortly instead of holding a slot.
+pub(super) struct Gate {
+    polls: Semaphore,
+    starts: Semaphore,
+    /// Starts in progress per `instance_key/component`.
+    components: Mutex<HashMap<String, usize>>,
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self {
+            polls: Semaphore::new(NATIVE_POLL_CONCURRENCY),
+            starts: Semaphore::new(NATIVE_START_CONCURRENCY),
+            components: Mutex::default(),
+        }
+    }
+}
+
+impl Gate {
+    /// Reserve one of a component's start places, or `None` if it has none free.
+    fn start_component(&self, key: &str) -> Option<ComponentStart<'_>> {
+        let mut active = self.components.lock().expect("native start gate lock");
+        let count = active.entry(key.to_owned()).or_default();
+        if *count >= NATIVE_STARTS_PER_COMPONENT {
+            return None;
+        }
+        *count += 1;
+        Some(ComponentStart {
+            gate: self,
+            key: key.to_owned(),
+        })
+    }
+}
+
+/// A component start place, released when dropped.
+struct ComponentStart<'a> {
+    gate: &'a Gate,
+    key: String,
+}
+
+impl Drop for ComponentStart<'_> {
+    fn drop(&mut self) {
+        let mut active = self.gate.components.lock().expect("native start gate lock");
+        if let Some(count) = active.get_mut(&self.key) {
+            *count -= 1;
+            if *count == 0 {
+                active.remove(&self.key);
+            }
+        }
+    }
+}
+
+/// Try again soon, spread by operation so waiting actions don't retry in step.
+fn gate_busy(action: &ProofstormCellAction) -> Action {
+    super::jittered_requeue(&action.spec.operation_id, 1, 2)
+}
+
+/// Delay before the next receipt poll: every second at first, so short
+/// commands finish promptly, then less often while a long command runs.
+fn poll_interval(elapsed_seconds: i64) -> Duration {
+    Duration::from_secs(if elapsed_seconds < 10 {
+        1
+    } else if elapsed_seconds < 60 {
+        2
+    } else {
+        5
+    })
+}
+
+/// Upload the runner into a fresh private directory under `base` and print the
+/// directory. An incomplete upload (the transport timed out mid-stream) or a
+/// hangup removes the directory instead of leaving a partial runner behind.
+fn install_script(base: &str, bytes: usize) -> String {
+    format!(
+        "set -eu; umask 077; dir=$(mktemp -d {base}/proofstorm-exec.XXXXXXXX); \
+         trap 'rm -rf -- \"$dir\"; exit 70' HUP PIPE TERM; \
+         if cat > \"$dir/runner\" && size=$(wc -c < \"$dir/runner\") && [ \"$((size))\" -eq {bytes} ]; then \
+         chmod 700 \"$dir/runner\"; printf '%s' \"$dir\"; trap - HUP PIPE TERM; \
+         else rm -rf -- \"$dir\"; exit 65; fi"
+    )
+}
+
+/// Best effort: remove an exec directory that holds no receipt anyone needs.
+async fn remove_directory(pods: &Api<Pod>, reference: &NativeExecutionRef) {
+    if !is_exec_directory(&reference.directory) {
+        return;
+    }
+    let _ = exec(
+        pods,
+        &reference.pod,
+        &reference.container,
+        vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "rm -rf -- \"$1\"".into(),
+            "proofstorm-exec".into(),
+            reference.directory.clone(),
+        ],
+        None,
+    )
+    .await;
+}
 
 pub(super) async fn exec_bounded(
     pods: &Api<Pod>,
@@ -203,6 +324,15 @@ pub async fn reconcile(
         .as_ref()
         .and_then(|status| status.native_execution.as_ref());
     if let Some(reference) = reference {
+        // Cancels are rare and must not wait behind a full poll pool.
+        let _poll = if action.annotations().contains_key(ACTION_CANCEL_ANNOTATION) {
+            None
+        } else {
+            let Ok(permit) = context.native.polls.try_acquire() else {
+                return Ok(gate_busy(action));
+            };
+            Some(permit)
+        };
         let cached = cached_native_receipt(
             action
                 .status
@@ -336,22 +466,8 @@ pub async fn reconcile(
                     && clean
                     && !custody_pending
                     && super::workspace_bridge::controlled_start(action, cell).is_none()
-                    && is_exec_directory(&reference.directory)
                 {
-                    let _ = exec(
-                        &pods,
-                        &reference.pod,
-                        &reference.container,
-                        vec![
-                            "/bin/sh".into(),
-                            "-c".into(),
-                            "rm -rf -- \"$1\"".into(),
-                            "proofstorm-exec".into(),
-                            reference.directory.clone(),
-                        ],
-                        None,
-                    )
-                    .await;
+                    remove_directory(&pods, reference).await;
                 }
                 return Ok(Action::await_change());
             }
@@ -367,7 +483,7 @@ pub async fn reconcile(
         if now_unix() > started + i64::from(request.timeout_seconds) + 30 {
             return patch_action_failure(action, context, "native_receipt_unavailable", "no terminal supervisor receipt; process and mutation outcome are unknown; command was not replayed").await;
         }
-        return Ok(Action::requeue(Duration::from_secs(1)));
+        return Ok(Action::requeue(poll_interval(now_unix() - started)));
     }
     // Legacy in-flight raw execs must retain their non-replay fence on upgrade.
     if action
@@ -384,6 +500,16 @@ pub async fn reconcile(
         )
         .await;
     }
+    // A start holds one of its component's start places and a start permit.
+    let Some(_component) = context.native.start_component(&format!(
+        "{}/{}",
+        action.spec.instance_key, request.component
+    )) else {
+        return Ok(gate_busy(action));
+    };
+    let Ok(_start) = context.native.starts.try_acquire() else {
+        return Ok(gate_busy(action));
+    };
     let selector = format!(
         "{COMPONENT_LABEL}={},{INSTANCE_LABEL}={}",
         request.component, action.spec.instance_key
@@ -438,12 +564,15 @@ pub async fn reconcile(
             .unwrap_or_else(|_| "/usr/local/lib/proofstorm-exec".into()),
     )
     .map_err(|_| Error::LiveExec("native supervisor binary unavailable".into()))?;
-    let install = "set -eu; umask 077; dir=$(mktemp -d /tmp/proofstorm-exec.XXXXXXXX); cat > \"$dir/runner\"; chmod 700 \"$dir/runner\"; printf '%s' \"$dir\"";
     let directory = exec(
         &pods,
         &pod.name_any(),
         &container,
-        vec!["/bin/sh".into(), "-c".into(), install.into()],
+        vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            install_script("/tmp", binary.len()),
+        ],
         Some(&binary),
     )
     .await?;
@@ -472,7 +601,8 @@ pub async fn reconcile(
     // A conditional status write is the global start fence. Overlapping
     // controllers or a concurrent cancellation invalidate a stale start claim.
     // No command is launched unless this exact observed version wins the claim.
-    actions
+    // A lost claim leaves this attempt's directory unreferenced, so remove it.
+    if let Err(error) = actions
         .patch_status(
             &action.name_any(),
             &PatchParams::default(),
@@ -488,8 +618,13 @@ pub async fn reconcile(
                 }
             })),
         )
-        .await?;
+        .await
+    {
+        remove_directory(&pods, &reference).await;
+        return Err(error.into());
+    }
     let Ok(private_input) = super::private_transfer::start(action, context).await else {
+        remove_directory(&pods, &reference).await;
         return patch_action_failure(
             action,
             context,
@@ -536,6 +671,104 @@ pub async fn reconcile(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn polls_and_starts_cannot_starve_each_other_or_the_controller() {
+        // Both pools full still leaves controller slots for other actions.
+        assert!(
+            NATIVE_POLL_CONCURRENCY + NATIVE_START_CONCURRENCY
+                < usize::from(super::super::ACTION_CONTROLLER_CONCURRENCY)
+        );
+        let gate = Gate::default();
+        let polls = (0..NATIVE_POLL_CONCURRENCY)
+            .map(|_| gate.polls.try_acquire().unwrap())
+            .collect::<Vec<_>>();
+        assert!(gate.polls.try_acquire().is_err());
+        // A full poll pool doesn't block starts, and the reverse.
+        let starts = (0..NATIVE_START_CONCURRENCY)
+            .map(|_| gate.starts.try_acquire().unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            gate.starts.try_acquire().is_err(),
+            "a fifth concurrent start waits"
+        );
+        drop((polls, starts));
+        assert_eq!(gate.polls.available_permits(), NATIVE_POLL_CONCURRENCY);
+        assert_eq!(gate.starts.available_permits(), NATIVE_START_CONCURRENCY);
+    }
+
+    #[test]
+    fn a_hung_component_holds_only_its_own_start_places() {
+        let gate = Gate::default();
+        let hung = (0..NATIVE_STARTS_PER_COMPONENT)
+            .map(|_| gate.start_component("i1/chain").unwrap())
+            .collect::<Vec<_>>();
+        assert!(gate.start_component("i1/chain").is_none());
+        // Other components, and the same name in another cell, still start.
+        let other = gate.start_component("i1/wallet").unwrap();
+        let elsewhere = gate.start_component("i2/chain").unwrap();
+        drop((other, elsewhere));
+        drop(hung);
+        assert!(
+            gate.components.lock().unwrap().is_empty(),
+            "places are released"
+        );
+        assert!(gate.start_component("i1/chain").is_some());
+    }
+
+    #[test]
+    fn receipt_polls_slow_down_while_a_command_runs() {
+        let schedule = [0, 9, 10, 59, 60, 3600].map(|elapsed| poll_interval(elapsed).as_secs());
+        assert_eq!(schedule, [1, 1, 2, 2, 5, 5]);
+        // A clock step backwards still polls promptly.
+        assert_eq!(poll_interval(-30), Duration::from_secs(1));
+    }
+
+    fn install(base: &str, input: &[u8], expected_bytes: usize) -> std::process::Output {
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(install_script(base, expected_bytes))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    #[test]
+    fn an_incomplete_runner_upload_leaves_no_directory_behind() {
+        let base =
+            std::env::temp_dir().join(format!("proofstorm-install-test-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let base_path = base.to_str().unwrap();
+        let runner = b"#!/bin/sh\nexit 0\n";
+
+        let complete = install(base_path, runner, runner.len());
+        assert!(complete.status.success(), "{complete:?}");
+        let directory = String::from_utf8(complete.stdout).unwrap();
+        assert!(directory.starts_with(&format!("{base_path}/proofstorm-exec.")));
+        assert_eq!(
+            std::fs::read(format!("{directory}/runner")).unwrap(),
+            runner
+        );
+        std::fs::remove_dir_all(&directory).unwrap();
+
+        // The transport timed out mid-stream: fewer bytes arrived than were sent.
+        let short = install(base_path, &runner[..5], runner.len());
+        assert_eq!(short.status.code(), Some(65));
+        assert!(short.stdout.is_empty());
+        assert_eq!(
+            std::fs::read_dir(&base).unwrap().count(),
+            0,
+            "partial runner left behind"
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
     #[test]
     fn only_a_single_mktemp_directory_is_removable() {
         assert!(is_exec_directory("/tmp/proofstorm-exec.Ab12Cd34"));

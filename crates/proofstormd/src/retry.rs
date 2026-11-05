@@ -14,6 +14,7 @@ use std::{
 };
 
 use kube::{Resource, ResourceExt, runtime::reflector::ObjectRef};
+use proofstorm_kube::{ACTION_CANCEL_ANNOTATION, CANDIDATE_CANCEL_ANNOTATION};
 
 pub(crate) const INITIAL_DELAY: Duration = Duration::from_secs(1);
 pub(crate) const MAXIMUM_DELAY: Duration = Duration::from_secs(60);
@@ -74,18 +75,24 @@ impl Backoff {
 }
 
 /// Stable object identity and the spec fingerprint that resets its backoff:
-/// generation, the cell desired-generation annotation, and deletion.
+/// generation, the cell desired-generation annotation, a cancel request, and
+/// deletion. A cancel is metadata, so it doesn't bump the generation; without it
+/// here, a cancel sent while an action backs off waited up to a minute unseen.
 pub(crate) fn identity<K>(object: &K) -> (String, String)
 where
     K: Resource<DynamicType = ()>,
 {
+    let cancel_requested = [ACTION_CANCEL_ANNOTATION, CANDIDATE_CANCEL_ANNOTATION]
+        .iter()
+        .any(|key| object.annotations().contains_key(*key));
     let fingerprint = format!(
-        "{}:{}:{}",
+        "{}:{}:{}:{}",
         object.meta().generation.unwrap_or_default(),
         object
             .annotations()
             .get("proofstorm.dev/desired-generation")
             .map_or("", String::as_str),
+        cancel_requested,
         object.meta().deletion_timestamp.is_some()
     );
     (ObjectRef::from_obj(object).to_string(), fingerprint)
@@ -133,5 +140,37 @@ mod tests {
         backoff.succeeded("cell");
         assert_eq!(backoff.remaining("cell", "g2", later), None);
         assert_eq!(backoff.failed("cell", "g2", later), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_cancel_request_skips_the_remaining_backoff() {
+        use k8s_openapi::api::core::v1::ConfigMap;
+        let mut object = ConfigMap::default();
+        object.metadata.name = Some("op".into());
+        object.metadata.namespace = Some("proofstorm-system".into());
+        object.metadata.generation = Some(1);
+        let backoff = Backoff::default();
+        let start = Instant::now();
+        let (key, before) = identity(&object);
+        backoff.failed(&key, &before, start);
+        backoff.failed(&key, &before, start);
+        assert!(backoff.remaining(&key, &before, start).is_some());
+
+        for annotation in [ACTION_CANCEL_ANNOTATION, CANDIDATE_CANCEL_ANNOTATION] {
+            let mut cancelled = object.clone();
+            cancelled
+                .annotations_mut()
+                .insert(annotation.into(), "token".into());
+            let (same_key, after) = identity(&cancelled);
+            assert_eq!(same_key, key);
+            assert_ne!(after, before, "{annotation} must change the fingerprint");
+            assert_eq!(backoff.remaining(&key, &after, start), None);
+        }
+        // Unrelated metadata keeps the object backing off.
+        let mut labelled = object;
+        labelled
+            .annotations_mut()
+            .insert("example.com/note".into(), "x".into());
+        assert_eq!(identity(&labelled).1, before);
     }
 }
