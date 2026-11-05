@@ -82,11 +82,12 @@ fn native_failure(content: &Value) -> Value {
 
 /// Terminal failure codes the daemon assigns from a closed set. Anything else
 /// is a code this build does not know and is dropped rather than republished.
-const OPERATION_CODES: [&str; 8] = [
+const OPERATION_CODES: [&str; 9] = [
     "action_cancelled",
     "action_deadline_exceeded",
     "action_failed",
     "action_job_lost",
+    "action_not_started",
     "action_runtime_not_found",
     "container_failed",
     "terminal_artifact_missing",
@@ -127,6 +128,7 @@ fn operation_failure(content: &Value) -> Value {
         "container_failed" => "operation-container-failed",
         "action_deadline_exceeded" => "operation-deadline-exceeded",
         "action_job_lost" | "action_runtime_not_found" => "operation-runtime-lost",
+        "action_not_started" => "operation-not-started",
         _ => "operation-failed",
     };
     json!({
@@ -532,6 +534,7 @@ mod tests {
             ("action_deadline_exceeded", "operation-deadline-exceeded"),
             ("action_job_lost", "operation-runtime-lost"),
             ("action_runtime_not_found", "operation-runtime-lost"),
+            ("action_not_started", "operation-not-started"),
             ("action_failed", "operation-failed"),
             ("private-secret", "operation-failed"),
         ] {

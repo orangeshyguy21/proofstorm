@@ -108,6 +108,7 @@ fn context(cluster: &Arc<Mutex<Cluster>>) -> Context {
         probes: crate::probes::Manager::new(client.clone(), "fixture".into()).0,
         client,
         retries: std::sync::Arc::default(),
+        native: std::sync::Arc::default(),
     }
 }
 

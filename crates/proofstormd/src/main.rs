@@ -4,6 +4,8 @@ mod component_lifecycle;
 mod probes;
 mod retry;
 #[cfg(test)]
+mod start_deadline_tests;
+#[cfg(test)]
 use component_lifecycle::same_lifecycle_identity;
 mod cell_updates;
 mod component_logs;
@@ -65,12 +67,19 @@ const CELL_CONTROLLER_CONCURRENCY: u16 = 8;
 const ACTION_CONTROLLER_CONCURRENCY: u16 = 16;
 const MAX_ACTION_STATUS_BYTES: usize = 64 * 1024;
 
+/// A one-off action that hasn't started this long after acceptance fails
+/// instead of starting. By then its caller has usually given up, and a late
+/// start would run, say, a payment hours after anyone expected it (PS-44).
+const ACTION_START_DEADLINE_SECONDS: i64 = 120;
+
 #[derive(Clone)]
 struct Context {
     client: Client,
     probes: Arc<probes::Manager>,
     /// Shared by every controller; keyed by object reference.
     retries: Arc<retry::Backoff>,
+    /// Caps native exec work so it can't take every action-controller slot.
+    native: Arc<native_exec::Gate>,
 }
 
 #[derive(Debug, Error)]
@@ -141,6 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         client,
         probes,
         retries: Arc::default(),
+        native: Arc::default(),
     });
     let trigger_stream = futures::stream::unfold(triggers, |mut receive| async {
         receive.recv().await.map(|object| (object, receive))
@@ -584,6 +594,11 @@ async fn reconcile_action(
         }
         return reconcile_action_cancellation(action.as_ref(), &context).await;
     }
+    if start_deadline_passed(action.as_ref(), now_unix())
+        && let Some(next) = expire_unstarted_action(action.as_ref(), &context).await?
+    {
+        return Ok(next);
+    }
     let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &control_namespace);
     let cell = cells.get(&action.spec.cell_name).await?;
     if action
@@ -678,7 +693,12 @@ async fn reconcile_action(
         return private_transfer::reconcile(action.as_ref(), &context).await;
     }
     if matches!(action.spec.action, CellAction::ComponentExecLive(_)) {
-        return reconcile_component_exec_live(action.as_ref(), &cell, &context).await;
+        return Box::pin(reconcile_component_exec_live(
+            action.as_ref(),
+            &cell,
+            &context,
+        ))
+        .await;
     }
     let mut job = match render_cell_action_job(action.as_ref(), &cell) {
         Ok(job) => job,
@@ -1307,6 +1327,90 @@ async fn expire_finished_action(
     {
         Ok(_) => Ok(Action::await_change()),
         Err(kube::Error::Api(error)) if error.code == 404 => Ok(Action::await_change()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Whether an action that never started is past its start deadline. Only the
+/// one-off reads and commands a caller waits on qualify. Component controls,
+/// network faults and private transfers keep their own lifecycles.
+///
+/// The clock starts at the later of host acceptance and the API server's
+/// creation time. An upload, or an idempotent retry of an old request, can
+/// create the action well after acceptance. The creation time is also on the
+/// controller's own clock.
+fn start_deadline_passed(action: &ProofstormCellAction, now_unix: i64) -> bool {
+    let one_off = matches!(
+        action.spec.action,
+        CellAction::ComponentExecLive(_)
+            | CellAction::ComponentLogs(_)
+            | CellAction::ComponentForensics(_)
+            | CellAction::ReachabilityOracle(_)
+            | CellAction::AuthenticationConformance(_)
+            | CellAction::AuthenticationProtectedSpend(_)
+            | CellAction::AuthenticationReplay(_)
+    );
+    let created = action
+        .metadata
+        .creation_timestamp
+        .as_ref()
+        .map_or(i64::MIN, |time| time.0.as_second());
+    one_off
+        && !action_execution_started(action.status.as_ref())
+        && now_unix > action.spec.accepted_at_unix.max(created) + ACTION_START_DEADLINE_SECONDS
+}
+
+/// Fail an action whose start deadline passed, unless it may in fact have
+/// started. Returns `None` when the action must reconcile normally instead.
+///
+/// - A Job-backed action whose Job exists has started even if its status write
+///   was lost, so the normal path observes the Job.
+/// - The failure is fenced on the observed resource version, like the native
+///   start claim. A reconcile reading a stale cache must not overwrite a start
+///   it hasn't seen yet.
+async fn expire_unstarted_action(
+    action: &ProofstormCellAction,
+    context: &Context,
+) -> Result<Option<Action>, Error> {
+    let jobs = Api::<Job>::namespaced(
+        context.client.clone(),
+        &instance_namespace(&action.spec.instance_key),
+    );
+    if jobs.get_opt(&action.name_any()).await?.is_some() {
+        return Ok(None);
+    }
+    let Some(version) = action.resource_version() else {
+        return Ok(None);
+    };
+    let namespace = action
+        .namespace()
+        .ok_or_else(|| Error::MissingNamespace(action.name_any()))?;
+    let status = ProofstormCellActionStatus {
+        phase: ActionPhase::Failed,
+        observed_generation: action.metadata.generation,
+        completed_at_unix: Some(now_unix()),
+        error: Some(status_object(serde_json::json!({
+            "code": "action_not_started",
+            "message": format!("the runtime could not start this operation within {ACTION_START_DEADLINE_SECONDS} seconds of acceptance; nothing was run; submit a new operation if it is still wanted"),
+        }))),
+        ..ProofstormCellActionStatus::default()
+    };
+    match Api::<ProofstormCellAction>::namespaced(context.client.clone(), &namespace)
+        .patch_status(
+            &action.name_any(),
+            &PatchParams::default(),
+            &Patch::Merge(serde_json::json!({
+                "metadata": {"resourceVersion": version},
+                "status": status,
+            })),
+        )
+        .await
+    {
+        Ok(_) => Ok(Some(Action::await_change())),
+        // The action changed since this reconcile read it: look again.
+        Err(kube::Error::Api(error)) if error.code == 409 => {
+            Ok(Some(Action::requeue(Duration::from_secs(1))))
+        }
         Err(error) => Err(error.into()),
     }
 }
