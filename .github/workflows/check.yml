@@ -154,9 +154,12 @@ jobs:
       - name: Upload checked bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: proofstorm-linux-amd64-${{ github.sha }}-${{ github.run_attempt }}
+          # No attempt number: promotion and re-run jobs find it after a
+          # partial re-run, and a re-run of this job replaces it.
+          name: proofstorm-linux-amd64-${{ github.sha }}
           path: ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/bundle/
           if-no-files-found: error
+          overwrite: true
           compression-level: 0
           retention-days: 14
       - name: Save build and installer diagnostics
@@ -218,9 +221,10 @@ jobs:
       - name: Pass only the verified controller receipt to Mac
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: proofstorm-controller-arm64-${{ github.sha }}-${{ github.run_attempt }}
+          name: proofstorm-controller-arm64-${{ github.sha }}
           path: ${{ runner.temp }}/${{ env.CONTROLLER_WORK_NAME }}/controller.json
           if-no-files-found: error
+          overwrite: true
           retention-days: 14
       - name: Save ARM64 controller diagnostics
         if: always()
@@ -256,16 +260,17 @@ jobs:
           just web-tools
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: proofstorm-controller-arm64-${{ github.sha }}-${{ github.run_attempt }}
+          name: proofstorm-controller-arm64-${{ github.sha }}
           path: ${{ runner.temp }}/proofstorm-controller-input
       - name: Build Mac bundle and verify isolated installation
         run: just release-ci-macos --work-dir "$RUNNER_TEMP/$BUNDLE_WORK_NAME" --controller-receipt "$RUNNER_TEMP/proofstorm-controller-input/controller.json"
       - name: Upload checked Mac bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: proofstorm-macos-arm64-${{ github.sha }}-${{ github.run_attempt }}
+          name: proofstorm-macos-arm64-${{ github.sha }}
           path: ${{ runner.temp }}/${{ env.BUNDLE_WORK_NAME }}/bundle/
           if-no-files-found: error
+          overwrite: true
           compression-level: 0
           retention-days: 14
       - name: Save Mac build and installer diagnostics

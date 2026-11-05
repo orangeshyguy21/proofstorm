@@ -75,11 +75,14 @@ fn run_plan(metadata: &Path, repo: &str, id: &str, tag: &str) -> Result<Vec<Stri
         "invalid source commit"
     );
     let attempt = positive(&run, "run_attempt")?;
+    // Bundle names carry no attempt: after a re-run of failed jobs, a bundle
+    // whose job passed earlier in this run is still the tested one. The jobs
+    // check reads the latest attempt, which lists those carried-over jobs.
     Ok(vec![
         sha.into(),
         attempt.to_string(),
-        format!("proofstorm-linux-amd64-{sha}-{attempt}"),
-        format!("proofstorm-macos-arm64-{sha}-{attempt}"),
+        format!("proofstorm-linux-amd64-{sha}"),
+        format!("proofstorm-macos-arm64-{sha}"),
     ])
 }
 

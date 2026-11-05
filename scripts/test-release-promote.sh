@@ -30,7 +30,7 @@ case "$2" in
     attempt=2
     if [[ ${PROMOTE_TEST_FAIL:-none} == changed-run && -f "$3/run-seen" ]]; then attempt=3; fi
     touch "$3/run-seen"
-    printf '%s\0' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$attempt" "proofstorm-linux-amd64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-$attempt" "proofstorm-macos-arm64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-$attempt" ;;
+    printf '%s\0' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$attempt" "proofstorm-linux-amd64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "proofstorm-macos-arm64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ;;
   evidence)
     echo 123
     if [[ ${PROMOTE_TEST_FAIL:-none} == changed-artifact && -f "$3/artifact-seen" ]]; then echo 125; else echo 124; fi
@@ -97,8 +97,8 @@ case "$action" in
   run)
     [[ "$1" == download && "$2" == 42 && "$3" == --repo && "$4" == owner/proofstorm && "$5" == --name && "$7" == --dir ]] || exit 97
     case "$6" in
-      proofstorm-linux-amd64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-2) target=linux-amd64 ;;
-      proofstorm-macos-arm64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-2) target=macos-arm64; [[ ${PROMOTE_TEST_FAIL:-none} != mac-download ]] || exit 26 ;;
+      proofstorm-linux-amd64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) target=linux-amd64 ;;
+      proofstorm-macos-arm64-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) target=macos-arm64; [[ ${PROMOTE_TEST_FAIL:-none} != mac-download ]] || exit 26 ;;
       *) exit 97 ;;
     esac
     printf 'download-candidate\n' >> "$PROMOTE_TEST_TRACE"
