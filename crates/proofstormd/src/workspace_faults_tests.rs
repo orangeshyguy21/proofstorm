@@ -110,6 +110,7 @@ fn context(cluster: &Arc<Mutex<Cluster>>) -> Context {
         retries: std::sync::Arc::default(),
         native: std::sync::Arc::default(),
         limits: proofstorm_core::ControllerLimits::default(),
+        cells: kube::runtime::reflector::store().0,
     }
 }
 

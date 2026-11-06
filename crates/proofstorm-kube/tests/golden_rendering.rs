@@ -2461,3 +2461,65 @@ fn nutshell_native_env_reaches_the_mint_environment() {
         "{refused}"
     );
 }
+
+/// Scale timing, run by hand: `cargo test -p proofstorm-kube --release --test
+/// golden_rendering scale_timing -- --ignored --nocapture`. One chain plus N
+/// Lightning nodes linked to it; prints compile and render time per size.
+#[test]
+#[ignore = "timing report, run by hand"]
+fn scale_timing_of_plan_compile_and_render() {
+    let one = {
+        let spec = cell(
+            "scale",
+            vec![
+                component(
+                    "chain",
+                    ComponentKind::Bitcoin,
+                    "bitcoin-core",
+                    ControlClass::Cell,
+                ),
+                component("ln-0", ComponentKind::Lightning, "lnd", ControlClass::Cell),
+            ],
+            vec![chain_link("ln-0", "chain")],
+        );
+        resolve_lock(&spec, default_catalog()).unwrap()
+    };
+    for size in [100_usize, 500, 1000, 2000] {
+        let mut components = vec![component(
+            "chain",
+            ComponentKind::Bitcoin,
+            "bitcoin-core",
+            ControlClass::Cell,
+        )];
+        let mut links = Vec::new();
+        for index in 0..size {
+            let id = format!("ln-{index}");
+            components.push(component(
+                &id,
+                ComponentKind::Lightning,
+                "lnd",
+                ControlClass::Cell,
+            ));
+            links.push(chain_link(&id, "chain"));
+        }
+        let spec = cell("scale", components, links);
+        let started = std::time::Instant::now();
+        let lock = resolve_lock(&spec, default_catalog()).unwrap();
+        let locked = started.elapsed();
+        let started = std::time::Instant::now();
+        let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+        let compiled = started.elapsed();
+        let started = std::time::Instant::now();
+        let rendered = render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+        let render = started.elapsed();
+        let _ = &one;
+        println!(
+            "{size:>5} components: lock {:>8.1?}  compile {:>8.1?}  render {:>8.1?}  ({} plans, {} statefulsets)",
+            locked,
+            compiled,
+            render,
+            plans.len(),
+            rendered.stateful_sets.len()
+        );
+    }
+}

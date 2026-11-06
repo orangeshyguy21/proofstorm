@@ -35,6 +35,11 @@ use tokio::{
 
 type Namespaced<K> = BTreeMap<String, BTreeMap<String, K>>;
 
+/// A cell whose spec and annotations haven't changed is re-applied this often,
+/// only to repair drift. Changes apply at once, and then only the documents
+/// that changed are sent, so this pass is the only one that scales with size.
+pub(super) const RESYNC_SECONDS: u64 = 600;
+
 #[derive(Clone)]
 pub(super) struct Applied {
     pub signature: String,
@@ -43,6 +48,8 @@ pub(super) struct Applied {
     pub inventory: Vec<InventoryEntry>,
     pub retained_storage: BTreeMap<String, String>,
     pub pruned: bool,
+    /// Digest of each document this pass sent, keyed by `Kind/name`.
+    pub documents: Arc<BTreeMap<String, String>>,
 }
 
 #[derive(Default, Clone)]
@@ -404,9 +411,21 @@ impl Manager {
             .filter(|applied| {
                 applied.signature == signature(cell)
                     && applied.at.elapsed()
-                        < Duration::from_secs(if applied.pruned { 30 } else { 3 })
+                        < Duration::from_secs(if applied.pruned { RESYNC_SECONDS } else { 3 })
             })
             .cloned()
+    }
+
+    /// The last completed apply of this exact cell, however old.
+    pub fn last_applied(&self, cell: &ProofstormCell) -> Option<Applied> {
+        self.state
+            .lock()
+            .expect("prober state lock")
+            .cells
+            .get(&cell.spec.instance_key)
+            .filter(|binding| Some(&binding.uid) == cell.metadata.uid.as_ref())?
+            .applied
+            .clone()
     }
 
     pub fn snapshot(&self, key: &str) -> Resources {

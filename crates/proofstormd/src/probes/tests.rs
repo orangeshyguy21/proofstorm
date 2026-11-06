@@ -249,6 +249,7 @@ async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_
             inventory: vec![],
             retained_storage: BTreeMap::new(),
             pruned: true,
+            documents: Arc::default(),
         },
     );
     let context = Arc::new(crate::Context {
@@ -257,6 +258,7 @@ async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_
         retries: Arc::default(),
         native: Arc::default(),
         limits: proofstorm_core::ControllerLimits::default(),
+        cells: kube::runtime::reflector::store().0,
     });
     crate::reconcile(Arc::new(cell.clone()), context.clone())
         .await

@@ -167,6 +167,7 @@ fn fixture(
         retries: std::sync::Arc::default(),
         native: std::sync::Arc::default(),
         limits: proofstorm_core::ControllerLimits::default(),
+        cells: kube::runtime::reflector::store().0,
     };
     (
         rendered
@@ -280,6 +281,7 @@ async fn interrupted_stops_wait_for_pods_and_never_delete_storage() {
                 retries: std::sync::Arc::default(),
                 native: std::sync::Arc::default(),
                 limits: proofstorm_core::ControllerLimits::default(),
+                cells: kube::runtime::reflector::store().0,
             },
             Control::Stop,
         )

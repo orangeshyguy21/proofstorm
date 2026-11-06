@@ -76,6 +76,28 @@ struct Context {
     native: Arc<native_exec::Gate>,
     /// Slot counts and the start deadline, from `runtime.toml` via the chart.
     limits: proofstorm_core::ControllerLimits,
+    /// The cell controller's watch cache, so actions don't fetch whole cells.
+    cells: kube::runtime::reflector::Store<ProofstormCell>,
+}
+
+/// An action's cell from the watch cache, or from the API before the cache has
+/// it. Actions bind to their own revision through `cell_updates::action_cell`,
+/// so a cache entry that lags an edit is resolved there.
+async fn action_cell_source(
+    action: &ProofstormCellAction,
+    namespace: &str,
+    context: &Context,
+) -> Result<ProofstormCell, Error> {
+    let reference =
+        kube::runtime::reflector::ObjectRef::new(&action.spec.cell_name).within(namespace);
+    if let Some(cell) = context.cells.get(&reference) {
+        return Ok((*cell).clone());
+    }
+    Ok(
+        Api::<ProofstormCell>::namespaced(context.client.clone(), namespace)
+            .get(&action.spec.cell_name)
+            .await?,
+    )
 }
 
 #[derive(Debug, Error)]
@@ -143,17 +165,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "PROOFSTORM_PROBER_IMAGE must name the installed controller image")?;
     let (probes, triggers) = probes::Manager::new(client.clone(), image);
     let limits = proofstorm_core::ControllerLimits::from_env(|name| std::env::var(name).ok())?;
+    let cell_watch = Controller::new(cells, watcher::Config::default());
     let context = Arc::new(Context {
         client,
         probes,
         retries: Arc::default(),
         native: Arc::new(native_exec::Gate::new(&limits)),
         limits,
+        cells: cell_watch.store(),
     });
     let trigger_stream = futures::stream::unfold(triggers, |mut receive| async {
         receive.recv().await.map(|object| (object, receive))
     });
-    let cell_controller = Controller::new(cells, watcher::Config::default())
+    let cell_controller = cell_watch
         .reconcile_on(trigger_stream)
         .with_config(
             kube::runtime::controller::Config::default().concurrency(CELL_CONTROLLER_CONCURRENCY),
@@ -583,9 +607,7 @@ async fn reconcile_action(
                 .as_ref()
                 .is_some_and(|status| status.native_execution.is_some())
         {
-            let cells =
-                Api::<ProofstormCell>::namespaced(context.client.clone(), &control_namespace);
-            let cell = cells.get(&action.spec.cell_name).await?;
+            let cell = action_cell_source(&action, &control_namespace, &context).await?;
             return Box::pin(native_exec::reconcile(action.as_ref(), &cell, &context)).await;
         }
         return reconcile_action_cancellation(action.as_ref(), &context).await;
@@ -598,8 +620,7 @@ async fn reconcile_action(
     {
         return Ok(next);
     }
-    let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &control_namespace);
-    let cell = cells.get(&action.spec.cell_name).await?;
+    let cell = action_cell_source(&action, &control_namespace, &context).await?;
     if action
         .annotations()
         .contains_key(workspace_bridge::PARENT_ANNOTATION)
@@ -1677,6 +1698,11 @@ fn reconciliation_failure_status(
 async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, Error> {
     validate_instance_key(&cell.spec.instance_key)?;
     private_transfer::expire(&cell)?;
+    let previous = skippable(
+        context.probes.last_applied(&cell),
+        &probes::signature(&cell),
+    );
+    let mut documents = BTreeMap::new();
     let mut workloads = render_cell(
         &cell.spec.instance_key,
         &cell.spec.revision_digest,
@@ -1785,6 +1811,9 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
             .as_ref()
             .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"))
             .map(String::as_str);
+        if unchanged(&mut documents, &previous, "Secret", resource) {
+            continue;
+        }
         match secret_kind {
             Some("bark-processor" | "open-ssp" | "spark-processor") => {
                 let claims =
@@ -1804,6 +1833,9 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     }
     let configs = Api::<ConfigMap>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.config_maps {
+        if unchanged(&mut documents, &previous, "ConfigMap", resource) {
+            continue;
+        }
         configs
             .patch(
                 resource.metadata.name.as_deref().unwrap_or_default(),
@@ -1814,6 +1846,9 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     }
     let services = Api::<Service>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.services {
+        if unchanged(&mut documents, &previous, "Service", resource) {
+            continue;
+        }
         services
             .patch(
                 resource.metadata.name.as_deref().unwrap_or_default(),
@@ -1824,6 +1859,9 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     }
     let claims = Api::<PersistentVolumeClaim>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.persistent_volume_claims {
+        if unchanged(&mut documents, &previous, "PersistentVolumeClaim", resource) {
+            continue;
+        }
         claims
             .patch(
                 resource.metadata.name.as_deref().unwrap_or_default(),
@@ -1834,6 +1872,9 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     }
     let stateful_sets = Api::<StatefulSet>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.stateful_sets {
+        if unchanged(&mut documents, &previous, "StatefulSet", resource) {
+            continue;
+        }
         let resource = component_lifecycle::preserve(&stateful_sets, resource).await?;
         stateful_sets
             .patch(
@@ -1845,6 +1886,9 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     }
     let deployments = Api::<Deployment>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.deployments {
+        if unchanged(&mut documents, &previous, "Deployment", resource) {
+            continue;
+        }
         let name = resource.metadata.name.as_deref().unwrap_or_default();
         clear_rolling_update_strategy(&deployments, resource).await?;
         let resource = component_lifecycle::preserve(&deployments, resource).await?;
@@ -1865,6 +1909,9 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
             .iter()
             .any(|component| resource.metadata.name.as_deref() == Some(&component.id))
         {
+            continue;
+        }
+        if unchanged(&mut documents, &previous, "NetworkPolicy", resource) {
             continue;
         }
         policies
@@ -1889,7 +1936,12 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
         "data": {"inventory.json": serde_json::to_string(&inventory).expect("inventory serializes"),
             "inventoryDigest": inventory_digest}
     });
-    if let Some(old) = configs.get_opt(&inventory_name).await?
+    let inventory_key = format!("Inventory/{inventory_name}");
+    let inventory_document = proofstorm_core::digest_json(&inventory_resource);
+    let inventory_unchanged = previous.get(&inventory_key) == Some(&inventory_document);
+    documents.insert(inventory_key, inventory_document);
+    if !inventory_unchanged
+        && let Some(old) = configs.get_opt(&inventory_name).await?
         && old.immutable == Some(true)
         && old.labels().get("proofstorm.dev/instance") == Some(&cell.spec.instance_key)
     {
@@ -1906,9 +1958,11 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
             )
             .await?;
     }
-    configs
-        .patch(&inventory_name, &patch, &Patch::Apply(inventory_resource))
-        .await?;
+    if !inventory_unchanged {
+        configs
+            .patch(&inventory_name, &patch, &Patch::Apply(inventory_resource))
+            .await?;
+    }
 
     let applied = probes::Applied {
         signature: probes::signature(&cell),
@@ -1917,11 +1971,36 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
         inventory,
         retained_storage,
         pruned,
+        documents: Arc::new(documents),
     };
     context
         .probes
         .remember_applied(&cell.spec.instance_key, applied.clone());
     observe_cell(cell, context, &applied).await
+}
+
+/// The documents this apply may skip when unchanged. After a change, or while
+/// a prune is still finishing, only changed documents are sent. The periodic
+/// pass for an unchanged, fully pruned cell repairs drift, so it sends them all.
+fn skippable(last: Option<probes::Applied>, signature: &str) -> Arc<BTreeMap<String, String>> {
+    last.filter(|applied| applied.signature != signature || !applied.pruned)
+        .map(|applied| applied.documents)
+        .unwrap_or_default()
+}
+
+/// Record `resource`'s digest and report whether the previous apply sent the
+/// same document, so this pass can skip it.
+fn unchanged(
+    documents: &mut BTreeMap<String, String>,
+    previous: &BTreeMap<String, String>,
+    kind: &str,
+    resource: &(impl serde::Serialize + ResourceExt),
+) -> bool {
+    let key = format!("{kind}/{}", resource.name_any());
+    let digest = proofstorm_core::digest_json(resource);
+    let same = previous.get(&key) == Some(&digest);
+    documents.insert(key, digest);
+    same
 }
 
 async fn observe_cell(
@@ -3525,6 +3604,48 @@ mod tests {
         assert!(!pod_belongs_to_instance(&pod, "demo"));
         pod.metadata.labels = None;
         assert!(!pod_belongs_to_instance(&pod, "demo"));
+    }
+
+    #[test]
+    fn applies_send_only_changed_documents_except_the_drift_pass() {
+        let applied = |signature: &str, pruned: bool| probes::Applied {
+            signature: signature.into(),
+            at: std::time::Instant::now(),
+            plans: Arc::default(),
+            inventory: Vec::new(),
+            retained_storage: BTreeMap::new(),
+            pruned,
+            documents: Arc::new(BTreeMap::from([("ConfigMap/a".into(), "d".into())])),
+        };
+        // A changed cell, or a prune still finishing, skips what didn't change.
+        assert_eq!(skippable(Some(applied("old", true)), "new").len(), 1);
+        assert_eq!(skippable(Some(applied("same", false)), "same").len(), 1);
+        // The periodic pass over an unchanged cell, and a first apply, send everything.
+        assert!(skippable(Some(applied("same", true)), "same").is_empty());
+        assert!(skippable(None, "same").is_empty());
+
+        let mut config: ConfigMap = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "a"}, "data": {"k": "v"}
+        }))
+        .unwrap();
+        let mut sent = BTreeMap::new();
+        assert!(!unchanged(
+            &mut sent,
+            &BTreeMap::new(),
+            "ConfigMap",
+            &config
+        ));
+        let mut next = BTreeMap::new();
+        assert!(unchanged(&mut next, &sent, "ConfigMap", &config));
+        config.data = Some(BTreeMap::from([("k".into(), "changed".into())]));
+        assert!(!unchanged(
+            &mut BTreeMap::new(),
+            &sent,
+            "ConfigMap",
+            &config
+        ));
+        // The same name under another kind is a different document.
+        assert!(!unchanged(&mut BTreeMap::new(), &sent, "Service", &config));
     }
 
     #[test]

@@ -182,6 +182,7 @@ fn fixture() -> (ProofstormCellAction, Arc<Mutex<Cluster>>, Context, Mailbox) {
         retries: std::sync::Arc::default(),
         native: std::sync::Arc::default(),
         limits: proofstorm_core::ControllerLimits::default(),
+        cells: kube::runtime::reflector::store().0,
     };
     (parent, cluster, context, mailbox)
 }

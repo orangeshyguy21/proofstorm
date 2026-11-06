@@ -197,6 +197,7 @@ fn context(client: kube::Client) -> Arc<Context> {
         retries: Arc::default(),
         native: Arc::default(),
         limits: proofstorm_core::ControllerLimits::default(),
+        cells: kube::runtime::reflector::store().0,
     })
 }
 
