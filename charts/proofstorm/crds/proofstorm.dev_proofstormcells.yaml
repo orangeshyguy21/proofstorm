@@ -41,7 +41,9 @@ spec:
             nullable: true
             properties:
               components:
-                default: []
+                description: |-
+                  Assembled in memory from the cell's `ProofstormComponent` objects; never
+                  stored on the cell (see `assemble_component_statuses`).
                 items:
                   properties:
                     conditions:
@@ -228,6 +230,23 @@ spec:
                 - Closing
                 - CleanupBlocked
                 type: string
+              protocolFreshness:
+                description: |-
+                  The oldest protocol observation across the cell's components. Component
+                  objects are written only when their state changes; this heartbeat keeps
+                  their protocol evidence fresh while the prober keeps confirming it.
+                nullable: true
+                properties:
+                  expiresAtUnix:
+                    format: int64
+                    type: integer
+                  observedAtUnix:
+                    format: int64
+                    type: integer
+                required:
+                - expiresAtUnix
+                - observedAtUnix
+                type: object
               retainedStorage:
                 additionalProperties:
                   type: string

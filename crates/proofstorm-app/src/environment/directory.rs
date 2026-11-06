@@ -51,7 +51,8 @@ impl Cells {
         query: &EnvironmentReadQuery,
     ) -> Result<(Vec<Candidate>, Vec<String>), Error> {
         let pattern = query.pattern()?;
-        let resources = self.runtime.current_instances(&self.workspace).await?;
+        let mut resources = self.runtime.current_instances(&self.workspace).await?;
+        self.runtime.assemble_components(&mut resources).await?;
         let mut candidates = Vec::new();
         let mut unavailable = Vec::new();
         for (id, resource) in resources {

@@ -18,13 +18,15 @@ pub async fn action_cell(
         .filter(|revision| !revision.is_empty() && **revision != cell.spec.revision_digest)
         .cloned()
     else {
-        return Ok(context.revisions.loaded(&context.client, cell).await?);
+        let loaded = context.revisions.loaded(&context.client, cell).await?;
+        return super::with_component_statuses(context, loaded).await;
     };
     let bound = context
         .revisions
         .load(&context.client, &cell, &revision)
         .await?;
-    let mut loaded = proofstorm_kube::LoadedCell::at_revision(cell, bound)?;
+    let loaded = proofstorm_kube::LoadedCell::at_revision(cell, bound)?;
+    let mut loaded = super::with_component_statuses(context, loaded).await?;
     if let Some(status) = loaded.resource.status.as_mut() {
         for component in &mut status.components {
             if loaded.revision.lock.entries.iter().any(|e| {

@@ -32,9 +32,11 @@ async fn scans_and_header_fields_skip_history_resources_and_per_cell_runtime_rea
     for section in ["activity", "sessions", "resources", "components", "links"] {
         assert!(header.get(section).is_none());
     }
+    // One list of cells and one of every cell's component objects; no per-cell reads.
     let requests = cluster.lock().unwrap().requests.clone();
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
     assert!(requests[0].1.ends_with("/proofstormcells"));
+    assert!(requests[1].1.ends_with("/proofstormcomponents"));
     let selected = cells.environment_read(&query(json!({"instance_id":created.cell.instance_id,"fields":["/name","/desired_generation"]})),8192).await.unwrap();
     assert_eq!(
         selected["cells"]["items"][0]["selected"],

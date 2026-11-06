@@ -547,6 +547,7 @@ pub fn register(
         "chart/crds/proofstorm.dev_proofstormcells.yaml",
         "chart/crds/proofstorm.dev_proofstormcellactions.yaml",
         "chart/crds/proofstorm.dev_proofstormcandidatebuilds.yaml",
+        "chart/crds/proofstorm.dev_proofstormcomponents.yaml",
     ] {
         ensure!(
             files.contains_key(required),
@@ -620,6 +621,7 @@ mod tests {
                 "crds/proofstorm.dev_proofstormcells.yaml",
                 "crds/proofstorm.dev_proofstormcellactions.yaml",
                 "crds/proofstorm.dev_proofstormcandidatebuilds.yaml",
+                "crds/proofstorm.dev_proofstormcomponents.yaml",
             ] {
                 fs::write(resources.join("chart").join(name), "fixture").unwrap();
             }

@@ -1,6 +1,7 @@
 mod adapter;
 mod api;
 mod candidate;
+mod components;
 pub mod images;
 mod observation;
 mod operation;
@@ -45,11 +46,16 @@ pub use api::{
     NetworkHealAction, NetworkPartitionAction, ProofstormCandidateBuild,
     ProofstormCandidateBuildSpec, ProofstormCandidateBuildStatus, ProofstormCell,
     ProofstormCellAction, ProofstormCellActionSpec, ProofstormCellActionStatus, ProofstormCellSpec,
-    ProofstormCellStatus, ReachabilityOracleAction, TeardownReceipt,
+    ProofstormCellStatus, ProofstormComponent, ProofstormComponentSpec, ProtocolFreshness,
+    ReachabilityOracleAction, TeardownReceipt,
 };
 pub use candidate::{
     CANDIDATE_BUILD_LABEL, CANDIDATE_BUNDLE_KEY, CANDIDATE_CANCEL_ANNOTATION,
     CandidateBuildRenderError, candidate_bundle_secret, render_candidate_build_job,
+};
+pub use components::{
+    assemble_component_statuses, component_object, component_object_name, material_digest,
+    protocol_freshness,
 };
 pub use operation::{
     ActionAdmissionError, ActionRenderError, AuthenticationConformanceJobSpec,

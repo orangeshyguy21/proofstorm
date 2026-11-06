@@ -1,7 +1,9 @@
 use std::{fs, path::PathBuf};
 
 use kube::CustomResourceExt;
-use proofstorm_kube::{ProofstormCandidateBuild, ProofstormCell, ProofstormCellAction};
+use proofstorm_kube::{
+    ProofstormCandidateBuild, ProofstormCell, ProofstormCellAction, ProofstormComponent,
+};
 
 #[test]
 fn retired_workflows_are_not_executable_but_history_is_readable() {
@@ -138,6 +140,10 @@ fn checked_in_crds_match_typed_contracts() {
             "proofstorm.dev_proofstormcandidatebuilds.yaml",
             serde_yaml::to_string(&ProofstormCandidateBuild::crd())
                 .expect("serialize candidate build CRD"),
+        ),
+        (
+            "proofstorm.dev_proofstormcomponents.yaml",
+            serde_yaml::to_string(&ProofstormComponent::crd()).expect("serialize component CRD"),
         ),
     ];
     for (name, generated) in cases {

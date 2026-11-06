@@ -2,7 +2,7 @@
 use crate::cell::Cells;
 use kube::{Api, api::ListParams};
 use proofstorm_core::Capability;
-use proofstorm_kube::ProofstormCell;
+use proofstorm_kube::{INSTANCE_LABEL, ProofstormCell, ProofstormComponent};
 use proofstorm_view::ObserverStatus;
 use std::{
     collections::BTreeMap,
@@ -61,10 +61,19 @@ async fn signature(cells: &Cells) -> (Option<(i64, u64)>, Option<String>) {
     );
     let runtime =
         tokio::time::timeout(Duration::from_secs(3), api.list(&ListParams::default())).await;
-    let versions = runtime.ok().and_then(Result::ok).map(|list| {
+    let workspace_cells = runtime.ok().and_then(Result::ok).map(|list| {
         list.items
             .into_iter()
             .filter(|cell| cell.spec.workspace_id == cells.workspace)
+            .collect::<Vec<_>>()
+    });
+    let keys = workspace_cells.as_ref().map(|list| {
+        list.iter()
+            .map(|cell| cell.spec.instance_key.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+    });
+    let versions = workspace_cells.map(|list| {
+        list.into_iter()
             .map(|cell| {
                 (
                     cell.spec.instance_id,
@@ -77,8 +86,37 @@ async fn signature(cells: &Cells) -> (Option<(i64, u64)>, Option<String>) {
             })
             .collect::<BTreeMap<_, _>>()
     });
+    // Component statuses live in their own objects; their versions alone
+    // say when one changed.
+    let components = Api::<ProofstormComponent>::namespaced(
+        cells.runtime.client.clone(),
+        &cells.runtime.control_namespace,
+    );
+    let components = tokio::time::timeout(
+        Duration::from_secs(3),
+        components.list_metadata(&ListParams::default()),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .map(|list| {
+        list.items
+            .into_iter()
+            .filter(|object| {
+                object
+                    .metadata
+                    .labels
+                    .as_ref()
+                    .and_then(|labels| labels.get(INSTANCE_LABEL))
+                    .is_some_and(|key| keys.as_ref().is_some_and(|keys| keys.contains(key)))
+            })
+            .map(|object| (object.metadata.name, object.metadata.resource_version))
+            .collect::<BTreeMap<_, _>>()
+    });
     (
         journal,
-        versions.and_then(|v| serde_json::to_string(&v).ok()),
+        versions
+            .zip(components)
+            .and_then(|v| serde_json::to_string(&v).ok()),
     )
 }

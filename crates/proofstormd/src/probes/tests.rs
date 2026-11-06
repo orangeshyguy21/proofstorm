@@ -1,5 +1,5 @@
 use super::*;
-use proofstorm_kube::{COMPONENT_LABEL, ROLLOUT_DIGEST_ANNOTATION};
+use proofstorm_kube::{COMPONENT_LABEL, ProofstormComponent, ROLLOUT_DIGEST_ANNOTATION};
 use proofstorm_prober::{Observation, PROTOCOL_VERSION};
 use serde_json::json;
 
@@ -201,45 +201,87 @@ fn cache_deletion_is_uid_bound_and_releases_namespace_entries() {
     assert!(cache.is_empty());
 }
 
-#[tokio::test]
-async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_status() {
-    let (cell, resources) = fixture();
-    let observed = Arc::new(Mutex::new(cell.resource.clone()));
-    let requests = Arc::new(Mutex::new(Vec::new()));
-    let client = Client::new(
+type Components = Arc<Mutex<BTreeMap<String, ProofstormComponent>>>;
+
+/// A fake API that keeps the cell's status, component objects and their
+/// statuses, and records each write.
+fn recording_client(
+    observed: &Arc<Mutex<ProofstormCell>>,
+    objects: &Components,
+    requests: &Arc<Mutex<Vec<String>>>,
+) -> Client {
+    Client::new(
         tower::service_fn({
             let observed = observed.clone();
+            let objects = objects.clone();
             let requests = requests.clone();
             move |request: http::Request<kube::client::Body>| {
                 let observed = observed.clone();
+                let objects = objects.clone();
                 let requests = requests.clone();
                 async move {
                     assert_eq!(request.method(), http::Method::PATCH);
-                    assert!(
-                        request
-                            .uri()
-                            .path()
-                            .ends_with("/proofstormcells/cell/status")
-                    );
-                    requests.lock().unwrap().push(request.uri().to_string());
+                    let uri = request.uri().clone();
+                    let path = uri.path().to_owned();
+                    requests.lock().unwrap().push(uri.to_string());
                     let body = request.into_body().collect_bytes().await.unwrap();
                     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-                    let mut observed = observed.lock().unwrap();
-                    observed.status =
-                        Some(serde_json::from_value(value["status"].clone()).unwrap());
+                    let response = if path.ends_with("/proofstormcells/cell/status") {
+                        let mut observed = observed.lock().unwrap();
+                        if uri
+                            .query()
+                            .unwrap_or_default()
+                            .contains("proofstormd-heartbeat")
+                        {
+                            observed.status.as_mut().unwrap().protocol_freshness =
+                                serde_json::from_value(
+                                    value["status"]["protocolFreshness"].clone(),
+                                )
+                                .unwrap();
+                        } else {
+                            observed.status =
+                                Some(serde_json::from_value(value["status"].clone()).unwrap());
+                        }
+                        serde_json::to_vec(&*observed).unwrap()
+                    } else {
+                        let rest = path
+                            .split("/proofstormcomponents/")
+                            .nth(1)
+                            .expect("only cell and component status writes");
+                        let mut objects = objects.lock().unwrap();
+                        let object = if let Some(name) = rest.strip_suffix("/status") {
+                            let object = objects.get_mut(name).expect("status of a created object");
+                            object.status =
+                                Some(serde_json::from_value(value["status"].clone()).unwrap());
+                            object.clone()
+                        } else {
+                            let object: ProofstormComponent =
+                                serde_json::from_value(value).unwrap();
+                            objects.insert(rest.to_owned(), object.clone());
+                            object
+                        };
+                        serde_json::to_vec(&object).unwrap()
+                    };
                     Ok::<_, std::convert::Infallible>(
                         http::Response::builder()
                             .header("content-type", "application/json")
-                            .body(kube::client::Body::from(
-                                serde_json::to_vec(&*observed).unwrap(),
-                            ))
+                            .body(kube::client::Body::from(response))
                             .unwrap(),
                     )
                 }
             }
         }),
         "system",
-    );
+    )
+}
+
+#[tokio::test]
+async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_status() {
+    let (cell, resources) = fixture();
+    let observed = Arc::new(Mutex::new(cell.resource.clone()));
+    let objects = Arc::new(Mutex::new(BTreeMap::<String, ProofstormComponent>::new()));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let client = recording_client(&observed, &objects, &requests);
     let (manager, _receive) = Manager::new(client.clone(), IMAGE.into());
     let plans = Arc::new(
         proofstorm_kube::compile_component_plans(
@@ -264,6 +306,7 @@ async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_
             documents: Arc::default(),
         },
     );
+    let (component_store, mut component_writer) = kube::runtime::reflector::store();
     let context = Arc::new(crate::Context {
         client,
         probes: manager.clone(),
@@ -272,15 +315,38 @@ async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_
         limits: proofstorm_core::ControllerLimits::default(),
         cells: kube::runtime::reflector::store().0,
         revisions: std::sync::Arc::default(),
+        components: component_store,
     });
     // This fake API serves no revision objects; the controller has read this one.
     context.revisions.insert((*cell.revision).clone());
+    component_writer.apply_watcher_event(&kube::runtime::watcher::Event::InitDone);
     crate::reconcile(Arc::new(cell.resource.clone()), context.clone())
         .await
         .unwrap();
+    // One cell status write, then each component object and its status.
+    let components = cell.revision.cell.components.len();
+    assert_eq!(requests.lock().unwrap().len(), 1 + 2 * components);
+    assert!(
+        observed
+            .lock()
+            .unwrap()
+            .status
+            .as_ref()
+            .unwrap()
+            .components
+            .is_empty(),
+        "the cell status never stores component statuses"
+    );
+    for object in objects.lock().unwrap().values() {
+        component_writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(object.clone()));
+    }
     let current = observed.lock().unwrap().clone();
     crate::reconcile(Arc::new(current), context).await.unwrap();
-    assert_eq!(requests.lock().unwrap().len(), 1);
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        1 + 2 * components,
+        "unchanged state writes nothing"
+    );
     let mut changed = cell;
     changed.spec.revision_digest = "changed".into();
     assert!(manager.applied(&changed).is_none());

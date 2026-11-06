@@ -17,6 +17,13 @@ rules:
     resources: ["proofstormcellactions/status"]
     verbs: ["get", "patch", "update"]
   - apiGroups: ["proofstorm.dev"]
+    # One object per cell component holds its observed status.
+    resources: ["proofstormcomponents"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: ["proofstorm.dev"]
+    resources: ["proofstormcomponents/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["proofstorm.dev"]
     resources: ["proofstormcandidatebuilds"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["proofstorm.dev"]

@@ -128,6 +128,7 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                 "GET" if path=="/api/v1/namespaces/kube-system" => (200,cluster.objects.get(&path).cloned().unwrap_or(json!({"apiVersion":"v1","kind":"Namespace","metadata":{"name":"kube-system","uid":"test-cluster"}}))),
                 "GET" if path.ends_with("/configmaps") => (200,json!({"apiVersion":"v1","kind":"ConfigMapList","metadata":{},"items":cluster.objects.iter().filter(|(p,_)|p.contains("/configmaps/")).map(|(_,v)|v.clone()).collect::<Vec<_>>()})),
                 "GET" if path.ends_with("/proofstormcellactions") => (200,json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellActionList","metadata":{},"items":[]})),
+                "GET" if path.ends_with("/proofstormcomponents") => (200,component_list(&cluster.objects)),
                 "GET" if path.ends_with("/proofstormcells")=> {
                     let items=cluster.objects.iter().filter(|(p,_)|p.contains("/proofstormcells/")).map(|(_,v)|v.clone()).collect::<Vec<_>>();
                     (200,json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellList","metadata":{},"items":items}))
@@ -146,6 +147,30 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
         }),
         "system",
     )
+}
+
+/// The component objects the controller writes for the fake cells' statuses.
+fn component_list(objects: &BTreeMap<String, Value>) -> Value {
+    let items = objects
+        .iter()
+        .filter(|(path, _)| path.contains("/proofstormcells/"))
+        .flat_map(|(_, cell)| {
+            let key = cell["spec"]["instanceKey"].as_str().unwrap_or_default().to_owned();
+            cell["status"]["components"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(move |status| {
+                    let id = status["id"].as_str().unwrap_or_default().to_owned();
+                    json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormComponent",
+                        "metadata":{"name":format!("{key}-{id}"),"namespace":"system","resourceVersion":"1",
+                            "labels":{"proofstorm.dev/instance":key,"proofstorm.dev/component":id}},
+                        "spec":{"instanceKey":key,"componentId":id},"status":status})
+                })
+        })
+        .collect::<Vec<_>>();
+    json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormComponentList","metadata":{},"items":items})
 }
 
 fn spec() -> CellSpec {

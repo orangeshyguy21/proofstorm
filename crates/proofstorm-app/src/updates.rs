@@ -149,7 +149,7 @@ async fn reconcile_once(
             .await
             .map_err(runtime_error)?;
     }
-    let status = crate::runtime::status_from_resource(instance, &runtime.loaded(cell).await?);
+    let status = crate::runtime::status_from_resource(instance, &runtime.observed(cell).await?);
     if status.phase == InstancePhase::Ready {
         store.mark_update_applied(
             workspace,

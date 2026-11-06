@@ -241,7 +241,7 @@ impl Cells {
             self.runtime.client.clone(),
             &self.runtime.control_namespace,
         );
-        let resource = match tokio::time::timeout(
+        let mut resource = match tokio::time::timeout(
             Duration::from_secs(3),
             cells.get_opt(&instance.resource_name),
         )
@@ -264,10 +264,36 @@ impl Cells {
                 );
             }
         };
+        // After the cell, as assembly requires.
+        let objects = match tokio::time::timeout(
+            Duration::from_secs(3),
+            self.runtime.component_objects(Some(&instance.instance_key)),
+        )
+        .await
+        {
+            Ok(Ok(objects)) => objects,
+            Ok(Err(_)) => {
+                return (
+                    empty_runtime(ObservationState::Unavailable, Some("runtime_read_failed")),
+                    None,
+                );
+            }
+            Err(_) => {
+                return (
+                    empty_runtime(ObservationState::Unavailable, Some("runtime_read_timeout")),
+                    None,
+                );
+            }
+        };
         let revision = self
             .store
             .revision(&self.workspace, &self.principal, &instance.revision_digest)
             .ok();
+        proofstorm_kube::assemble_component_statuses(
+            &mut resource,
+            revision.as_ref().map(|revision| &revision.cell),
+            &objects,
+        );
         observe_resource(instance, resource, revision.as_ref())
     }
 }

@@ -35,10 +35,10 @@ use kube::{
         AttachParams, DeleteParams, ListParams, LogParams, Patch, PatchParams, PropagationPolicy,
     },
     runtime::{
-        Controller,
+        Controller, WatchStreamExt,
         controller::Action,
         finalizer::{Event, finalizer},
-        watcher,
+        reflector, watcher,
     },
 };
 use proofstorm_core::CandidateBuildPhase;
@@ -53,7 +53,7 @@ use proofstorm_kube::{
     FINISHED_ACTION_RETENTION_SECONDS, INSTANCE_LABEL, LIFECYCLE_RESTART_ANNOTATION,
     LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, LoadedCell,
     ProofstormCandidateBuild, ProofstormCandidateBuildStatus, ProofstormCell, ProofstormCellAction,
-    ProofstormCellActionStatus, ProofstormCellStatus, action_result_container,
+    ProofstormCellActionStatus, ProofstormCellStatus, ProofstormComponent, action_result_container,
     compile_component_plans, evaluate_action_admission, instance_namespace,
     observe_component_statuses, render_candidate_build_job, render_cell, render_cell_action_job,
     render_cell_network_policy, render_component_network_policy, render_security_spine,
@@ -65,6 +65,11 @@ const FINALIZER: &str = "proofstorm.dev/cell-cleanup";
 const FIELD_MANAGER: &str = "proofstormd";
 const CELL_CONTROLLER_CONCURRENCY: u16 = 8;
 const MAX_ACTION_STATUS_BYTES: usize = 64 * 1024;
+/// Owns only the cell's protocol freshness heartbeat, so the full status
+/// apply never carries it and a probe-only change is one small write.
+const HEARTBEAT_FIELD_MANAGER: &str = "proofstormd-heartbeat";
+/// Component object writes in flight per cell observation.
+const COMPONENT_WRITE_CONCURRENCY: usize = 16;
 
 #[derive(Clone)]
 struct Context {
@@ -80,6 +85,50 @@ struct Context {
     cells: kube::runtime::reflector::Store<ProofstormCell>,
     /// Immutable cell revisions, read once each.
     revisions: Arc<proofstorm_kube::RevisionCache>,
+    /// Every cell's component status objects, from one watch.
+    components: reflector::Store<ProofstormComponent>,
+}
+
+/// The component status cache, once its first list has landed. A cache with
+/// no writer (tests) is used as it is.
+async fn component_cache(context: &Context) -> Result<(), Error> {
+    match tokio::time::timeout(
+        Duration::from_secs(10),
+        context.components.wait_until_ready(),
+    )
+    .await
+    {
+        Ok(_) => Ok(()),
+        Err(_) => Err(Error::ControllerInvariant(
+            "component status cache is not ready",
+        )),
+    }
+}
+
+/// The cached component objects of one cell instance.
+fn stored_components(context: &Context, instance_key: &str) -> Vec<Arc<ProofstormComponent>> {
+    context
+        .components
+        .state()
+        .into_iter()
+        .filter(|object| object.spec.instance_key == instance_key)
+        .collect()
+}
+
+/// The loaded cell with its component statuses filled from the cache.
+async fn with_component_statuses(
+    context: &Context,
+    mut cell: LoadedCell,
+) -> Result<LoadedCell, Error> {
+    component_cache(context).await?;
+    let stored = stored_components(context, &cell.spec.instance_key);
+    let LoadedCell { resource, revision } = &mut cell;
+    proofstorm_kube::assemble_component_statuses(
+        resource,
+        Some(&revision.cell),
+        stored.iter().map(AsRef::as_ref),
+    );
+    Ok(cell)
 }
 
 /// An action's cell from the watch cache, or from the API before the cache has
@@ -170,6 +219,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (probes, triggers) = probes::Manager::new(client.clone(), image);
     let limits = proofstorm_core::ControllerLimits::from_env(|name| std::env::var(name).ok())?;
     let cell_watch = Controller::new(cells, watcher::Config::default());
+    let (components, component_writer) = reflector::store();
+    let component_cache = reflector(
+        component_writer,
+        watcher(
+            Api::<ProofstormComponent>::all(client.clone()),
+            watcher::Config::default(),
+        ),
+    )
+    .default_backoff()
+    .for_each(|event| async move {
+        if let Err(error) = event {
+            eprintln!("component status watch failed: {error}");
+        }
+    });
     let context = Arc::new(Context {
         client,
         probes,
@@ -178,6 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         limits,
         cells: cell_watch.store(),
         revisions: Arc::default(),
+        components,
     });
     let trigger_stream = futures::stream::unfold(triggers, |mut receive| async {
         receive.recv().await.map(|object| (object, receive))
@@ -227,6 +291,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::select! {
         result = probe_scheduler => result.map_err(Into::into),
         () = async { tokio::join!(cell_controller, action_controller, candidate_controller); } => Ok(()),
+        () = component_cache => Ok(()),
     }
 }
 
@@ -1778,6 +1843,7 @@ fn reconciliation_failure_status(
     // These observations may belong to an older revision. Preserve inventory
     // for cleanup, but never present old readiness as evidence for this failure.
     status.components.clear();
+    status.protocol_freshness = None;
     Some(status)
 }
 
@@ -2099,21 +2165,25 @@ async fn observe_cell(
     let namespace_name = instance_namespace(&cell.spec.instance_key);
     let snapshot = context.probes.snapshot(&cell.spec.instance_key);
     let observed_resources = snapshot.observed();
-    let previous_components = cell
-        .status
-        .as_ref()
-        .filter(|status| status.observed_revision_digest == cell.spec.revision_digest)
-        .map_or(&[][..], |status| status.components.as_slice());
+    component_cache(context).await?;
+    let stored = stored_components(context, &cell.spec.instance_key);
+    // Statuses of an older revision or rollout never carry their condition
+    // transitions over: the observation matches on both digests.
+    let previous_components = stored
+        .iter()
+        .filter_map(|object| object.status.clone())
+        .collect::<Vec<_>>();
     let stopped_components =
         component_lifecycle::observed_stops(&applied.plans, &observed_resources);
     let components = observe_component_statuses(
         &namespace_name,
         &applied.plans,
         &observed_resources,
-        previous_components,
+        &previous_components,
         &stopped_components,
         now_unix(),
     );
+    write_component_objects(&cell, context, &stored, &components).await?;
     let ready = applied.pruned
         && components
             .iter()
@@ -2156,7 +2226,8 @@ async fn observe_cell(
             observed_generation: cell.metadata.generation,
             observed_revision_digest: cell.spec.revision_digest.clone(),
             observed_protocol_probe_lease: None,
-            components,
+            protocol_freshness: proofstorm_kube::protocol_freshness(&components),
+            components: Vec::new(),
             inventory: applied.inventory.clone(),
             inventory_digest: Some(proofstorm_core::digest_json(&applied.inventory)),
             teardown_receipt: None,
@@ -2254,10 +2325,9 @@ async fn cleanup(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action,
                 .status
                 .as_ref()
                 .and_then(|status| status.observed_protocol_probe_lease.clone()),
-            components: cell
-                .status
-                .as_ref()
-                .map_or_else(Vec::new, |status| status.components.clone()),
+            // A closing cell vouches for no protocol evidence.
+            protocol_freshness: None,
+            components: Vec::new(),
             inventory: cell
                 .status
                 .as_ref()
@@ -2314,12 +2384,25 @@ async fn cleanup(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action,
     Ok(Action::await_change())
 }
 
+/// Write the cell status: the full status when anything but the heartbeat
+/// changed, and the protocol freshness heartbeat on its own. Component
+/// statuses live in their own objects and are never written here.
 async fn patch_status(
     cell: &ProofstormCell,
     context: &Context,
-    status: ProofstormCellStatus,
+    mut status: ProofstormCellStatus,
 ) -> Result<(), Error> {
-    if !cell_status_update_required(cell.status.as_ref(), &status) {
+    let heartbeat = status.protocol_freshness.take();
+    status.components.clear();
+    let mut current = cell.status.clone();
+    let current_heartbeat = current
+        .as_mut()
+        .and_then(|current| current.protocol_freshness.take());
+    if let Some(current) = current.as_mut() {
+        current.components.clear();
+    }
+    let update = cell_status_update_required(current.as_ref(), &status);
+    if !update && current_heartbeat == heartbeat {
         return Ok(());
     }
     // Component count must not silently disable observations. The Kubernetes
@@ -2328,14 +2411,107 @@ async fn patch_status(
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
     let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &namespace);
-    let patch = serde_json::json!({"apiVersion": "proofstorm.dev/v1alpha1", "kind": "ProofstormCell", "status": status});
-    cells
-        .patch_status(
-            &cell.name_any(),
-            &PatchParams::apply(FIELD_MANAGER).force(),
-            &Patch::Apply(patch),
-        )
-        .await?;
+    if update {
+        let patch = serde_json::json!({"apiVersion": "proofstorm.dev/v1alpha1", "kind": "ProofstormCell", "status": status});
+        cells
+            .patch_status(
+                &cell.name_any(),
+                &PatchParams::apply(FIELD_MANAGER).force(),
+                &Patch::Apply(patch),
+            )
+            .await?;
+    }
+    if current_heartbeat != heartbeat {
+        // An empty status removes the heartbeat this manager owns.
+        let status = heartbeat.map_or_else(
+            || serde_json::json!({}),
+            |heartbeat| serde_json::json!({"protocolFreshness": heartbeat}),
+        );
+        cells
+            .patch_status(
+                &cell.name_any(),
+                &PatchParams::apply(HEARTBEAT_FIELD_MANAGER).force(),
+                &Patch::Apply(serde_json::json!({"apiVersion": "proofstorm.dev/v1alpha1", "kind": "ProofstormCell", "status": status})),
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+/// Write each component object whose state changed, then delete the objects
+/// of components the revision no longer has. A new probe alone never writes:
+/// the cell's heartbeat carries probe times.
+async fn write_component_objects(
+    cell: &LoadedCell,
+    context: &Context,
+    stored: &[Arc<ProofstormComponent>],
+    components: &[proofstorm_core::ComponentStatus],
+) -> Result<(), Error> {
+    let namespace = cell
+        .namespace()
+        .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
+    let api = Api::<ProofstormComponent>::namespaced(context.client.clone(), &namespace);
+    let by_id = stored
+        .iter()
+        .map(|object| (object.spec.component_id.as_str(), object.as_ref()))
+        .collect::<BTreeMap<_, _>>();
+    let owner = kube::Resource::controller_owner_ref(&cell.resource, &());
+    let writes = components
+        .iter()
+        .filter(|status| {
+            by_id
+                .get(status.id.as_str())
+                .and_then(|object| object.status.as_ref())
+                .map(proofstorm_kube::material_digest)
+                != Some(proofstorm_kube::material_digest(status))
+        })
+        .map(|status| {
+            let mut object = proofstorm_kube::component_object(
+                &cell.spec.instance_key,
+                &namespace,
+                status,
+                owner.clone(),
+            );
+            object.status = None;
+            let exists = by_id.contains_key(status.id.as_str());
+            let status_patch = serde_json::json!({"apiVersion": "proofstorm.dev/v1alpha1", "kind": "ProofstormComponent", "status": status});
+            let api = api.clone();
+            // Owned values only: the write futures run concurrently.
+            async move {
+                let name = object.name_any();
+                let params = PatchParams::apply(FIELD_MANAGER).force();
+                if !exists {
+                    api.patch(&name, &params, &Patch::Apply(&object)).await?;
+                }
+                api.patch_status(&name, &params, &Patch::Apply(status_patch))
+                    .await?;
+                Ok::<_, Error>(())
+            }
+        })
+        .collect::<Vec<_>>();
+    futures::stream::iter(writes)
+        .buffer_unordered(COMPONENT_WRITE_CONCURRENCY)
+        .collect::<Vec<Result<(), Error>>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<()>, Error>>()?;
+    let desired = components
+        .iter()
+        .map(|status| status.id.as_str())
+        .collect::<BTreeSet<_>>();
+    for object in stored
+        .iter()
+        .filter(|object| !desired.contains(object.spec.component_id.as_str()))
+    {
+        match api
+            .delete(&object.name_any(), &DeleteParams::default())
+            .await
+        {
+            Ok(_) => {}
+            Err(kube::Error::Api(error)) if error.code == 404 => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
     Ok(())
 }
 
@@ -3905,6 +4081,103 @@ mod tests {
             enforce_status_budget("ProofstormCellAction", &oversized, MAX_ACTION_STATUS_BYTES),
             Err(Error::StatusBudgetExceeded { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn a_probe_only_change_writes_just_the_heartbeat() {
+        let requests = Arc::new(std::sync::Mutex::new(
+            Vec::<(String, serde_json::Value)>::new(),
+        ));
+        let client = Client::new(
+            tower::service_fn({
+                let requests = requests.clone();
+                move |request: http::Request<kube::client::Body>| {
+                    let requests = requests.clone();
+                    async move {
+                        let uri = request.uri().to_string();
+                        let body = request.into_body().collect_bytes().await.unwrap();
+                        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                        requests.lock().unwrap().push((uri, body));
+                        Ok::<_, std::convert::Infallible>(
+                            http::Response::builder()
+                                .header("content-type", "application/json")
+                                .body(kube::client::Body::from(
+                                    serde_json::to_vec(&ProofstormCell::new(
+                                        "cell",
+                                        proofstorm_kube::ProofstormCellSpec {
+                                            workspace_id: "w".into(),
+                                            instance_id: "i".into(),
+                                            instance_key: "ikey".into(),
+                                            revision_digest: "r".into(),
+                                        },
+                                    ))
+                                    .unwrap(),
+                                ))
+                                .unwrap(),
+                        )
+                    }
+                }
+            }),
+            "system",
+        );
+        let (probes, _receive) = probes::Manager::new(client.clone(), "prober".into());
+        let context = Context {
+            client,
+            probes,
+            retries: Arc::default(),
+            native: Arc::default(),
+            limits: proofstorm_core::ControllerLimits::default(),
+            cells: kube::runtime::reflector::store().0,
+            revisions: Arc::default(),
+            components: kube::runtime::reflector::store().0,
+        };
+        let heartbeat = |at| proofstorm_kube::ProtocolFreshness {
+            observed_at_unix: at,
+            expires_at_unix: at + 30,
+        };
+        let mut cell = ProofstormCell::new(
+            "cell",
+            proofstorm_kube::ProofstormCellSpec {
+                workspace_id: "w".into(),
+                instance_id: "i".into(),
+                instance_key: "ikey".into(),
+                revision_digest: "r".into(),
+            },
+        );
+        cell.metadata.namespace = Some("system".into());
+        cell.status = Some(ProofstormCellStatus {
+            phase: CellPhase::Ready,
+            protocol_freshness: Some(heartbeat(100)),
+            ..ProofstormCellStatus::default()
+        });
+        let mut next = cell.status.clone().unwrap();
+        next.protocol_freshness = Some(heartbeat(130));
+        patch_status(&cell, &context, next.clone()).await.unwrap();
+        {
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(requests[0].0.contains("fieldManager=proofstormd-heartbeat"));
+            assert_eq!(
+                requests[0].1["status"],
+                serde_json::json!({"protocolFreshness": {"observedAtUnix": 130, "expiresAtUnix": 160}})
+            );
+        }
+        // A real change writes the status without the heartbeat, which keeps
+        // its own manager; an unchanged status writes nothing.
+        next.phase = CellPhase::Pending;
+        next.protocol_freshness = Some(heartbeat(100));
+        patch_status(&cell, &context, next).await.unwrap();
+        patch_status(&cell, &context, cell.status.clone().unwrap())
+            .await
+            .unwrap();
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[1].0.contains("fieldManager=proofstormd")
+                && !requests[1].0.contains("proofstormd-heartbeat")
+        );
+        assert!(requests[1].1["status"].get("protocolFreshness").is_none());
+        assert_eq!(requests[1].1["status"]["phase"], "Pending");
     }
 
     #[test]

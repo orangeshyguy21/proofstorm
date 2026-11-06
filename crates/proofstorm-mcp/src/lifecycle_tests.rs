@@ -35,6 +35,11 @@ fn conflicting_cluster_client(cells: usize, maps: usize) -> Client {
                         200,
                         serde_json::json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellActionList","metadata":{},"items":[]}),
                     ),
+                    // These fake cells never report components.
+                    http::Method::GET if path.ends_with("/proofstormcomponents") => (
+                        200,
+                        serde_json::json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormComponentList","metadata":{},"items":[]}),
+                    ),
                     http::Method::GET if path.ends_with("/proofstormcells") => (
                         200,
                         serde_json::json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellList","metadata":{},"items":objects.values().filter(|v|v["kind"]=="ProofstormCell").collect::<Vec<_>>()}),

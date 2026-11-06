@@ -29,6 +29,7 @@ pub(super) const REQUIRED: &[&str] = &[
     "chart/crds/proofstorm.dev_proofstormcells.yaml",
     "chart/crds/proofstorm.dev_proofstormcellactions.yaml",
     "chart/crds/proofstorm.dev_proofstormcandidatebuilds.yaml",
+    "chart/crds/proofstorm.dev_proofstormcomponents.yaml",
 ];
 pub(super) const MAX_FILES: usize = 10_000;
 pub(super) const MAX_PAYLOAD_BYTES: u64 = 1024 * 1024 * 1024;

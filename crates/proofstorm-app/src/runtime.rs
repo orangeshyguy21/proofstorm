@@ -11,8 +11,8 @@ use proofstorm_core::{
 };
 use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionPhase, CellAction, CellPhase,
-    FINISHED_ACTION_RETENTION_SECONDS, ProofstormCell, ProofstormCellAction,
-    ProofstormCellActionSpec, ProofstormCellSpec,
+    FINISHED_ACTION_RETENTION_SECONDS, INSTANCE_LABEL, LoadedCell, ProofstormCell,
+    ProofstormCellAction, ProofstormCellActionSpec, ProofstormCellSpec, ProofstormComponent,
 };
 use std::collections::BTreeMap;
 
@@ -59,6 +59,44 @@ impl Runtime {
             .filter(|cell| cell.spec.workspace_id == workspace)
             .map(|cell| (cell.spec.instance_id.clone(), cell))
             .collect())
+    }
+
+    /// The component status objects of one cell instance, or of every cell.
+    /// Read them after the cells they belong to; see
+    /// [`proofstorm_kube::assemble_component_statuses`].
+    pub(crate) async fn component_objects(
+        &self,
+        instance_key: Option<&str>,
+    ) -> Result<Vec<ProofstormComponent>, Error> {
+        let api =
+            Api::<ProofstormComponent>::namespaced(self.client.clone(), &self.control_namespace);
+        let params = instance_key.map_or_else(kube::api::ListParams::default, |key| {
+            kube::api::ListParams::default().labels(&format!("{INSTANCE_LABEL}={key}"))
+        });
+        Ok(api.list(&params).await.map_err(kube_error)?.items)
+    }
+
+    /// Fill each cell's component statuses from one list of every cell's
+    /// component objects, in component id order.
+    pub(crate) async fn assemble_components(
+        &self,
+        cells: &mut std::collections::BTreeMap<String, ProofstormCell>,
+    ) -> Result<(), Error> {
+        let objects = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            self.component_objects(None),
+        )
+        .await
+        .map_err(|_| {
+            Error::failure(
+                "component status inventory timed out",
+                Some(serde_json::json!({"code":"runtime_failure"})),
+            )
+        })??;
+        for cell in cells.values_mut() {
+            proofstorm_kube::assemble_component_statuses(cell, None, &objects);
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -293,7 +331,8 @@ impl Runtime {
                 ));
             }
             let revision = self.store_revision(&existing, revision).await?;
-            return Ok(status_from_resource(instance, &paired(existing, revision)?));
+            let observed = self.with_components(paired(existing, revision)?).await?;
+            return Ok(status_from_resource(instance, &observed));
         }
         // The cell first, so its revision can be owned by it. Until the revision
         // is stored the controller leaves the cell pending.
@@ -358,6 +397,21 @@ impl Runtime {
             .await
             .map_err(|e| Error::problem("cell_revision_unavailable", e.to_string()))
     }
+    /// `cell` with its revision and its component statuses.
+    pub(crate) async fn observed(&self, cell: ProofstormCell) -> Result<LoadedCell, Error> {
+        let loaded = self.loaded(cell).await?;
+        self.with_components(loaded).await
+    }
+
+    async fn with_components(&self, mut loaded: LoadedCell) -> Result<LoadedCell, Error> {
+        let objects = self
+            .component_objects(Some(&loaded.spec.instance_key))
+            .await?;
+        let LoadedCell { resource, revision } = &mut loaded;
+        proofstorm_kube::assemble_component_statuses(resource, Some(&revision.cell), &objects);
+        Ok(loaded)
+    }
+
     pub async fn status(&self, instance: CellInstance) -> Result<CellInstanceStatus, Error> {
         let cells = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
         if let Some(resource) = cells
@@ -376,7 +430,7 @@ impl Runtime {
             }
             return Ok(status_from_resource(
                 instance,
-                &self.loaded(resource).await?,
+                &self.observed(resource).await?,
             ));
         }
         let receipts = Api::<ConfigMap>::namespaced(self.client.clone(), &self.control_namespace);

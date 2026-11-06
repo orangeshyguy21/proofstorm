@@ -27,6 +27,32 @@ pub struct ProofstormCellSpec {
     pub revision_digest: String,
 }
 
+/// One component's observed state, owned by its cell. Written by the controller
+/// only when the component's state changes.
+#[derive(CustomResource, Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[kube(
+    group = "proofstorm.dev",
+    version = "v1alpha1",
+    kind = "ProofstormComponent",
+    plural = "proofstormcomponents",
+    shortname = "pscomp",
+    namespaced,
+    status = "ComponentStatus"
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofstormComponentSpec {
+    pub instance_key: String,
+    pub component_id: String,
+}
+
+/// The window in which every probed component of a cell was last confirmed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProtocolFreshness {
+    pub observed_at_unix: i64,
+    pub expires_at_unix: i64,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "PascalCase")]
 pub enum CellPhase {
@@ -66,8 +92,15 @@ pub struct ProofstormCellStatus {
     pub observed_revision_digest: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_protocol_probe_lease: Option<String>,
-    #[serde(default)]
+    /// Assembled in memory from the cell's `ProofstormComponent` objects; never
+    /// stored on the cell (see `assemble_component_statuses`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<ComponentStatus>,
+    /// The oldest protocol observation across the cell's components. Component
+    /// objects are written only when their state changes; this heartbeat keeps
+    /// their protocol evidence fresh while the prober keeps confirming it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_freshness: Option<ProtocolFreshness>,
     #[serde(default)]
     pub inventory: Vec<InventoryEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
