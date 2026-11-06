@@ -48,7 +48,7 @@ use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionAdmissionError, ActionPhase, ActionRenderError, AdapterError,
     AuthenticationConformanceResult, AuthenticationProtectedSpendResult,
     AuthenticationReplayResult, AuthenticationSessionFailureStage, BACKEND_ID_ANNOTATION,
-    CANDIDATE_CANCEL_ANNOTATION, COMPONENT_LABEL, CellAction, CellPhase,
+    CANDIDATE_CANCEL_ANNOTATION, CELL_NETWORK_POLICY, COMPONENT_LABEL, CellAction, CellPhase,
     ComponentObservationResources, EXECUTION_STATE_CONTRACT_ANNOTATION,
     FINISHED_ACTION_RETENTION_SECONDS, INSTANCE_LABEL, LIFECYCLE_RESTART_ANNOTATION,
     LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, ProofstormCandidateBuild,
@@ -56,7 +56,7 @@ use proofstorm_kube::{
     ProofstormCellActionStatus, ProofstormCellStatus, action_result_container,
     compile_component_plans, evaluate_action_admission, instance_namespace,
     observe_component_statuses, render_candidate_build_job, render_cell, render_cell_action_job,
-    render_component_network_policy, render_security_spine,
+    render_cell_network_policy, render_component_network_policy, render_security_spine,
 };
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -1179,31 +1179,46 @@ fn active_network_partitions(
     active
 }
 
+/// One policy writer per cell; cells never wait on each other's partitions.
+fn cell_policy_lock(instance_key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static WRITERS: std::sync::Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>> =
+        std::sync::Mutex::new(BTreeMap::new());
+    WRITERS
+        .lock()
+        .expect("policy writer registry")
+        .entry(instance_key.to_owned())
+        .or_default()
+        .clone()
+}
+
+/// Bring a cell's network policies in line with its active partitions: one
+/// shared policy for every component outside a partition, and a policy of its
+/// own for each partitioned component. Returns the active partitions.
 async fn apply_network_fault_policies(
     cell: &ProofstormCell,
     maximum_sequence: Option<u64>,
     context: &Context,
 ) -> Result<BTreeMap<String, (String, String)>, Error> {
-    // All policy writers read the journal under this lock. An older queued write
-    // cannot resurrect a lease after cleanup has reconciled its release marker.
-    static WRITER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    let _writer = WRITER.lock().await;
+    // All of a cell's policy writers read the journal under this lock. An older
+    // queued write cannot resurrect a lease after cleanup has reconciled its
+    // release marker.
+    let lock = cell_policy_lock(&cell.spec.instance_key);
+    let _writer = lock.lock().await;
     let policies = Api::<NetworkPolicy>::namespaced(
         context.client.clone(),
         &instance_namespace(&cell.spec.instance_key),
     );
-    let mut versions = BTreeMap::new();
     // Read policy versions BEFORE the action journal. Across controller restarts,
     // a delayed old write must conflict with any subsequently completed cleanup.
-    for component in &cell.spec.cell.components {
-        versions.insert(
-            component.id.clone(),
-            policies
-                .get_opt(&component.id)
-                .await?
-                .and_then(|policy| policy.metadata.resource_version),
-        );
-    }
+    let existing = policies
+        .list(
+            &ListParams::default().labels(&format!("{INSTANCE_LABEL}={}", cell.spec.instance_key)),
+        )
+        .await?
+        .items
+        .into_iter()
+        .map(|policy| (policy.name_any(), policy))
+        .collect::<BTreeMap<_, _>>();
     let namespace = cell
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
@@ -1215,42 +1230,93 @@ async fn apply_network_fault_policies(
         .await?
         .items;
     let active = active_network_partitions(&actions, maximum_sequence);
-    let mut exclusions = cell
+    let components = cell
         .spec
         .cell
         .components
         .iter()
-        .map(|component| (component.id.clone(), BTreeSet::new()))
-        .collect::<BTreeMap<_, _>>();
+        .map(|component| component.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut exclusions = BTreeMap::<String, BTreeSet<String>>::new();
     for (from, to) in active.values() {
-        if let Some(peers) = exclusions.get_mut(from) {
-            peers.insert(to.clone());
-        }
-        if let Some(peers) = exclusions.get_mut(to) {
-            peers.insert(from.clone());
+        for (component, peer) in [(from, to), (to, from)] {
+            if components.contains(component.as_str()) {
+                exclusions
+                    .entry(component.clone())
+                    .or_default()
+                    .insert(peer.clone());
+            }
         }
     }
-    for (component, peers) in exclusions {
-        let peers = peers.into_iter().collect::<Vec<_>>();
-        let mut policy =
-            render_component_network_policy(&cell.spec.instance_key, &component, &peers)
-                .map_err(|_| Error::ControllerInvariant("network policy did not serialize"))?;
-        if let Some(version) = versions.remove(&component).flatten() {
-            policy.metadata.resource_version = Some(version);
-            policies
-                .patch(
-                    &component,
-                    &PatchParams::apply(FIELD_MANAGER).force(),
-                    &Patch::Apply(&policy),
+    let invalid = |_| Error::ControllerInvariant("network policy did not serialize");
+    // A pod no allow-policy selects is cut off from everything, so a component
+    // gets its own policy before the shared one stops selecting it, and keeps it
+    // until the shared one selects it again.
+    for (component, peers) in &exclusions {
+        let peers = peers.iter().cloned().collect::<Vec<_>>();
+        let policy = render_component_network_policy(&cell.spec.instance_key, component, &peers)
+            .map_err(invalid)?;
+        write_policy(&policies, existing.get(component), policy).await?;
+    }
+    let partitioned = exclusions.keys().cloned().collect::<Vec<_>>();
+    let shared =
+        render_cell_network_policy(&cell.spec.instance_key, &partitioned).map_err(invalid)?;
+    write_policy(&policies, existing.get(CELL_NETWORK_POLICY), shared).await?;
+    // Healed components, removed components and the per-component policies of
+    // earlier releases: a component policy is named after its component.
+    for (name, policy) in &existing {
+        let own = policy.labels().get(COMPONENT_LABEL) == Some(name);
+        if own && !exclusions.contains_key(name) {
+            match policies
+                .delete(
+                    name,
+                    &DeleteParams {
+                        preconditions: Some(kube::api::Preconditions {
+                            uid: policy.metadata.uid.clone(),
+                            resource_version: policy.metadata.resource_version.clone(),
+                        }),
+                        ..DeleteParams::default()
+                    },
                 )
-                .await?;
-        } else {
-            policies
-                .create(&kube::api::PostParams::default(), &policy)
-                .await?;
+                .await
+            {
+                Ok(_) => {}
+                Err(kube::Error::Api(error)) if error.code == 404 => {}
+                Err(error) => return Err(error.into()),
+            }
         }
     }
     Ok(active)
+}
+
+/// Create `desired`, or update `current` fenced by the version read before the
+/// journal. An unchanged policy is left alone.
+async fn write_policy(
+    policies: &Api<NetworkPolicy>,
+    current: Option<&NetworkPolicy>,
+    mut desired: NetworkPolicy,
+) -> Result<(), Error> {
+    let Some(current) = current else {
+        policies
+            .create(&kube::api::PostParams::default(), &desired)
+            .await?;
+        return Ok(());
+    };
+    if current.spec == desired.spec && current.labels() == desired.labels() {
+        return Ok(());
+    }
+    desired
+        .metadata
+        .resource_version
+        .clone_from(&current.metadata.resource_version);
+    policies
+        .patch(
+            &desired.name_any(),
+            &PatchParams::apply(FIELD_MANAGER).force(),
+            &Patch::Apply(&desired),
+        )
+        .await?;
+    Ok(())
 }
 
 async fn patch_invalid_action(
@@ -1902,13 +1968,8 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     }
     let policies = Api::<NetworkPolicy>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.network_policies {
-        if cell
-            .spec
-            .cell
-            .components
-            .iter()
-            .any(|component| resource.metadata.name.as_deref() == Some(&component.id))
-        {
+        // The partition writer owns the shared component policy.
+        if resource.metadata.name.as_deref() == Some(CELL_NETWORK_POLICY) {
             continue;
         }
         if unchanged(&mut documents, &previous, "NetworkPolicy", resource) {

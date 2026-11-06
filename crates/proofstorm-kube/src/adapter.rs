@@ -304,15 +304,13 @@ pub fn render_cell(
     rendered
         .network_policies
         .push(resource(action_network_policy(instance_key, &namespace))?);
+    // Without partitions one shared policy covers every component; the
+    // controller adds per-component policies only while a partition is active.
+    rendered
+        .network_policies
+        .push(render_cell_network_policy(instance_key, &[])?);
 
     for plan in &plans {
-        rendered
-            .network_policies
-            .push(render_component_network_policy(
-                instance_key,
-                &plan.component_id,
-                &[],
-            )?);
         let generator = COMPONENT_RENDERERS
             .get(plan.backend_id.as_str())
             .ok_or_else(|| AdapterError::UnsupportedAdapter {
@@ -3485,6 +3483,45 @@ pub fn render_component_network_policy(
     }))
 }
 
+/// The name of the cell's shared component allow-list.
+pub const CELL_NETWORK_POLICY: &str = "allow-cell-components";
+
+/// One allow-list for every component pod that isn't in an active partition:
+/// the same rules as a component policy without exclusions. A partitioned
+/// component instead gets its own policy, and this one stops selecting it,
+/// because policies only add permissions and a pod selected by both would be
+/// allowed everything. Action and prober pods carry no component label and
+/// keep their own policy.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_cell_network_policy(
+    instance_key: &str,
+    partitioned: &[String],
+) -> Result<NetworkPolicy, AdapterError> {
+    let namespace = instance_namespace(instance_key);
+    let peers = json!({"matchLabels": {INSTANCE_LABEL: instance_key}});
+    let mut selected = vec![json!({"key": COMPONENT_LABEL, "operator": "Exists"})];
+    if !partitioned.is_empty() {
+        selected.push(
+            json!({"key": NETWORK_IDENTITY_LABEL, "operator": "NotIn", "values": partitioned}),
+        );
+    }
+    resource(json!({
+        "apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+        "metadata": metadata(CELL_NETWORK_POLICY, instance_key, &namespace, None),
+        "spec": {"podSelector": {"matchLabels": {INSTANCE_LABEL: instance_key}, "matchExpressions": selected},
+            "policyTypes": ["Ingress", "Egress"],
+            "ingress": [{"from": [{"podSelector": peers.clone()}]}],
+            "egress": [
+                {"to": [{"podSelector": peers}]},
+                {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}}],
+                    "ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}]}
+            ]}
+    }))
+}
+
 fn require_plan_backend(
     plan: &ComponentPlanContract,
     backend: &str,
@@ -4609,12 +4646,15 @@ mod tests {
             deployment.metadata.name.as_deref() == Some("proofstorm-protocol-prober")
         }));
         assert_eq!(rendered.persistent_volume_claims.len(), 2);
-        assert_eq!(rendered.network_policies.len(), cell.components.len() + 1);
-        assert!(
-            rendered.network_policies.iter().any(|policy| {
-                policy.metadata.name.as_deref() == Some("allow-controller-actions")
-            })
-        );
+        // Actions plus one shared component policy, however many components.
+        let names = rendered
+            .network_policies
+            .iter()
+            .filter_map(|policy| policy.metadata.name.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"allow-controller-actions"));
+        assert!(names.contains(&CELL_NETWORK_POLICY));
         assert_eq!(rendered.inventory(), rendered.inventory());
         assert!(
             lock.entries
