@@ -166,6 +166,7 @@ fn fixture(
         client,
         retries: std::sync::Arc::default(),
         native: std::sync::Arc::default(),
+        limits: proofstorm_core::ControllerLimits::default(),
     };
     (
         rendered
@@ -278,6 +279,7 @@ async fn interrupted_stops_wait_for_pods_and_never_delete_storage() {
                 client: client(cluster.clone()),
                 retries: std::sync::Arc::default(),
                 native: std::sync::Arc::default(),
+                limits: proofstorm_core::ControllerLimits::default(),
             },
             Control::Stop,
         )

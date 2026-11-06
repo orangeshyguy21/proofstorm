@@ -22,30 +22,33 @@ use tokio::sync::Semaphore;
 /// starts took every action-controller slot and starved status polls, cancels
 /// and all other actions (PS-44). Together the pools leave controller slots for
 /// everything else. A cancel of a running command bypasses both.
-pub(super) const NATIVE_POLL_CONCURRENCY: usize = 6;
-pub(super) const NATIVE_START_CONCURRENCY: usize = 4;
-/// Starts into one component at once. A component whose execs hang (frozen,
-/// overloaded) then holds at most this many start permits, and starts into
-/// every other component keep going.
-pub(super) const NATIVE_STARTS_PER_COMPONENT: usize = 2;
-const _: () = assert!(NATIVE_STARTS_PER_COMPONENT < NATIVE_START_CONCURRENCY);
-
-/// Shared limits on native exec work. Reconciles take permits without waiting:
-/// a reconcile that finds none requeues shortly instead of holding a slot.
+///
+/// Each component may hold only some of the start places, so a component whose
+/// execs hang (frozen, overloaded) leaves starts into every other component
+/// going. The sizes come from `runtime.toml`; `ControllerLimits::validate`
+/// keeps these rules.
 pub(super) struct Gate {
     polls: Semaphore,
     starts: Semaphore,
+    starts_per_component: usize,
     /// Starts in progress per `instance_key/component`.
     components: Mutex<HashMap<String, usize>>,
 }
 
-impl Default for Gate {
-    fn default() -> Self {
+impl Gate {
+    pub(super) fn new(limits: &proofstorm_core::ControllerLimits) -> Self {
         Self {
-            polls: Semaphore::new(NATIVE_POLL_CONCURRENCY),
-            starts: Semaphore::new(NATIVE_START_CONCURRENCY),
+            polls: Semaphore::new(usize::from(limits.native_polls)),
+            starts: Semaphore::new(usize::from(limits.native_starts)),
+            starts_per_component: usize::from(limits.native_starts_per_component),
             components: Mutex::default(),
         }
+    }
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self::new(&proofstorm_core::ControllerLimits::default())
     }
 }
 
@@ -54,7 +57,7 @@ impl Gate {
     fn start_component(&self, key: &str) -> Option<ComponentStart<'_>> {
         let mut active = self.components.lock().expect("native start gate lock");
         let count = active.entry(key.to_owned()).or_default();
-        if *count >= NATIVE_STARTS_PER_COMPONENT {
+        if *count >= self.starts_per_component {
             return None;
         }
         *count += 1;
@@ -695,18 +698,18 @@ mod tests {
 
     #[test]
     fn polls_and_starts_cannot_starve_each_other_or_the_controller() {
-        // Both pools full still leaves controller slots for other actions.
-        assert!(
-            NATIVE_POLL_CONCURRENCY + NATIVE_START_CONCURRENCY
-                < usize::from(super::super::ACTION_CONTROLLER_CONCURRENCY)
+        let limits = proofstorm_core::ControllerLimits::default();
+        let (polls_cap, starts_cap) = (
+            usize::from(limits.native_polls),
+            usize::from(limits.native_starts),
         );
-        let gate = Gate::default();
-        let polls = (0..NATIVE_POLL_CONCURRENCY)
+        let gate = Gate::new(&limits);
+        let polls = (0..polls_cap)
             .map(|_| gate.polls.try_acquire().unwrap())
             .collect::<Vec<_>>();
         assert!(gate.polls.try_acquire().is_err());
         // A full poll pool doesn't block starts, and the reverse.
-        let starts = (0..NATIVE_START_CONCURRENCY)
+        let starts = (0..starts_cap)
             .map(|_| gate.starts.try_acquire().unwrap())
             .collect::<Vec<_>>();
         assert!(
@@ -714,14 +717,33 @@ mod tests {
             "a fifth concurrent start waits"
         );
         drop((polls, starts));
-        assert_eq!(gate.polls.available_permits(), NATIVE_POLL_CONCURRENCY);
-        assert_eq!(gate.starts.available_permits(), NATIVE_START_CONCURRENCY);
+        assert_eq!(gate.polls.available_permits(), polls_cap);
+        assert_eq!(gate.starts.available_permits(), starts_cap);
+    }
+
+    #[test]
+    fn configured_limits_size_every_pool() {
+        let limits = proofstorm_core::ControllerLimits {
+            action_slots: 64,
+            native_starts: 24,
+            native_starts_per_component: 3,
+            native_polls: 24,
+            start_deadline_seconds: 300,
+        };
+        let gate = Gate::new(&limits);
+        assert_eq!(gate.starts.available_permits(), 24);
+        assert_eq!(gate.polls.available_permits(), 24);
+        let held = (0..3)
+            .map(|_| gate.start_component("i1/wallet").unwrap())
+            .collect::<Vec<_>>();
+        assert!(gate.start_component("i1/wallet").is_none());
+        drop(held);
     }
 
     #[test]
     fn a_hung_component_holds_only_its_own_start_places() {
         let gate = Gate::default();
-        let hung = (0..NATIVE_STARTS_PER_COMPONENT)
+        let hung = (0..gate.starts_per_component)
             .map(|_| gate.start_component("i1/chain").unwrap())
             .collect::<Vec<_>>();
         assert!(gate.start_component("i1/chain").is_none());

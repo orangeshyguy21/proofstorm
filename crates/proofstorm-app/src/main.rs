@@ -35,6 +35,9 @@ async fn main() -> Result<()> {
         Command::Attach { .. } => ("attach", Some("Checking project connection")),
         Command::Open { .. } => ("open", Some("Preparing coding agent")),
         Command::Doctor { .. } => ("doctor", Some("Checking Proofstorm health")),
+        Command::ConfigShow | Command::ConfigSet { .. } | Command::ConfigUnset { .. } => {
+            ("config", None)
+        }
         Command::InstallBundle { .. } => ("install", Some("Installing Proofstorm")),
         Command::Init { .. } => ("init", Some("Configuring local permissions")),
         Command::DevReset { .. } => ("dev-reset", None),
@@ -312,6 +315,28 @@ async fn main() -> Result<()> {
         }
         return Ok(());
     }
+    if let Command::ConfigShow | Command::ConfigSet { .. } | Command::ConfigUnset { .. } = &command
+    {
+        let home = args
+            .home
+            .as_ref()
+            .context("config requires an installation home; installed launchers supply it")?;
+        let shown = match &command {
+            Command::ConfigSet { pairs } => {
+                serde_json::json!({"changes": proofstorm_app::runtime_settings::set(home, pairs)?})
+            }
+            Command::ConfigUnset { keys } => {
+                serde_json::json!({"changes": proofstorm_app::runtime_settings::unset(home, keys)?})
+            }
+            _ => serde_json::json!({
+                "file": proofstorm_app::runtime_settings::path(home),
+                "settings": proofstorm_app::runtime_settings::show(
+                    &proofstorm_app::runtime_settings::load(home)?
+                ),
+            }),
+        };
+        return output.show(&shown);
+    }
     if matches!(command, Command::Setup { .. } | Command::Doctor { .. }) {
         let home = args.home.as_ref().context(
             "installed setup/doctor requires --home (installed launchers supply a private default)",
@@ -525,7 +550,10 @@ async fn main() -> Result<()> {
         | Command::Open { .. }
         | Command::InstallBundle { .. }
         | Command::Setup { .. }
-        | Command::Doctor { .. } => {
+        | Command::Doctor { .. }
+        | Command::ConfigShow
+        | Command::ConfigSet { .. }
+        | Command::ConfigUnset { .. } => {
             unreachable!("release metadata is handled before environment resolution")
         }
         Command::Up {

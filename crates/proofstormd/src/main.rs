@@ -64,13 +64,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 const FINALIZER: &str = "proofstorm.dev/cell-cleanup";
 const FIELD_MANAGER: &str = "proofstormd";
 const CELL_CONTROLLER_CONCURRENCY: u16 = 8;
-const ACTION_CONTROLLER_CONCURRENCY: u16 = 16;
 const MAX_ACTION_STATUS_BYTES: usize = 64 * 1024;
-
-/// A one-off action that hasn't started this long after acceptance fails
-/// instead of starting. By then its caller has usually given up, and a late
-/// start would run, say, a payment hours after anyone expected it (PS-44).
-const ACTION_START_DEADLINE_SECONDS: i64 = 120;
 
 #[derive(Clone)]
 struct Context {
@@ -80,6 +74,8 @@ struct Context {
     retries: Arc<retry::Backoff>,
     /// Caps native exec work so it can't take every action-controller slot.
     native: Arc<native_exec::Gate>,
+    /// Slot counts and the start deadline, from `runtime.toml` via the chart.
+    limits: proofstorm_core::ControllerLimits,
 }
 
 #[derive(Debug, Error)]
@@ -146,11 +142,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let image = std::env::var("PROOFSTORM_PROBER_IMAGE")
         .map_err(|_| "PROOFSTORM_PROBER_IMAGE must name the installed controller image")?;
     let (probes, triggers) = probes::Manager::new(client.clone(), image);
+    let limits = proofstorm_core::ControllerLimits::from_env(|name| std::env::var(name).ok())?;
     let context = Arc::new(Context {
         client,
         probes,
         retries: Arc::default(),
-        native: Arc::default(),
+        native: Arc::new(native_exec::Gate::new(&limits)),
+        limits,
     });
     let trigger_stream = futures::stream::unfold(triggers, |mut receive| async {
         receive.recv().await.map(|object| (object, receive))
@@ -169,9 +167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     let action_controller = Controller::new(actions, watcher::Config::default())
-        .with_config(
-            kube::runtime::controller::Config::default().concurrency(ACTION_CONTROLLER_CONCURRENCY),
-        )
+        .with_config(kube::runtime::controller::Config::default().concurrency(limits.action_slots))
         .shutdown_on_signal()
         .run(
             reconcile_action_with_backoff,
@@ -594,8 +590,11 @@ async fn reconcile_action(
         }
         return reconcile_action_cancellation(action.as_ref(), &context).await;
     }
-    if start_deadline_passed(action.as_ref(), now_unix())
-        && let Some(next) = expire_unstarted_action(action.as_ref(), &context).await?
+    if start_deadline_passed(
+        action.as_ref(),
+        now_unix(),
+        i64::from(context.limits.start_deadline_seconds),
+    ) && let Some(next) = expire_unstarted_action(action.as_ref(), &context).await?
     {
         return Ok(next);
     }
@@ -1339,7 +1338,11 @@ async fn expire_finished_action(
 /// creation time. An upload, or an idempotent retry of an old request, can
 /// create the action well after acceptance. The creation time is also on the
 /// controller's own clock.
-fn start_deadline_passed(action: &ProofstormCellAction, now_unix: i64) -> bool {
+fn start_deadline_passed(
+    action: &ProofstormCellAction,
+    now_unix: i64,
+    deadline_seconds: i64,
+) -> bool {
     let one_off = matches!(
         action.spec.action,
         CellAction::ComponentExecLive(_)
@@ -1357,7 +1360,7 @@ fn start_deadline_passed(action: &ProofstormCellAction, now_unix: i64) -> bool {
         .map_or(i64::MIN, |time| time.0.as_second());
     one_off
         && !action_execution_started(action.status.as_ref())
-        && now_unix > action.spec.accepted_at_unix.max(created) + ACTION_START_DEADLINE_SECONDS
+        && now_unix > action.spec.accepted_at_unix.max(created) + deadline_seconds
 }
 
 /// Fail an action whose start deadline passed, unless it may in fact have
@@ -1391,7 +1394,7 @@ async fn expire_unstarted_action(
         completed_at_unix: Some(now_unix()),
         error: Some(status_object(serde_json::json!({
             "code": "action_not_started",
-            "message": format!("the runtime could not start this operation within {ACTION_START_DEADLINE_SECONDS} seconds of acceptance; nothing was run; submit a new operation if it is still wanted"),
+            "message": format!("the runtime could not start this operation within {} seconds of acceptance; nothing was run; submit a new operation if it is still wanted", context.limits.start_deadline_seconds),
         }))),
         ..ProofstormCellActionStatus::default()
     };
@@ -3527,7 +3530,10 @@ mod tests {
     #[test]
     fn controller_policy_is_bounded_deterministic_and_desynchronized() {
         assert_eq!(CELL_CONTROLLER_CONCURRENCY, 8);
-        assert_eq!(ACTION_CONTROLLER_CONCURRENCY, 16);
+        assert_eq!(
+            proofstorm_core::ControllerLimits::default().action_slots,
+            16
+        );
         let first = deterministic_jitter_seconds("instance-one", 10);
         assert_eq!(first, deterministic_jitter_seconds("instance-one", 10));
         assert!(first <= 10);

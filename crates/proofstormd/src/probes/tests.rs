@@ -256,6 +256,7 @@ async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_
         probes: manager.clone(),
         retries: Arc::default(),
         native: Arc::default(),
+        limits: proofstorm_core::ControllerLimits::default(),
     });
     crate::reconcile(Arc::new(cell.clone()), context.clone())
         .await

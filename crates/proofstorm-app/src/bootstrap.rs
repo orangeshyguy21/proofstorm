@@ -696,8 +696,12 @@ fn deploy(
     let image = controller["image"].as_str().context("controller image")?;
     let (repository, digest) = image.split_once('@').context("controller digest")?;
     let expected = format!("{repository}@{digest}");
+    // The user's runtime settings; a change re-runs Helm and restarts the controller once.
+    let settings = crate::runtime_settings::load(&installation.home)?;
+    let settings_args = crate::runtime_settings::helm_args(&settings);
     let inputs = json!({"installation_id":installation.id, "image":expected,
-        "chart_sha256":crate::artifacts::tree_sha256(&bundle.join("chart"))?});
+        "chart_sha256":crate::artifacts::tree_sha256(&bundle.join("chart"))?,
+        "settings":settings_args});
     let receipt = installation.home.join("deployment-inputs.json");
     let same_inputs = std::fs::symlink_metadata(&receipt).is_ok_and(|meta| meta.is_file())
         && std::fs::read(&receipt)
@@ -711,34 +715,35 @@ fn deploy(
         return Ok(());
     }
     progress("Waiting for controller to become ready");
+    let chart = bundle.join("chart");
+    let kubeconfig = installation.kubeconfig();
+    let context = installation.context();
+    let repository = format!("image.repository={repository}");
+    let digest = format!("image.digest={digest}");
+    let mut args = vec![
+        "upgrade",
+        "--install",
+        "proofstorm",
+        chart.to_str().context("chart path")?,
+        "--kubeconfig",
+        kubeconfig.to_str().context("kubeconfig path")?,
+        "--kube-context",
+        &context,
+        "--namespace",
+        "proofstorm-system",
+        "--create-namespace",
+        "--skip-crds",
+        "--set-string",
+        &repository,
+        "--set-string",
+        &digest,
+    ];
+    args.extend(settings_args.iter().map(String::as_str));
+    args.extend(["--wait", "--timeout", "120s", "--rollback-on-failure"]);
     process::run(
         &installation.home,
         &tool(&installation.home, "helm")?,
-        &[
-            "upgrade",
-            "--install",
-            "proofstorm",
-            bundle.join("chart").to_str().context("chart path")?,
-            "--kubeconfig",
-            installation
-                .kubeconfig()
-                .to_str()
-                .context("kubeconfig path")?,
-            "--kube-context",
-            &installation.context(),
-            "--namespace",
-            "proofstorm-system",
-            "--create-namespace",
-            "--skip-crds",
-            "--set-string",
-            &format!("image.repository={repository}"),
-            "--set-string",
-            &format!("image.digest={digest}"),
-            "--wait",
-            "--timeout",
-            "120s",
-            "--rollback-on-failure",
-        ],
+        &args,
         150,
     )?;
     ensure!(!expected.is_empty(), "missing deployment image");

@@ -181,6 +181,7 @@ fn fixture() -> (ProofstormCellAction, Arc<Mutex<Cluster>>, Context, Mailbox) {
         client,
         retries: std::sync::Arc::default(),
         native: std::sync::Arc::default(),
+        limits: proofstorm_core::ControllerLimits::default(),
     };
     (parent, cluster, context, mailbox)
 }

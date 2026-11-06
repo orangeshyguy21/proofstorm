@@ -129,12 +129,46 @@ fn field<'a>(value: &'a Value, name: &str) -> &'a str {
     value[name].as_str().unwrap_or("unknown")
 }
 
+fn config_summary(value: &Value, bin: &str) -> String {
+    use std::fmt::Write;
+    let mut text = String::new();
+    if let Some(changes) = value["changes"].as_array() {
+        for change in changes {
+            let _ = writeln!(
+                text,
+                "{} = {} ({})",
+                field(change, "key"),
+                change["value"].as_str().unwrap_or("default"),
+                field(change, "effect")
+            );
+        }
+        let _ = writeln!(text, "Apply: {bin} setup");
+        return text;
+    }
+    let _ = writeln!(text, "Settings: {}", field(value, "file"));
+    for row in value["settings"].as_array().into_iter().flatten() {
+        let source = if row["source"] == "default" {
+            "default".to_owned()
+        } else {
+            format!("set; default {}", field(row, "default"))
+        };
+        let _ = writeln!(
+            text,
+            "{} = {} ({source})",
+            field(row, "key"),
+            field(row, "value")
+        );
+    }
+    text
+}
+
 fn human(command: &str, value: &Value) -> String {
     use std::fmt::Write;
     let bin = proofstorm_app::command_name();
     match command {
         "runtime-stop" | "runtime-start" => runtime_summary(command, value, bin),
         "update" => update_summary(value),
+        "config" => config_summary(value, bin),
         "setup" if value["ready"] == true => format!("Runtime ready.\nOpen the GUI: {bin} gui\n"),
         "setup" if value["prepared"] == true => {
             format!("Tools prepared. Runtime not started.\nStart it: {bin} setup\n")

@@ -39,6 +39,16 @@ spec:
               value: "{{ .Values.image.repository }}{{ if .Values.image.digest }}@{{ .Values.image.digest }}{{ else }}:{{ .Values.image.tag }}{{ end }}"
             - name: PROOFSTORM_PRIVATE_ROOT
               value: /var/lib/proofstorm/private
+            - name: PROOFSTORM_ACTION_SLOTS
+              value: {{ .Values.controller.actionSlots | quote }}
+            - name: PROOFSTORM_NATIVE_STARTS
+              value: {{ .Values.controller.nativeStarts | quote }}
+            - name: PROOFSTORM_NATIVE_STARTS_PER_COMPONENT
+              value: {{ .Values.controller.nativeStartsPerComponent | quote }}
+            - name: PROOFSTORM_NATIVE_POLLS
+              value: {{ .Values.controller.nativePolls | quote }}
+            - name: PROOFSTORM_START_DEADLINE_SECONDS
+              value: {{ .Values.controller.startDeadlineSeconds | quote }}
           volumeMounts:
             - name: private-custody
               mountPath: /var/lib/proofstorm

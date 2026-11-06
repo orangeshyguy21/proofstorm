@@ -109,6 +109,7 @@ fn context(cluster: &Arc<Mutex<Cluster>>) -> Context {
         client,
         retries: std::sync::Arc::default(),
         native: std::sync::Arc::default(),
+        limits: proofstorm_core::ControllerLimits::default(),
     }
 }
 

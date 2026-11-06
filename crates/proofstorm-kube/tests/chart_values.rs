@@ -26,3 +26,47 @@ fn controller_cpu_is_never_capped_by_default() {
     assert!(cores(&resources["requests"]["cpu"]) >= 0.25);
     assert!(resources["limits"].get("memory").is_some());
 }
+
+#[test]
+fn chart_defaults_match_the_runtime_settings_defaults() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let values: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(root.join("charts/proofstorm/values.yaml")).expect("read values"),
+    )
+    .expect("parse values");
+    let resources = &values["resources"];
+    assert_eq!(
+        resources["requests"]["cpu"].as_str(),
+        Some(proofstorm_core::CONTROLLER_CPU_REQUEST)
+    );
+    assert_eq!(
+        resources["requests"]["memory"].as_str(),
+        Some(proofstorm_core::CONTROLLER_MEMORY_REQUEST)
+    );
+    assert_eq!(
+        resources["limits"]["memory"].as_str(),
+        Some(proofstorm_core::CONTROLLER_MEMORY_LIMIT)
+    );
+    let limits = proofstorm_core::ControllerLimits::default();
+    let controller = &values["controller"];
+    for (key, expected) in [
+        ("actionSlots", u64::from(limits.action_slots)),
+        ("nativeStarts", u64::from(limits.native_starts)),
+        (
+            "nativeStartsPerComponent",
+            u64::from(limits.native_starts_per_component),
+        ),
+        ("nativePolls", u64::from(limits.native_polls)),
+        (
+            "startDeadlineSeconds",
+            u64::from(limits.start_deadline_seconds),
+        ),
+    ] {
+        assert_eq!(controller[key].as_u64(), Some(expected), "{key}");
+    }
+    let template =
+        fs::read_to_string(root.join("charts/proofstorm/templates/deployment.yaml")).unwrap();
+    for (name, _) in limits.env() {
+        assert!(template.contains(name), "{name}");
+    }
+}

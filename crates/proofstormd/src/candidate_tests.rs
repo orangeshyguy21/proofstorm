@@ -107,6 +107,7 @@ fn fixture(cancel: bool) -> (Arc<Mutex<Cluster>>, Arc<Context>) {
         client,
         retries: std::sync::Arc::default(),
         native: std::sync::Arc::default(),
+        limits: proofstorm_core::ControllerLimits::default(),
     });
     (cluster, context)
 }

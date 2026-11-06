@@ -318,6 +318,15 @@ fn finish(
             regular(&home.join("installation.json"))?;
         }
     }
+    // Runtime settings outlive the runtime they configured: the replacement is
+    // created with them, including the cluster sizing that needed this reset.
+    let settings = archive.join(crate::runtime_settings::FILE_NAME);
+    let carried = crate::runtime_settings::path(home);
+    if settings.try_exists()? && !carried.try_exists()? {
+        regular(&settings)?;
+        crate::installation::private_directory(home)?;
+        fs::copy(&settings, &carried)?;
+    }
     next.activate_fresh()?;
     let tools = archive.join("tools");
     if tools.try_exists()? {
