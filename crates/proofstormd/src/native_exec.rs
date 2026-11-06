@@ -106,14 +106,61 @@ fn poll_interval(elapsed_seconds: i64) -> Duration {
 /// Upload the runner into a fresh private directory under `base` and print the
 /// directory. An incomplete upload (the transport timed out mid-stream) or a
 /// hangup removes the directory instead of leaving a partial runner behind.
-fn install_script(base: &str, bytes: usize) -> String {
+///
+/// A complete upload also replaces this pod's cached runner (removing caches of
+/// other versions), so later starts copy it instead of uploading. Caching is
+/// skipped where no SHA-256 tool can check the cache before use.
+fn install_script(base: &str, bytes: usize, digest: &str) -> String {
     format!(
         "set -eu; umask 077; dir=$(mktemp -d {base}/proofstorm-exec.XXXXXXXX); \
          trap 'rm -rf -- \"$dir\"; exit 70' HUP PIPE TERM; \
          if cat > \"$dir/runner\" && size=$(wc -c < \"$dir/runner\") && [ \"$((size))\" -eq {bytes} ]; then \
-         chmod 700 \"$dir/runner\"; printf '%s' \"$dir\"; trap - HUP PIPE TERM; \
+         chmod 700 \"$dir/runner\"; \
+         if {CHECKSUM_TOOL} && cp \"$dir/runner\" {base}/.proofstorm-runner.$$ 2>/dev/null; then \
+         for old in {base}/proofstorm-runner-*; do [ \"$old\" = {base}/proofstorm-runner-{digest} ] || rm -f -- \"$old\"; done; \
+         mv -f {base}/.proofstorm-runner.$$ {base}/proofstorm-runner-{digest} 2>/dev/null || rm -f -- {base}/.proofstorm-runner.$$; fi; \
+         printf '%s' \"$dir\"; trap - HUP PIPE TERM; \
          else rm -rf -- \"$dir\"; exit 65; fi"
     )
+}
+
+/// True where the container can compute SHA-256.
+const CHECKSUM_TOOL: &str =
+    "{ command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; }";
+
+/// Exit code of [`cached_install_script`] when this pod has no usable cache.
+const NO_CACHED_RUNNER: i32 = 75;
+
+/// Start from this pod's cached runner instead of uploading it. Anything in the
+/// container can write the cache, so the private copy must match the digest
+/// before it is used; a mismatch deletes the cache. Exits
+/// [`NO_CACHED_RUNNER`] when the cache is absent, wrong or uncheckable.
+fn cached_install_script(base: &str, digest: &str) -> String {
+    format!(
+        "set -eu; umask 077; cache={base}/proofstorm-runner-{digest}; \
+         {CHECKSUM_TOOL} && [ -f \"$cache\" ] || exit {NO_CACHED_RUNNER}; \
+         sum() {{ sha256sum \"$1\" 2>/dev/null || shasum -a 256 \"$1\"; }}; \
+         dir=$(mktemp -d {base}/proofstorm-exec.XXXXXXXX); \
+         trap 'rm -rf -- \"$dir\"; exit 70' HUP PIPE TERM; \
+         if cp \"$cache\" \"$dir/runner\" && [ \"$(sum \"$dir/runner\" | cut -c1-64)\" = {digest} ]; then \
+         chmod 700 \"$dir/runner\"; printf '%s' \"$dir\"; trap - HUP PIPE TERM; exit 0; fi; \
+         rm -rf -- \"$dir\"; rm -f -- \"$cache\"; exit {NO_CACHED_RUNNER}"
+    )
+}
+
+/// The runner binary and its SHA-256, read once per controller process.
+fn runner() -> Result<&'static (Vec<u8>, String), Error> {
+    static RUNNER: std::sync::OnceLock<(Vec<u8>, String)> = std::sync::OnceLock::new();
+    if let Some(runner) = RUNNER.get() {
+        return Ok(runner);
+    }
+    let binary = std::fs::read(
+        std::env::var("PROOFSTORM_NATIVE_RUNNER")
+            .unwrap_or_else(|_| "/usr/local/lib/proofstorm-exec".into()),
+    )
+    .map_err(|_| Error::LiveExec("native supervisor binary unavailable".into()))?;
+    let digest = format!("{:x}", Sha256::digest(&binary));
+    Ok(RUNNER.get_or_init(|| (binary, digest)))
 }
 
 /// Best effort: remove an exec directory that holds no receipt anyone needs.
@@ -159,6 +206,21 @@ pub(super) async fn exec_bounded(
     input: Option<&[u8]>,
     maximum: usize,
 ) -> Result<Vec<u8>, Error> {
+    match exec_status(pods, pod, container, args, input, maximum).await? {
+        (0, out) => Ok(out),
+        _ => Err(Error::LiveExec("native supervisor transport failed".into())),
+    }
+}
+
+/// Run a helper and return its exit code with its bounded stdout.
+async fn exec_status(
+    pods: &Api<Pod>,
+    pod: &str,
+    container: &str,
+    args: Vec<String>,
+    input: Option<&[u8]>,
+    maximum: usize,
+) -> Result<(i32, Vec<u8>), Error> {
     let run = async {
         let attach = attach_params(container, input.is_some());
         let mut process = pods.exec(pod, args, &attach).await?;
@@ -207,10 +269,10 @@ pub(super) async fn exec_bounded(
             .join()
             .await
             .map_err(|_| Error::LiveExec("native transport interrupted".into()))?;
-        if exec_exit_code(status.as_ref()) != 0 || truncated {
+        if truncated {
             return Err(Error::LiveExec("native supervisor transport failed".into()));
         }
-        Ok(out)
+        Ok((exec_exit_code(status.as_ref()), out))
     };
     tokio::time::timeout(Duration::from_secs(20), run)
         .await
@@ -572,23 +634,39 @@ pub async fn reconcile(
     if let Err(message) = command.validate() {
         return patch_invalid_action(action, context, message).await;
     }
-    let binary = std::fs::read(
-        std::env::var("PROOFSTORM_NATIVE_RUNNER")
-            .unwrap_or_else(|_| "/usr/local/lib/proofstorm-exec".into()),
-    )
-    .map_err(|_| Error::LiveExec("native supervisor binary unavailable".into()))?;
-    let directory = exec(
+    let (binary, digest) = runner()?;
+    // Copy this pod's cached runner when it checks out; upload it otherwise.
+    let directory = match exec_status(
         &pods,
         &pod.name_any(),
         &container,
         vec![
             "/bin/sh".into(),
             "-c".into(),
-            install_script("/tmp", binary.len()),
+            cached_install_script("/tmp", digest),
         ],
-        Some(&binary),
+        None,
+        65536,
     )
-    .await?;
+    .await?
+    {
+        (0, directory) => directory,
+        (NO_CACHED_RUNNER, _) => {
+            exec(
+                &pods,
+                &pod.name_any(),
+                &container,
+                vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    install_script("/tmp", binary.len(), digest),
+                ],
+                Some(binary),
+            )
+            .await?
+        }
+        _ => return Err(Error::LiveExec("native supervisor transport failed".into())),
+    };
     let directory = String::from_utf8(directory)
         .map_err(|_| Error::LiveExec("invalid supervisor directory".into()))?;
     if !is_exec_directory(&directory) {
@@ -602,7 +680,7 @@ pub async fn reconcile(
             .ok_or(Error::ControllerInvariant("pod UID missing"))?,
         container,
         directory,
-        runner_digest: format!("sha256:{:x}", Sha256::digest(&binary)),
+        runner_digest: format!("sha256:{digest}"),
     };
     let version = action.resource_version().ok_or(Error::ControllerInvariant(
         "native start requires an observed resource version",
@@ -767,10 +845,45 @@ mod tests {
         assert_eq!(poll_interval(-30), Duration::from_secs(1));
     }
 
+    fn digest(runner: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(runner))
+    }
+
+    fn exec_dirs(base: &std::path::Path) -> usize {
+        std::fs::read_dir(base)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("proofstorm-exec.")
+            })
+            .count()
+    }
+
+    fn cached(base: &str, digest: &str) -> std::process::Output {
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg(cached_install_script(base, digest))
+            .output()
+            .unwrap()
+    }
+
     fn install(base: &str, input: &[u8], expected_bytes: usize) -> std::process::Output {
+        install_as(base, input, expected_bytes, &digest(input))
+    }
+
+    fn install_as(
+        base: &str,
+        input: &[u8],
+        expected_bytes: usize,
+        digest: &str,
+    ) -> std::process::Output {
         let mut child = Command::new("/bin/sh")
             .arg("-c")
-            .arg(install_script(base, expected_bytes))
+            .arg(install_script(base, expected_bytes, digest))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -802,10 +915,63 @@ mod tests {
         let short = install(base_path, &runner[..5], runner.len());
         assert_eq!(short.status.code(), Some(65));
         assert!(short.stdout.is_empty());
+        assert_eq!(exec_dirs(&base), 0, "partial runner left behind");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_cached_runner_is_used_only_when_its_private_copy_matches_the_digest() {
+        let base =
+            std::env::temp_dir().join(format!("proofstorm-cache-test-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let base_path = base.to_str().unwrap();
+        let runner = b"#!/bin/sh\nexit 0\n";
+        let expected = digest(runner);
+        let cache = base.join(format!("proofstorm-runner-{expected}"));
+
+        // Nothing cached yet: the controller uploads instead.
         assert_eq!(
-            std::fs::read_dir(&base).unwrap().count(),
-            0,
-            "partial runner left behind"
+            cached(base_path, &expected).status.code(),
+            Some(NO_CACHED_RUNNER)
+        );
+        assert_eq!(exec_dirs(&base), 0);
+
+        // A complete upload caches the runner for this pod.
+        let uploaded = install(base_path, runner, runner.len());
+        assert!(uploaded.status.success(), "{uploaded:?}");
+        std::fs::remove_dir_all(String::from_utf8(uploaded.stdout).unwrap()).unwrap();
+        assert_eq!(std::fs::read(&cache).unwrap(), runner);
+
+        // A later start copies it without an upload.
+        let hit = cached(base_path, &expected);
+        assert!(hit.status.success(), "{hit:?}");
+        let directory = String::from_utf8(hit.stdout).unwrap();
+        assert!(is_exec_directory(&directory.replace(base_path, "/tmp")));
+        assert_eq!(
+            std::fs::read(format!("{directory}/runner")).unwrap(),
+            runner
+        );
+        std::fs::remove_dir_all(&directory).unwrap();
+
+        // Something in the container replaced the cache: refuse it and remove it.
+        std::fs::write(&cache, b"#!/bin/sh\nexit 7\n").unwrap();
+        assert_eq!(
+            cached(base_path, &expected).status.code(),
+            Some(NO_CACHED_RUNNER)
+        );
+        assert!(!cache.exists());
+        assert_eq!(exec_dirs(&base), 0);
+
+        // A new runner version's upload removes the old version's cache.
+        std::fs::write(&cache, runner).unwrap();
+        let newer = b"#!/bin/sh\nexit 0 # v2\n";
+        let upgraded = install(base_path, newer, newer.len());
+        assert!(upgraded.status.success(), "{upgraded:?}");
+        std::fs::remove_dir_all(String::from_utf8(upgraded.stdout).unwrap()).unwrap();
+        assert!(!cache.exists());
+        assert_eq!(
+            std::fs::read(base.join(format!("proofstorm-runner-{}", digest(newer)))).unwrap(),
+            newer
         );
         std::fs::remove_dir_all(&base).unwrap();
     }
