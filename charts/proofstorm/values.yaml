@@ -5,10 +5,14 @@ image:
   digest: ""
   pullPolicy: Always
 
+# No CPU limit: every native command start passes through the controller. With
+# 24 agents on one cell, a 250m limit kept it throttled in every scheduling
+# period, so starts slowed until they missed their deadline. Unthrottled it used
+# about 0.28 cores. The request keeps its fair share on a busy node; memory
+# stays capped because running out takes the whole host down.
 resources:
   requests:
-    cpu: 50m
+    cpu: 250m
     memory: 64Mi
   limits:
-    cpu: 250m
     memory: 256Mi
