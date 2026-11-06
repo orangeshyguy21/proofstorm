@@ -264,13 +264,20 @@ impl Cells {
                 );
             }
         };
-        observe_resource(instance, resource)
+        let revision = self
+            .store
+            .revision(&self.workspace, &self.principal, &instance.revision_digest)
+            .ok();
+        observe_resource(instance, resource, revision.as_ref())
     }
 }
 
+/// `revision` is the cell's published revision from the store, used to expire
+/// stale protocol results; without it they are shown as recorded.
 fn observe_resource(
     instance: &proofstorm_core::CellInstance,
     mut resource: ProofstormCell,
+    revision: Option<&proofstorm_core::PublishedRevision>,
 ) -> (RuntimeObservation, Option<ProofstormCell>) {
     if resource.spec.workspace_id != instance.workspace_id
         || resource.spec.instance_id != instance.id
@@ -284,7 +291,14 @@ fn observe_resource(
             None,
         );
     }
-    proofstorm_kube::probes::expire_cell_status(&mut resource, now());
+    if let Some(revision) = revision {
+        proofstorm_kube::probes::expire_cell_status(
+            &mut resource,
+            &revision.cell,
+            &revision.lock,
+            now(),
+        );
+    }
     let status = resource.status.as_ref();
     let current = status.is_some_and(|s| {
         s.observed_desired_generation == instance.generation

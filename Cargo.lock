@@ -3029,6 +3029,7 @@ name = "proofstorm-kube"
 version = "0.1.0-alpha.12"
 dependencies = [
  "anyhow",
+ "flate2",
  "k8s-openapi",
  "kube",
  "proofstorm-core",

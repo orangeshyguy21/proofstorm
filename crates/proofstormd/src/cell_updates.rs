@@ -1,62 +1,46 @@
 //! Adopt old inventories and reconcile resources removed from a live cell.
 use super::{
-    Api, BTreeMap, BTreeSet, ConfigMap, Context, DeleteParams, Error, ListParams, ProofstormCell,
+    Api, BTreeMap, BTreeSet, Context, DeleteParams, Error, ListParams, ProofstormCell,
     ProofstormCellAction, ResourceExt, instance_namespace,
 };
 use kube::api::{ApiResource, DynamicObject, GroupVersionKind, Preconditions};
 
+/// The cell as an action sees it: at the revision the action was submitted
+/// against when it names one, otherwise at the cell's current revision.
 pub async fn action_cell(
     action: &ProofstormCellAction,
-    mut cell: ProofstormCell,
+    cell: ProofstormCell,
     context: &Context,
-) -> Result<ProofstormCell, Error> {
+) -> Result<proofstorm_kube::LoadedCell, Error> {
     let Some(revision) = action
         .annotations()
         .get("proofstorm.dev/action-revision")
-        .filter(|s| !s.is_empty())
+        .filter(|revision| !revision.is_empty() && **revision != cell.spec.revision_digest)
+        .cloned()
     else {
-        return Ok(cell);
+        return Ok(context.revisions.loaded(&context.client, cell).await?);
     };
-    if revision == &cell.spec.revision_digest {
-        return Ok(cell);
-    }
-    let digest = proofstorm_core::digest_json(&(&cell.spec.instance_key, revision));
-    let maps = Api::<ConfigMap>::namespaced(
-        context.client.clone(),
-        &action
-            .namespace()
-            .ok_or_else(|| Error::MissingNamespace(action.name_any()))?,
-    );
-    let map = maps.get(&format!("revision-{}", &digest[7..39])).await?;
-    // Snapshot is generated from a typed spec by the materialization/update path.
-    if let Some(spec) = map.data.as_ref().and_then(|d| d.get("spec.json"))
-        && let Ok(spec) = serde_json::from_str::<proofstorm_kube::ProofstormCellSpec>(spec)
-        && spec.instance_key == cell.spec.instance_key
-        && spec.revision_digest == *revision
-    {
-        cell.spec = spec;
-        if let Some(status) = cell.status.as_mut() {
-            for component in &mut status.components {
-                if cell.spec.lock.entries.iter().any(|e| {
-                    e.component_id == component.id
-                        && e.rollout_digest == component.observed_rollout_digest
-                }) {
-                    component.observed_revision_digest.clone_from(revision);
-                }
+    let bound = context
+        .revisions
+        .load(&context.client, &cell, &revision)
+        .await?;
+    let mut loaded = proofstorm_kube::LoadedCell::at_revision(cell, bound)?;
+    if let Some(status) = loaded.resource.status.as_mut() {
+        for component in &mut status.components {
+            if loaded.revision.lock.entries.iter().any(|e| {
+                e.component_id == component.id
+                    && e.rollout_digest == component.observed_rollout_digest
+            }) {
+                component.observed_revision_digest.clone_from(&revision);
             }
-            status.observed_revision_digest.clone_from(revision);
         }
+        status.observed_revision_digest.clone_from(&revision);
     }
-    if cell.spec.revision_digest != *revision {
-        return Err(Error::ControllerInvariant(
-            "operation revision snapshot is invalid",
-        ));
-    }
-    Ok(cell)
+    Ok(loaded)
 }
 
 pub async fn prune(
-    cell: &ProofstormCell,
+    cell: &proofstorm_kube::LoadedCell,
     context: &Context,
 ) -> Result<
     (
@@ -68,7 +52,7 @@ pub async fn prune(
 > {
     let namespace = instance_namespace(&cell.spec.instance_key);
     let desired = cell
-        .spec
+        .revision
         .cell
         .components
         .iter()

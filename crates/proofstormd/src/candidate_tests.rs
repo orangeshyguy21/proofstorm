@@ -109,6 +109,7 @@ fn fixture(cancel: bool) -> (Arc<Mutex<Cluster>>, Arc<Context>) {
         native: std::sync::Arc::default(),
         limits: proofstorm_core::ControllerLimits::default(),
         cells: kube::runtime::reflector::store().0,
+        revisions: std::sync::Arc::default(),
     });
     (cluster, context)
 }

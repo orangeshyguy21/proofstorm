@@ -1,9 +1,7 @@
 use std::collections::BTreeMap;
 
 use kube::CustomResource;
-use proofstorm_core::{
-    CandidateBuildPhase, Capability, CellSpec, ComponentStatus, InventoryEntry, ResolvedLock,
-};
+use proofstorm_core::{CandidateBuildPhase, Capability, ComponentStatus, InventoryEntry};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,10 +22,9 @@ pub struct ProofstormCellSpec {
     pub instance_id: String,
     /// Stable opaque identity used to derive the instance namespace.
     pub instance_key: String,
-    /// Digest of the immutable resolved cell revision.
+    /// Digest of the immutable resolved cell revision. Its spec and lock are
+    /// stored in the revision object, not here; see [`crate::LoadedCell`].
     pub revision_digest: String,
-    pub lock: ResolvedLock,
-    pub cell: CellSpec,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

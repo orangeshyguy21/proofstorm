@@ -66,14 +66,14 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                         cluster.objects.get_mut(&path).unwrap()["metadata"]["resourceVersion"] = json!(revision.to_string());
                         if let Some(hook) = cluster.after_update_conflict.take() { hook(); }
                         (409,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Conflict","message":"controller status changed resourceVersion","code":409}))
-                    } else if value.get("spec").is_none() && value.get("data").is_none() && cluster.conflict_lease {
+                    } else if value.get("spec").is_none() && value.get("data").is_none() && value.get("binaryData").is_none() && cluster.conflict_lease {
                         cluster.conflict_lease = false;
                         (409, json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Conflict","message":"controller updated metadata","code":409}))
                     } else if value.get("spec").is_some() && path.contains("/proofstormcells/") && cluster.fail_materialize {
                         cluster.fail_materialize=false;
                         (503,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Unavailable","message":"injected interruption","code":503}))
                     } else {
-                        if value.get("spec").is_none() && value.get("data").is_none() {
+                        if value.get("spec").is_none() && value.get("data").is_none() && value.get("binaryData").is_none() {
                             let object=cluster.objects.get_mut(&path).unwrap();
                             for (key,v) in value["metadata"]["annotations"].as_object().unwrap() {if v.is_null() {object["metadata"]["annotations"].as_object_mut().unwrap().remove(key);} else {object["metadata"]["annotations"][key]=v.clone();}}
                             value=object.clone();
@@ -749,7 +749,7 @@ async fn retained_data_edits_cannot_converge_using_the_previous_configuration_st
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let cells = service(store, cluster.clone());
+    let cells = service(store.clone(), cluster.clone());
     let handle = cells.up("generation-check", &spec()).await.unwrap().cell;
     environment_tests::ready(&cluster);
     let mut instance = cells
@@ -772,7 +772,18 @@ async fn retained_data_edits_cannot_converge_using_the_previous_configuration_st
         .as_mut()
         .unwrap()
         .observed_desired_generation = 1;
-    let pending = proofstorm_app::runtime::status_from_resource(instance.clone(), &resource);
+    let published = store
+        .revision("local", "developer", &instance.revision_digest)
+        .unwrap();
+    let loaded = |resource: &proofstorm_kube::ProofstormCell| {
+        proofstorm_kube::LoadedCell::from_spec(
+            resource.clone(),
+            published.cell.clone(),
+            published.lock.clone(),
+        )
+    };
+    let pending =
+        proofstorm_app::runtime::status_from_resource(instance.clone(), &loaded(&resource));
     assert_eq!(pending.phase, proofstorm_core::InstancePhase::Pending);
     assert_eq!(pending.observed_generation, 1);
     resource
@@ -781,7 +792,7 @@ async fn retained_data_edits_cannot_converge_using_the_previous_configuration_st
         .unwrap()
         .observed_desired_generation = 2;
     assert_eq!(
-        proofstorm_app::runtime::status_from_resource(instance, &resource).phase,
+        proofstorm_app::runtime::status_from_resource(instance, &loaded(&resource)).phase,
         proofstorm_core::InstancePhase::Ready
     );
 }
@@ -837,10 +848,17 @@ async fn edit_conflict_retry_rereads_the_latest_durable_generation() {
         .find(|value| value["kind"] == "ProofstormCell")
         .unwrap();
     assert_eq!(cell["spec"]["revisionDigest"], next_revision);
-    assert_eq!(
-        cell["spec"]["cell"]["components"].as_array().unwrap().len(),
-        3
-    );
+    // The cell names its revision; the components live in the stored revision.
+    let revision = cluster
+        .objects
+        .values()
+        .filter_map(|value| {
+            serde_json::from_value::<k8s_openapi::api::core::v1::ConfigMap>(value.clone()).ok()
+        })
+        .filter_map(|map| proofstorm_kube::decode_revision(&map).ok())
+        .find(|revision| revision.revision_digest == next_revision)
+        .expect("the new revision is stored");
+    assert_eq!(revision.cell.components.len(), 3);
     assert_eq!(
         cluster
             .requests

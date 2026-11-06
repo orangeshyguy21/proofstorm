@@ -20,7 +20,7 @@ fn fixture() -> (
     crate::developer::configure(&store, "local", "actor").unwrap();
     let (cell, pod) = workspace_fixture::materialize(&store);
     let cluster = Arc::new(Mutex::new(Cluster {
-        cell,
+        cell: cell.resource,
         pod,
         actions: vec![],
     }));

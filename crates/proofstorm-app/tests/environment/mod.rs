@@ -20,16 +20,36 @@ fn observer(cells: &Cells) -> Cells {
         "viewer".into(),
     )
 }
+/// Revisions the fake cluster stores, by digest, decoded as the controller reads them.
+pub(super) fn stored_revisions(
+    objects: &std::collections::BTreeMap<String, Value>,
+) -> std::collections::BTreeMap<String, proofstorm_kube::CellRevision> {
+    objects
+        .values()
+        .filter_map(|value| {
+            serde_json::from_value::<k8s_openapi::api::core::v1::ConfigMap>(value.clone()).ok()
+        })
+        .filter_map(|map| proofstorm_kube::decode_revision(&map).ok())
+        .map(|revision| (revision.revision_digest.clone(), revision))
+        .collect()
+}
+
 pub(super) fn ready(cluster: &Arc<Mutex<Cluster>>) {
-    for (path, object) in &mut cluster.lock().unwrap().objects {
+    let mut cluster = cluster.lock().unwrap();
+    let revisions = stored_revisions(&cluster.objects);
+    for (path, object) in &mut cluster.objects {
         if path.contains("/proofstormcells/") {
+            let rollout = object["spec"]["revisionDigest"]
+                .as_str()
+                .and_then(|digest| revisions.get(digest))
+                .map(|revision| revision.lock.entries[0].rollout_digest.clone());
             object["metadata"]["generation"] = json!(1);
             object["metadata"]["resourceVersion"] = json!("12");
             object["metadata"]["managedFields"] =
                 json!([{"subresource":"status","time":"2026-09-06T12:00:00Z"}]);
             object["status"]["observedGeneration"] = json!(1);
             object["status"]["phase"] = json!("Ready");
-            object["status"]["components"] = json!([{"id":"chain","kind":"bitcoin","observed_revision_digest":object["spec"]["revisionDigest"],"observed_rollout_digest":object["spec"]["lock"]["entries"][0]["rollout_digest"],"protocol_observation":{"observed_at_unix":0,"expires_at_unix":i64::MAX,"elapsed_micros":1},"conditions":[{"condition_type":"protocol_ready","state":"true","reason":"protocol_responding","message":"ready","last_transition_unix":1},{"condition_type":"component_ready","state":"true","reason":"component_operational","message":"ready","last_transition_unix":1}],"ready":true,"service":"chain","ports":{"rpc":18443}}]);
+            object["status"]["components"] = json!([{"id":"chain","kind":"bitcoin","observed_revision_digest":object["spec"]["revisionDigest"],"observed_rollout_digest":rollout,"protocol_observation":{"observed_at_unix":0,"expires_at_unix":i64::MAX,"elapsed_micros":1},"conditions":[{"condition_type":"protocol_ready","state":"true","reason":"protocol_responding","message":"ready","last_transition_unix":1},{"condition_type":"component_ready","state":"true","reason":"component_operational","message":"ready","last_transition_unix":1}],"ready":true,"service":"chain","ports":{"rpc":18443}}]);
         }
     }
 }

@@ -6,7 +6,7 @@ use serde_json::json;
 const KEY: &str = "i0123456789012345678";
 const IMAGE: &str = "controller:test";
 
-fn fixture() -> (ProofstormCell, Resources) {
+fn fixture() -> (proofstorm_kube::LoadedCell, Resources) {
     let mut spec: proofstorm_core::CellSpec =
         serde_json::from_str(include_str!("../../../../examples/developer-cell.json")).unwrap();
     spec.components.retain(|component| component.id == "chain");
@@ -48,16 +48,18 @@ fn fixture() -> (ProofstormCell, Resources) {
         "status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}],
             "containerStatuses":[{"name":"worker","image":IMAGE,"imageID":"image","restartCount":0,"ready":true}]}
     })).unwrap();
-    let mut cell = ProofstormCell::new(
-        "cell",
-        proofstorm_kube::ProofstormCellSpec {
-            workspace_id: "workspace".into(),
-            instance_id: "instance".into(),
-            instance_key: KEY.into(),
-            revision_digest: "revision".into(),
-            cell: spec,
-            lock,
-        },
+    let mut cell = proofstorm_kube::LoadedCell::from_spec(
+        ProofstormCell::new(
+            "cell",
+            proofstorm_kube::ProofstormCellSpec {
+                workspace_id: "workspace".into(),
+                instance_id: "instance".into(),
+                instance_key: KEY.into(),
+                revision_digest: "revision".into(),
+            },
+        ),
+        spec,
+        lock,
     );
     cell.metadata.namespace = Some("system".into());
     cell.metadata.uid = Some("cell-uid".into());
@@ -130,8 +132,13 @@ fn no_api() -> Client {
 async fn watch_relist_and_worker_restart_invalidate_inflight_results() {
     let (cell, resources) = fixture();
     let plans = Arc::new(
-        proofstorm_kube::compile_component_plans(KEY, "revision", &cell.spec.cell, &cell.spec.lock)
-            .unwrap(),
+        proofstorm_kube::compile_component_plans(
+            KEY,
+            "revision",
+            &cell.revision.cell,
+            &cell.revision.lock,
+        )
+        .unwrap(),
     );
     let (manager, _receive) = Manager::new(no_api(), IMAGE.into());
     manager.register(&cell, plans).unwrap();
@@ -197,7 +204,7 @@ fn cache_deletion_is_uid_bound_and_releases_namespace_entries() {
 #[tokio::test]
 async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_status() {
     let (cell, resources) = fixture();
-    let observed = Arc::new(Mutex::new(cell.clone()));
+    let observed = Arc::new(Mutex::new(cell.resource.clone()));
     let requests = Arc::new(Mutex::new(Vec::new()));
     let client = Client::new(
         tower::service_fn({
@@ -235,8 +242,13 @@ async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_
     );
     let (manager, _receive) = Manager::new(client.clone(), IMAGE.into());
     let plans = Arc::new(
-        proofstorm_kube::compile_component_plans(KEY, "revision", &cell.spec.cell, &cell.spec.lock)
-            .unwrap(),
+        proofstorm_kube::compile_component_plans(
+            KEY,
+            "revision",
+            &cell.revision.cell,
+            &cell.revision.lock,
+        )
+        .unwrap(),
     );
     manager.register(&cell, plans.clone()).unwrap();
     populate(&mut manager.state.lock().unwrap(), resources);
@@ -259,8 +271,11 @@ async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_
         native: Arc::default(),
         limits: proofstorm_core::ControllerLimits::default(),
         cells: kube::runtime::reflector::store().0,
+        revisions: std::sync::Arc::default(),
     });
-    crate::reconcile(Arc::new(cell.clone()), context.clone())
+    // This fake API serves no revision objects; the controller has read this one.
+    context.revisions.insert((*cell.revision).clone());
+    crate::reconcile(Arc::new(cell.resource.clone()), context.clone())
         .await
         .unwrap();
     let current = observed.lock().unwrap().clone();
@@ -278,8 +293,13 @@ async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_
 async fn stable_results_coalesce_but_expiry_and_resource_changes_notify() {
     let (cell, resources) = fixture();
     let plans = Arc::new(
-        proofstorm_kube::compile_component_plans(KEY, "revision", &cell.spec.cell, &cell.spec.lock)
-            .unwrap(),
+        proofstorm_kube::compile_component_plans(
+            KEY,
+            "revision",
+            &cell.revision.cell,
+            &cell.revision.lock,
+        )
+        .unwrap(),
     );
     let (manager, _receive) = Manager::new(no_api(), IMAGE.into());
     manager.register(&cell, plans).unwrap();

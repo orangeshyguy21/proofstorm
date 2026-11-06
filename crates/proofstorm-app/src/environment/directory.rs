@@ -86,7 +86,11 @@ impl Cells {
                 Err(StoreError::NotFound { .. }) => continue,
                 Err(error) => return Err(error.into()),
             };
-            let (runtime, resource) = observe_resource(&instance, resource);
+            let published = self
+                .store
+                .revision(&self.workspace, &self.principal, &instance.revision_digest)
+                .ok();
+            let (runtime, resource) = observe_resource(&instance, resource, published.as_ref());
             let ready = resource
                 .as_ref()
                 .filter(|_| matches!(runtime.state, ObservationState::Available))
@@ -98,7 +102,7 @@ impl Cells {
                         .count()
                 });
             let header = json!({"id":id,"instance_key":instance.instance_key,"name":entry.handle.as_ref().map(|h|&h.name),"owner":entry.handle.as_ref().map(|h|&h.owner),"desired_generation":instance.generation,"revision_digest":instance.revision_digest,
-                "runtime":runtime,"ready_components":ready,"total_components":resource.as_ref().map(|r|r.spec.cell.components.len())});
+                "runtime":runtime,"ready_components":ready,"total_components":published.as_ref().map(|r|r.cell.components.len())});
             if query.phase.is_some() && runtime.phase.is_none() {
                 unavailable.push(id);
                 continue;

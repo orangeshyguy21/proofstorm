@@ -21,6 +21,8 @@ pub struct Runtime {
     pub client: Client,
     pub control_namespace: String,
     pub cluster_source: String,
+    /// Immutable cell revisions, read once each per process.
+    pub revisions: std::sync::Arc<proofstorm_kube::RevisionCache>,
 }
 impl Runtime {
     /// Current cluster inventory; a failed list must never look like an empty cluster.
@@ -62,6 +64,7 @@ impl Runtime {
     #[must_use]
     pub fn new(client: Client, control_namespace: String) -> Self {
         Self {
+            revisions: std::sync::Arc::default(),
             client,
             cluster_source: kube::config::Kubeconfig::read()
                 .ok()
@@ -259,6 +262,13 @@ impl Runtime {
         revision: PublishedRevision,
     ) -> Result<CellInstanceStatus, Error> {
         let cells = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
+        let revision = proofstorm_kube::CellRevision {
+            workspace_id: instance.workspace_id.clone(),
+            instance_key: instance.instance_key.clone(),
+            revision_digest: instance.revision_digest.clone(),
+            cell: revision.cell,
+            lock: revision.lock,
+        };
         let mut resource = ProofstormCell::new(
             &instance.resource_name,
             ProofstormCellSpec {
@@ -266,8 +276,6 @@ impl Runtime {
                 instance_id: instance.id.clone(),
                 instance_key: instance.instance_key.clone(),
                 revision_digest: instance.revision_digest.clone(),
-                lock: revision.lock,
-                cell: revision.cell,
             },
         );
         resource.metadata.namespace = Some(self.control_namespace.clone());
@@ -284,15 +292,71 @@ impl Runtime {
                     "Existing desired configuration differs; resume the accepted update instead of materializing an older revision",
                 ));
             }
-            crate::updates::snapshot(self, &existing).await?;
-            return Ok(status_from_resource(instance, &existing));
+            let revision = self.store_revision(&existing, revision).await?;
+            return Ok(status_from_resource(instance, &paired(existing, revision)?));
         }
+        // The cell first, so its revision can be owned by it. Until the revision
+        // is stored the controller leaves the cell pending.
         let applied = cells
             .create(&kube::api::PostParams::default(), &resource)
             .await
             .map_err(kube_error)?;
-        crate::updates::snapshot(self, &applied).await?;
-        Ok(status_from_resource(instance, &applied))
+        let revision = self.store_revision(&applied, revision).await?;
+        Ok(status_from_resource(instance, &paired(applied, revision)?))
+    }
+
+    /// Store `revision` for `cell`, owned by it, unless an identical one is
+    /// already stored. Revisions are immutable: a different one under the same
+    /// name is a conflict.
+    pub(crate) async fn store_revision(
+        &self,
+        cell: &ProofstormCell,
+        revision: proofstorm_kube::CellRevision,
+    ) -> Result<std::sync::Arc<proofstorm_kube::CellRevision>, Error> {
+        use kube::Resource;
+        revision
+            .verify()
+            .map_err(|e| Error::problem("cell_revision_invalid", e.to_string()))?;
+        let maps = Api::<ConfigMap>::namespaced(self.client.clone(), &self.control_namespace);
+        let object = proofstorm_kube::revision_config_map(
+            &revision,
+            &self.control_namespace,
+            cell.controller_owner_ref(&()),
+        )
+        .map_err(|e| Error::problem("cell_revision_too_large", e.to_string()))?;
+        let name = object.metadata.name.clone().unwrap_or_default();
+        let stored = match maps.get_opt(&name).await.map_err(kube_error)? {
+            Some(existing) => existing,
+            None => match maps
+                .create(&kube::api::PostParams::default(), &object)
+                .await
+            {
+                Ok(created) => created,
+                Err(kube::Error::Api(error)) if error.code == 409 => {
+                    maps.get(&name).await.map_err(kube_error)?
+                }
+                Err(error) => return Err(kube_error(error)),
+            },
+        };
+        if proofstorm_kube::decode_revision(&stored).as_ref() != Ok(&revision) {
+            return Err(Error::problem(
+                "cell_revision_conflict",
+                "Immutable revision differs from the expected cell configuration",
+            ));
+        }
+        self.revisions.insert(revision.clone());
+        Ok(std::sync::Arc::new(revision))
+    }
+
+    /// `cell` with the revision its digest names.
+    pub(crate) async fn loaded(
+        &self,
+        cell: ProofstormCell,
+    ) -> Result<proofstorm_kube::LoadedCell, Error> {
+        self.revisions
+            .loaded(&self.client, cell)
+            .await
+            .map_err(|e| Error::problem("cell_revision_unavailable", e.to_string()))
     }
     pub async fn status(&self, instance: CellInstance) -> Result<CellInstanceStatus, Error> {
         let cells = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
@@ -310,7 +374,10 @@ impl Runtime {
                     "Runtime resource belongs to a different cell incarnation",
                 ));
             }
-            return Ok(status_from_resource(instance, &resource));
+            return Ok(status_from_resource(
+                instance,
+                &self.loaded(resource).await?,
+            ));
         }
         let receipts = Api::<ConfigMap>::namespaced(self.client.clone(), &self.control_namespace);
         let name = format!("proofstorm-teardown-{}", instance.instance_key);
@@ -461,14 +528,24 @@ impl Runtime {
         })
     }
 }
+fn paired(
+    cell: ProofstormCell,
+    revision: std::sync::Arc<proofstorm_kube::CellRevision>,
+) -> Result<proofstorm_kube::LoadedCell, Error> {
+    proofstorm_kube::LoadedCell::new(cell, revision)
+        .map_err(|e| Error::problem("cell_revision_mismatch", e.to_string()))
+}
+
 #[must_use]
 pub fn status_from_resource(
     instance: CellInstance,
-    resource: &ProofstormCell,
+    loaded: &proofstorm_kube::LoadedCell,
 ) -> CellInstanceStatus {
-    let mut resource = resource.clone();
+    let mut resource = loaded.resource.clone();
     proofstorm_kube::probes::expire_cell_status(
         &mut resource,
+        &loaded.revision.cell,
+        &loaded.revision.lock,
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |duration| {

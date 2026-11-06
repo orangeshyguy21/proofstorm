@@ -17,6 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 toml_edit = { version = "=0.22.27", features = ["serde"] }
+flate2 = "1.1"
 
 [dev-dependencies]
 anyhow.workspace = true

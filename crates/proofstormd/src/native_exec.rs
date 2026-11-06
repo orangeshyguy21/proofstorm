@@ -1,10 +1,10 @@
 //! Durable supervisor handles. Reconciliation polls receipts; it never replays starts.
 use super::{
     ACTION_CANCEL_ANNOTATION, Action, ActionPhase, Api, AttachParams, COMPONENT_LABEL, CellAction,
-    Context, Duration, Error, INSTANCE_LABEL, ListParams, Pod, ProofstormCell,
-    ProofstormCellAction, ProofstormCellActionStatus, ResourceExt, compile_component_plans,
-    exec_exit_code, instance_namespace, now_unix, patch_action_failure, patch_action_status,
-    patch_invalid_action, read_bounded_output, status_object,
+    Context, Duration, Error, INSTANCE_LABEL, ListParams, Pod, ProofstormCellAction,
+    ProofstormCellActionStatus, ResourceExt, compile_component_plans, exec_exit_code,
+    instance_namespace, now_unix, patch_action_failure, patch_action_status, patch_invalid_action,
+    read_bounded_output, status_object,
 };
 use kube::api::{Patch, PatchParams};
 use proofstorm_core::native::{NativeCommand, cap_public_streams};
@@ -346,7 +346,7 @@ fn helper_args(reference: &NativeExecutionRef, mode: &str) -> Vec<String> {
 )]
 pub async fn reconcile(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &proofstorm_kube::LoadedCell,
     context: &Context,
 ) -> Result<Action, Error> {
     let CellAction::ComponentExecLive(request) = &action.spec.action else {
@@ -380,8 +380,8 @@ pub async fn reconcile(
     let plans = compile_component_plans(
         &cell.spec.instance_key,
         &cell.spec.revision_digest,
-        &cell.spec.cell,
-        &cell.spec.lock,
+        &cell.revision.cell,
+        &cell.revision.lock,
     )?;
     let Some(component) = plans
         .iter()

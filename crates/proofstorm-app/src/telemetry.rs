@@ -180,7 +180,10 @@ impl Cells {
             )
             .is_ok()
         {
-            usage.balances = balances::sample(cell, &pods, &pod_list.items).await;
+            // Balances need the cell's components and lock, from its revision.
+            if let Ok(loaded) = self.runtime.loaded(cell.clone()).await {
+                usage.balances = balances::sample(&loaded, &pods, &pod_list.items).await;
+            }
         }
         usage
     }
@@ -367,12 +370,15 @@ mod live_relationship_tests {
         .unwrap();
         let client = kube::Client::try_from(config).unwrap();
         let cells = Api::<ProofstormCell>::namespaced(client.clone(), "proofstorm-system");
-        let cell = cells.get(&name).await.unwrap();
+        let cell = proofstorm_kube::RevisionCache::default()
+            .loaded(&client, cells.get(&name).await.unwrap())
+            .await
+            .unwrap();
         let pods = Api::<Pod>::namespaced(client, &instance_namespace(&cell.spec.instance_key));
         let inventory = pods.list(&ListParams::default()).await.unwrap().items;
         let observations = balances::sample(&cell, &pods, &inventory).await;
         let components = cell
-            .spec
+            .revision
             .cell
             .components
             .iter()
@@ -430,7 +436,10 @@ mod live_relationship_tests {
         .unwrap();
         let client = kube::Client::try_from(config).unwrap();
         let cells = Api::<ProofstormCell>::namespaced(client.clone(), "proofstorm-system");
-        let cell = cells.get(&name).await.unwrap();
+        let cell = proofstorm_kube::RevisionCache::default()
+            .loaded(&client, cells.get(&name).await.unwrap())
+            .await
+            .unwrap();
         let pods = Api::<Pod>::namespaced(client, &instance_namespace(&cell.spec.instance_key));
         let inventory = pods.list(&ListParams::default()).await.unwrap().items;
         let observations = balances::sample(&cell, &pods, &inventory).await;
@@ -447,7 +456,7 @@ mod live_relationship_tests {
             "test cell needs connected Bitcoin peers"
         );
         let ldk = cell
-            .spec
+            .revision
             .cell
             .components
             .iter()

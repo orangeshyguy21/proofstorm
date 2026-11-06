@@ -2,7 +2,7 @@
 use futures::{StreamExt, stream};
 use k8s_openapi::api::core::v1::Pod;
 use kube::{Api, ResourceExt, api::AttachParams};
-use proofstorm_kube::{COMPONENT_LABEL, ProofstormCell, ROLLOUT_DIGEST_ANNOTATION};
+use proofstorm_kube::{COMPONENT_LABEL, ROLLOUT_DIGEST_ANNOTATION};
 use proofstorm_view::{
     BalanceAmount, BitcoinObservation, ComponentBalance, HoldingsObservation, LightningObservation,
 };
@@ -11,12 +11,12 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
 pub(super) async fn sample(
-    cell: &ProofstormCell,
+    cell: &proofstorm_kube::LoadedCell,
     pods: &Api<Pod>,
     inventory: &[Pod],
 ) -> Vec<ComponentBalance> {
     stream::iter(
-        cell.spec
+        cell.revision
             .cell
             .components
             .iter()
@@ -38,7 +38,7 @@ pub(super) async fn sample(
     )
     .map(|component| async move {
         let entry = cell
-            .spec
+            .revision
             .lock
             .entries
             .iter()
@@ -130,7 +130,7 @@ fn matches_adapter(implementation: &str, version: Option<&str>) -> bool {
     }
 }
 async fn observe(
-    cell: &ProofstormCell,
+    cell: &proofstorm_kube::LoadedCell,
     pods: &Api<Pod>,
     pod: &str,
     inventory: &[Pod],
@@ -229,7 +229,7 @@ async fn observe(
 }
 
 async fn observe_bitcoin(
-    cell: &ProofstormCell,
+    cell: &proofstorm_kube::LoadedCell,
     pods: &Api<Pod>,
     pod: &str,
     inventory: &[Pod],

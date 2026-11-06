@@ -7,7 +7,7 @@ use std::{
 };
 
 struct Cluster {
-    cell: ProofstormCell,
+    cell: proofstorm_kube::LoadedCell,
     actions: BTreeMap<String, ProofstormCellAction>,
     policies: BTreeMap<String, Value>,
     fail_policy_once: bool,
@@ -27,7 +27,7 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                 let name = route.split('/').next_back().unwrap();
                 let mut code = 200;
                 let body = if route.ends_with("/proofstormcells/cell") {
-                    json!(cluster.cell)
+                    json!(cluster.cell.resource)
                 } else if route.ends_with("/proofstormcellactions") {
                     json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellActionList","metadata":{},"items":cluster.actions.values().collect::<Vec<_>>()})
                 } else if route.contains("/networkpolicies") {
@@ -126,30 +126,38 @@ fn policy_request(
 
 fn context(cluster: &Arc<Mutex<Cluster>>) -> Context {
     let client = client(cluster.clone());
-    Context {
+    let context = Context {
         probes: crate::probes::Manager::new(client.clone(), "fixture".into()).0,
         client,
         retries: std::sync::Arc::default(),
         native: std::sync::Arc::default(),
         limits: proofstorm_core::ControllerLimits::default(),
         cells: kube::runtime::reflector::store().0,
-    }
+        revisions: std::sync::Arc::default(),
+    };
+    // This fake API serves no revision objects; the controller has read this one.
+    context
+        .revisions
+        .insert((*cluster.lock().unwrap().cell.revision).clone());
+    context
 }
 
 fn fixture() -> (Arc<Mutex<Cluster>>, Context) {
     let spec: proofstorm_core::CellSpec =
         serde_json::from_str(include_str!("../../../examples/workspace/cell.json")).unwrap();
     let lock = proofstorm_core::resolve_lock(&spec, proofstorm_core::default_catalog()).unwrap();
-    let mut cell = ProofstormCell::new(
-        "cell",
-        ProofstormCellSpec {
-            workspace_id: "local".into(),
-            instance_id: "instance".into(),
-            instance_key: "i0123456789012345678".into(),
-            revision_digest: "revision".into(),
-            lock,
-            cell: spec,
-        },
+    let mut cell = proofstorm_kube::LoadedCell::from_spec(
+        ProofstormCell::new(
+            "cell",
+            ProofstormCellSpec {
+                workspace_id: "local".into(),
+                instance_id: "instance".into(),
+                instance_key: "i0123456789012345678".into(),
+                revision_digest: "revision".into(),
+            },
+        ),
+        spec,
+        lock,
     );
     cell.metadata.namespace = Some("system".into());
     let mut actions = BTreeMap::new();

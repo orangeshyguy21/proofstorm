@@ -5,7 +5,7 @@ use super::{
     ComponentObservationResources, Context, Deployment, Duration,
     EXECUTION_STATE_CONTRACT_ANNOTATION, Error, LIFECYCLE_RESTART_ANNOTATION,
     LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, ListParams, Patch, PatchParams, Pod,
-    ProofstormCell, ProofstormCellAction, ProofstormCellActionStatus, ResourceExt, StatefulSet,
+    ProofstormCellAction, ProofstormCellActionStatus, ResourceExt, StatefulSet,
     WorkloadControllerKind, compile_component_plans, instance_namespace, now_unix,
     patch_action_failure, patch_action_status, patch_invalid_action, status_object,
 };
@@ -21,7 +21,7 @@ enum Control {
 
 pub(super) async fn reconcile(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &proofstorm_kube::LoadedCell,
     context: &Context,
 ) -> Result<Action, Error> {
     use proofstorm_core::{Capability, ComponentKind};
@@ -45,8 +45,8 @@ pub(super) async fn reconcile(
     let plans = compile_component_plans(
         &cell.spec.instance_key,
         &cell.spec.revision_digest,
-        &cell.spec.cell,
-        &cell.spec.lock,
+        &cell.revision.cell,
+        &cell.revision.lock,
     )?;
     let Some(plan) = plans.iter().find(|p| p.component_id == request.component) else {
         return patch_invalid_action(action, context, "component is not in the accepted cell")

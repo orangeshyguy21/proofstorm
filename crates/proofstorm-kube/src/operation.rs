@@ -126,7 +126,7 @@ impl ActionAdmissionError {
 /// applicable runtime readiness prerequisite is unavailable.
 pub fn evaluate_action_admission(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
 ) -> Result<(), ActionAdmissionError> {
     evaluate_action_admission_at(
         action,
@@ -144,7 +144,7 @@ pub fn evaluate_action_admission(
 /// Returns an error when a required identity or fresh readiness prerequisite is unavailable.
 pub fn evaluate_action_admission_at(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
     now_unix: i64,
 ) -> Result<(), ActionAdmissionError> {
     require_open_cell(cell)?;
@@ -155,8 +155,8 @@ pub fn evaluate_action_admission_at(
     let plans = crate::compile_component_plans(
         &cell.spec.instance_key,
         &cell.spec.revision_digest,
-        &cell.spec.cell,
-        &cell.spec.lock,
+        &cell.revision.cell,
+        &cell.revision.lock,
     )
     .map_err(|error| ActionAdmissionError::InvalidPlan(error.to_string()))?;
     let mut statuses = cell
@@ -422,7 +422,7 @@ pub const fn action_result_container(action: &CellAction) -> &'static str {
 /// policy bounds, or an invalid internal Kubernetes resource.
 pub fn render_cell_action_job(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
 ) -> Result<Job, ActionRenderError> {
     validate_action_identity(action, cell)?;
     let mut job = match &action.spec.action {
@@ -466,7 +466,7 @@ pub fn render_cell_action_job(
         .as_mut()
         .and_then(|spec| spec.template.spec.as_mut())
     {
-        let defaults = cell.spec.cell.policy.resources.container_defaults();
+        let defaults = cell.revision.cell.policy.resources.container_defaults();
         crate::resources::apply(pod, &defaults, None);
     }
     mark_controller_owned(&mut job, &action.name_any());
@@ -475,7 +475,7 @@ pub fn render_cell_action_job(
 
 fn render_authentication_conformance_action(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
     request: &AuthenticationConformanceAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::AuthenticationTest {
@@ -496,7 +496,7 @@ fn render_authentication_conformance_action(
 
 fn render_authentication_protected_spend_action(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
     request: &AuthenticationProtectedSpendAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::AuthenticationTest {
@@ -517,7 +517,7 @@ fn render_authentication_protected_spend_action(
 
 fn render_authentication_replay_action(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
     request: &AuthenticationReplayAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::AuthenticationTest {
@@ -539,13 +539,13 @@ fn render_authentication_replay_action(
 }
 
 fn authentication_components<'a>(
-    cell: &'a ProofstormCell,
+    cell: &'a crate::LoadedCell,
     mint: &str,
     identity_provider: &str,
 ) -> Result<(&'a str, &'static str), ActionRenderError> {
     // The link check below and the catalog decide whether auth is supported.
     let implementation = cell
-        .spec
+        .revision
         .cell
         .components
         .iter()
@@ -564,7 +564,7 @@ fn authentication_components<'a>(
         "keycloak",
     )?;
     let links = cell
-        .spec
+        .revision
         .cell
         .links
         .iter()
@@ -590,7 +590,7 @@ fn authentication_components<'a>(
 
 fn render_native_exec_action(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
     request: &ComponentForensicsAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::ComponentForensics {
@@ -610,8 +610,8 @@ fn render_native_exec_action(
     let plans = crate::compile_component_plans(
         &cell.spec.instance_key,
         &cell.spec.revision_digest,
-        &cell.spec.cell,
-        &cell.spec.lock,
+        &cell.revision.cell,
+        &cell.revision.lock,
     )
     .map_err(|error| ActionRenderError::InvalidPlan(error.to_string()))?;
     let component = plans
@@ -883,7 +883,7 @@ fn native_exec_target_environment(
 
 fn render_reachability_oracle_action(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
     request: &ReachabilityOracleAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::OracleRun {
@@ -891,14 +891,14 @@ fn render_reachability_oracle_action(
     }
     validate_reachability_oracle_action(request)?;
     let source = cell
-        .spec
+        .revision
         .cell
         .components
         .iter()
         .find(|component| component.id == request.from_component)
         .ok_or_else(|| ActionRenderError::UnknownComponent(request.from_component.clone()))?;
     let destination = cell
-        .spec
+        .revision
         .cell
         .components
         .iter()
@@ -996,12 +996,12 @@ fn validate_reachability_oracle_action(
 }
 
 fn locked_component_image<'a>(
-    cell: &'a ProofstormCell,
+    cell: &'a crate::LoadedCell,
     id: &str,
     kind: ComponentKind,
     implementation: &'static str,
 ) -> Result<&'a str, ActionRenderError> {
-    let valid = cell.spec.cell.components.iter().any(|component| {
+    let valid = cell.revision.cell.components.iter().any(|component| {
         component.id == id && component.kind == kind && component.implementation == implementation
     });
     if !valid {
@@ -1011,7 +1011,7 @@ fn locked_component_image<'a>(
             kind,
         });
     }
-    cell.spec
+    cell.revision
         .lock
         .entries
         .iter()
@@ -1348,7 +1348,7 @@ mod tests {
 
     use super::*;
 
-    fn action_fixture() -> (ProofstormCell, ProofstormCellAction) {
+    fn action_fixture() -> (crate::LoadedCell, ProofstormCellAction) {
         let component = |id: &str, kind: ComponentKind, implementation: &str| ComponentSpec {
             resources: None,
             id: id.into(),
@@ -1396,16 +1396,18 @@ mod tests {
             policy: CellPolicy::default(),
         };
         let lock = resolve_lock(&cell_spec, default_catalog()).expect("lock");
-        let cell = ProofstormCell::new(
-            "cell-resource",
-            crate::ProofstormCellSpec {
-                workspace_id: "workspace".into(),
-                instance_id: "instance".into(),
-                instance_key: "i0123456789012345678".into(),
-                revision_digest: "sha256:revision".into(),
-                lock,
-                cell: cell_spec,
-            },
+        let cell = crate::LoadedCell::from_spec(
+            ProofstormCell::new(
+                "cell-resource",
+                crate::ProofstormCellSpec {
+                    workspace_id: "workspace".into(),
+                    instance_id: "instance".into(),
+                    instance_key: "i0123456789012345678".into(),
+                    revision_digest: "sha256:revision".into(),
+                },
+            ),
+            cell_spec,
+            lock,
         );
         let action = ProofstormCellAction::new(
             "action-123",
@@ -1435,12 +1437,12 @@ mod tests {
         (cell, action)
     }
 
-    fn ready_admission_status(cell: &mut ProofstormCell) {
+    fn ready_admission_status(cell: &mut crate::LoadedCell) {
         let plans = crate::compile_component_plans(
             &cell.spec.instance_key,
             &cell.spec.revision_digest,
-            &cell.spec.cell,
-            &cell.spec.lock,
+            &cell.revision.cell,
+            &cell.revision.lock,
         )
         .expect("plans");
         let components = plans
@@ -1506,7 +1508,7 @@ mod tests {
     }
 
     fn set_condition(
-        cell: &mut ProofstormCell,
+        cell: &mut crate::LoadedCell,
         component: &str,
         condition_type: ComponentConditionType,
         state: ComponentConditionState,
@@ -1915,7 +1917,7 @@ mod tests {
     fn native_exec_uses_locked_component_image_data_and_uninterpolated_script() {
         let (cell, mut action) = action_fixture();
         let locked_bitcoin = cell
-            .spec
+            .revision
             .lock
             .entries
             .iter()
@@ -2083,8 +2085,8 @@ mod tests {
         let mut plans = crate::compile_component_plans(
             &cell.spec.instance_key,
             &cell.spec.revision_digest,
-            &cell.spec.cell,
-            &cell.spec.lock,
+            &cell.revision.cell,
+            &cell.revision.lock,
         )
         .expect("compiled plans");
         let mint = plans
@@ -2212,17 +2214,21 @@ mod tests {
     fn expired_chain_evidence_invalidates_dependent_actions_at_the_boundary() {
         let (mut cell, mut action) = action_fixture();
         for lightning in ["mint-lnd", "payer-lnd"] {
-            cell.spec.cell.links.push(proofstorm_core::LinkSpec {
-                id: format!("{lightning}-chain"),
-                kind: proofstorm_core::LinkKind::ChainBackend,
-                from: lightning.into(),
-                to: "chain".into(),
-                binding: Some(proofstorm_core::DependencyBinding::Chain {
-                    network: proofstorm_core::BitcoinNetwork::Regtest,
-                }),
-            });
+            std::sync::Arc::make_mut(&mut cell.revision)
+                .cell
+                .links
+                .push(proofstorm_core::LinkSpec {
+                    id: format!("{lightning}-chain"),
+                    kind: proofstorm_core::LinkKind::ChainBackend,
+                    from: lightning.into(),
+                    to: "chain".into(),
+                    binding: Some(proofstorm_core::DependencyBinding::Chain {
+                        network: proofstorm_core::BitcoinNetwork::Regtest,
+                    }),
+                });
         }
-        cell.spec.lock = resolve_lock(&cell.spec.cell, default_catalog()).unwrap();
+        let lock = resolve_lock(&cell.revision.cell, default_catalog()).unwrap();
+        std::sync::Arc::make_mut(&mut cell.revision).lock = lock;
         ready_admission_status(&mut cell);
         action.spec.action =
             CellAction::AuthenticationConformance(AuthenticationConformanceAction {
@@ -2247,8 +2253,13 @@ mod tests {
                 ..
             })
         ));
-        let mut projected = cell.clone();
-        crate::probes::expire_cell_status(&mut projected, 100);
+        let mut projected = cell.resource.clone();
+        crate::probes::expire_cell_status(
+            &mut projected,
+            &cell.revision.cell,
+            &cell.revision.lock,
+            100,
+        );
         let lightning = projected
             .status
             .as_ref()

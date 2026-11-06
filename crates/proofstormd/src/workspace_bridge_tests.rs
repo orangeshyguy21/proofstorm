@@ -6,7 +6,7 @@ use proofstorm_kube::{
 use std::sync::{Arc, Mutex};
 
 struct Cluster {
-    cell: ProofstormCell,
+    cell: proofstorm_kube::LoadedCell,
     child: Option<ProofstormCellAction>,
     creates: usize,
     cancellations: usize,
@@ -64,7 +64,7 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                 let mut cluster = cluster.lock().unwrap();
                 let mut status = 200;
                 let body = if path.ends_with("/proofstormcells/cell") {
-                    json!(cluster.cell)
+                    json!(cluster.cell.resource)
                 } else if path.ends_with("/proofstormcellactions") && method == http::Method::GET {
                     json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellActionList","metadata":{},"items":cluster.child.iter().collect::<Vec<_>>()})
                 } else if path.ends_with("/proofstormcellactions") && method == http::Method::POST {
@@ -109,16 +109,18 @@ fn fixture() -> (ProofstormCellAction, Arc<Mutex<Cluster>>, Context, Mailbox) {
     let spec: proofstorm_core::CellSpec =
         serde_json::from_str(include_str!("../../../examples/workspace/cell.json")).unwrap();
     let lock = proofstorm_core::resolve_lock(&spec, proofstorm_core::default_catalog()).unwrap();
-    let cell = ProofstormCell::new(
-        "cell",
-        ProofstormCellSpec {
-            workspace_id: "local".into(),
-            instance_id: "instance".into(),
-            instance_key: "i0123456789012345678".into(),
-            revision_digest: "revision".into(),
-            lock,
-            cell: spec,
-        },
+    let cell = proofstorm_kube::LoadedCell::from_spec(
+        ProofstormCell::new(
+            "cell",
+            ProofstormCellSpec {
+                workspace_id: "local".into(),
+                instance_id: "instance".into(),
+                instance_key: "i0123456789012345678".into(),
+                revision_digest: "revision".into(),
+            },
+        ),
+        spec,
+        lock,
     );
     let start: TaskStart = serde_json::from_value(
         json!({"task_id":"miner","script":"sleep 60","control":{"components":["chain"]}}),
@@ -183,6 +185,7 @@ fn fixture() -> (ProofstormCellAction, Arc<Mutex<Cluster>>, Context, Mailbox) {
         native: std::sync::Arc::default(),
         limits: proofstorm_core::ControllerLimits::default(),
         cells: kube::runtime::reflector::store().0,
+        revisions: std::sync::Arc::default(),
     };
     (parent, cluster, context, mailbox)
 }
@@ -281,17 +284,19 @@ async fn changed_revision_duplicate_owner_and_out_of_scope_calls_cannot_start_co
         if reason == "replaced-workspace" {
             mailbox.poll["workspace_replaced"] = json!(true);
         } else {
-            cluster.lock().unwrap().cell.spec.revision_digest = "changed".into();
+            // The cell moved to another revision, which the controller can read.
+            let mut cluster = cluster.lock().unwrap();
+            let mut revision = (*cluster.cell.revision).clone();
+            revision.revision_digest = "changed".into();
             if reason == "removed-target" {
-                cluster
-                    .lock()
-                    .unwrap()
-                    .cell
-                    .spec
+                revision
                     .cell
                     .components
                     .retain(|component| component.id != "chain");
             }
+            context.revisions.insert(revision.clone());
+            cluster.cell.resource.spec.revision_digest = "changed".into();
+            cluster.cell.revision = Arc::new(revision);
         }
         tick(&parent, &context, &mut mailbox).await.unwrap();
         assert!(mailbox.closed);

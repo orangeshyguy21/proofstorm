@@ -1833,16 +1833,18 @@ fn full_baseline_cell_matches_its_golden_contract() {
         assert_component_security(&one);
     }
 
-    let cell = ProofstormCell::new(
-        "golden-cell",
-        ProofstormCellSpec {
-            workspace_id: "workspace-golden".into(),
-            instance_id: "instance-golden".into(),
-            instance_key: INSTANCE_KEY.into(),
-            revision_digest: REVISION_DIGEST.into(),
-            lock,
-            cell: spec,
-        },
+    let cell = proofstorm_kube::LoadedCell::from_spec(
+        ProofstormCell::new(
+            "golden-cell",
+            ProofstormCellSpec {
+                workspace_id: "workspace-golden".into(),
+                instance_id: "instance-golden".into(),
+                instance_key: INSTANCE_KEY.into(),
+                revision_digest: REVISION_DIGEST.into(),
+            },
+        ),
+        spec,
+        lock,
     );
     let action = ProofstormCellAction::new(
         "golden-native-exec",
@@ -2513,13 +2515,24 @@ fn scale_timing_of_plan_compile_and_render() {
         let rendered = render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
         let render = started.elapsed();
         let _ = &one;
+        // The stored revision object, as the API server receives it.
+        let revision = proofstorm_kube::CellRevision {
+            workspace_id: "workspace".into(),
+            instance_key: INSTANCE_KEY.into(),
+            revision_digest: proofstorm_core::digest_json(&("workspace", &spec, &lock)),
+            cell: spec.clone(),
+            lock: lock.clone(),
+        };
+        let object = proofstorm_kube::revision_config_map(&revision, "proofstorm-system", None)
+            .map(|map| serde_json::to_vec(&map).unwrap().len());
         println!(
-            "{size:>5} components: lock {:>8.1?}  compile {:>8.1?}  render {:>8.1?}  ({} plans, {} statefulsets)",
+            "{size:>5} components: lock {:>8.1?}  compile {:>8.1?}  render {:>8.1?}  ({} plans, {} statefulsets)  revision object {:?} bytes",
             locked,
             compiled,
             render,
             plans.len(),
-            rendered.stateful_sets.len()
+            rendered.stateful_sets.len(),
+            object
         );
     }
 }

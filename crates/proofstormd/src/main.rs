@@ -51,8 +51,8 @@ use proofstorm_kube::{
     CANDIDATE_CANCEL_ANNOTATION, CELL_NETWORK_POLICY, COMPONENT_LABEL, CellAction, CellPhase,
     ComponentObservationResources, EXECUTION_STATE_CONTRACT_ANNOTATION,
     FINISHED_ACTION_RETENTION_SECONDS, INSTANCE_LABEL, LIFECYCLE_RESTART_ANNOTATION,
-    LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, ProofstormCandidateBuild,
-    ProofstormCandidateBuildStatus, ProofstormCell, ProofstormCellAction,
+    LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, LoadedCell,
+    ProofstormCandidateBuild, ProofstormCandidateBuildStatus, ProofstormCell, ProofstormCellAction,
     ProofstormCellActionStatus, ProofstormCellStatus, action_result_container,
     compile_component_plans, evaluate_action_admission, instance_namespace,
     observe_component_statuses, render_candidate_build_job, render_cell, render_cell_action_job,
@@ -78,6 +78,8 @@ struct Context {
     limits: proofstorm_core::ControllerLimits,
     /// The cell controller's watch cache, so actions don't fetch whole cells.
     cells: kube::runtime::reflector::Store<ProofstormCell>,
+    /// Immutable cell revisions, read once each.
+    revisions: Arc<proofstorm_kube::RevisionCache>,
 }
 
 /// An action's cell from the watch cache, or from the API before the cache has
@@ -130,6 +132,8 @@ enum Error {
     },
     #[error("live component execution failed: {0}")]
     LiveExec(String),
+    #[error("cell revision: {0}")]
+    Revision(#[from] proofstorm_kube::RevisionError),
 }
 
 #[cfg(test)]
@@ -173,6 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         native: Arc::new(native_exec::Gate::new(&limits)),
         limits,
         cells: cell_watch.store(),
+        revisions: Arc::default(),
     });
     let trigger_stream = futures::stream::unfold(triggers, |mut receive| async {
         receive.recv().await.map(|object| (object, receive))
@@ -608,6 +613,7 @@ async fn reconcile_action(
                 .is_some_and(|status| status.native_execution.is_some())
         {
             let cell = action_cell_source(&action, &control_namespace, &context).await?;
+            let cell = cell_updates::action_cell(&action, cell, &context).await?;
             return Box::pin(native_exec::reconcile(action.as_ref(), &cell, &context)).await;
         }
         return reconcile_action_cancellation(action.as_ref(), &context).await;
@@ -628,7 +634,15 @@ async fn reconcile_action(
             .status
             .as_ref()
             .is_none_or(|status| status.native_execution.is_none())
-        && !workspace_bridge::admit_child(&action, &cell, &context).await?
+        && !workspace_bridge::admit_child(
+            &action,
+            &context
+                .revisions
+                .loaded(&context.client, cell.clone())
+                .await?,
+            &context,
+        )
+        .await?
     {
         return patch_action_failure(
             &action,
@@ -886,7 +900,7 @@ async fn reconcile_action(
 /// component is unready or stopped.
 async fn reconcile_component_logs(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &LoadedCell,
     context: &Context,
 ) -> Result<Action, Error> {
     if action.spec.capability != proofstorm_core::Capability::ComponentLogs {
@@ -899,8 +913,8 @@ async fn reconcile_component_logs(
     let plans = compile_component_plans(
         &cell.spec.instance_key,
         &cell.spec.revision_digest,
-        &cell.spec.cell,
-        &cell.spec.lock,
+        &cell.revision.cell,
+        &cell.revision.lock,
     )?;
     if !plans
         .iter()
@@ -952,7 +966,7 @@ const LIVE_EXEC_OUTPUT_LIMIT: usize = 256 * 1024;
 
 async fn reconcile_component_exec_live(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &LoadedCell,
     context: &Context,
 ) -> Result<Action, Error> {
     Box::pin(native_exec::reconcile(action, cell, context)).await
@@ -989,7 +1003,7 @@ fn exec_exit_code(status: Option<&k8s_openapi::apimachinery::pkg::apis::meta::v1
 )]
 async fn reconcile_network_fault(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &LoadedCell,
     context: &Context,
 ) -> Result<Action, Error> {
     let expected_capability = match action.spec.action {
@@ -1013,13 +1027,13 @@ async fn reconcile_network_fault(
         CellAction::NetworkPartition(request) => {
             if request.from_component == request.to_component
                 || !cell
-                    .spec
+                    .revision
                     .cell
                     .components
                     .iter()
                     .any(|component| component.id == request.from_component)
                 || !cell
-                    .spec
+                    .revision
                     .cell
                     .components
                     .iter()
@@ -1195,7 +1209,7 @@ fn cell_policy_lock(instance_key: &str) -> Arc<tokio::sync::Mutex<()>> {
 /// shared policy for every component outside a partition, and a policy of its
 /// own for each partitioned component. Returns the active partitions.
 async fn apply_network_fault_policies(
-    cell: &ProofstormCell,
+    cell: &LoadedCell,
     maximum_sequence: Option<u64>,
     context: &Context,
 ) -> Result<BTreeMap<String, (String, String)>, Error> {
@@ -1231,7 +1245,7 @@ async fn apply_network_fault_policies(
         .items;
     let active = active_network_partitions(&actions, maximum_sequence);
     let components = cell
-        .spec
+        .revision
         .cell
         .components
         .iter()
@@ -1690,10 +1704,20 @@ async fn reconcile(cell: Arc<ProofstormCell>, context: Arc<Context>) -> Result<A
     finalizer(&cells, FINALIZER, cell, |event| async {
         match event {
             Event::Apply(cell) => {
-                let result = if let Some(applied) = context.probes.applied(&cell) {
-                    observe_cell(cell.clone(), &context, &applied).await
-                } else {
-                    apply(cell.clone(), &context).await
+                let result = match context
+                    .revisions
+                    .loaded(&context.client, (*cell).clone())
+                    .await
+                {
+                    Ok(loaded) => {
+                        let loaded = Arc::new(loaded);
+                        if let Some(applied) = context.probes.applied(&loaded) {
+                            observe_cell(loaded, &context, &applied).await
+                        } else {
+                            apply(loaded, &context).await
+                        }
+                    }
+                    Err(error) => Err(error.into()),
                 };
                 if let Err(error) = &result
                     && let Some(status) = reconciliation_failure_status(&cell, error)
@@ -1761,7 +1785,7 @@ fn reconciliation_failure_status(
     clippy::too_many_lines,
     reason = "one reconciliation pass visibly applies the complete bounded instance inventory"
 )]
-async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, Error> {
+async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error> {
     validate_instance_key(&cell.spec.instance_key)?;
     private_transfer::expire(&cell)?;
     let previous = skippable(
@@ -1772,8 +1796,8 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     let mut workloads = render_cell(
         &cell.spec.instance_key,
         &cell.spec.revision_digest,
-        &cell.spec.cell,
-        &cell.spec.lock,
+        &cell.revision.cell,
+        &cell.revision.lock,
     )?;
     for deployment in &mut workloads.deployments {
         if let Some(pod) = deployment
@@ -1821,10 +1845,13 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
         }
         status.phase = CellPhase::Pending;
         patch_status(&cell, context, status.clone()).await?;
-        cell.status = Some(status);
+        cell.resource.status = Some(status);
     }
     let cell = Arc::new(cell);
-    let rendered = render_security_spine(&cell.spec.instance_key, &cell.spec.cell.policy.resources);
+    let rendered = render_security_spine(
+        &cell.spec.instance_key,
+        &cell.revision.cell.policy.resources,
+    );
     let client = context.client.clone();
     let namespace_name = instance_namespace(&cell.spec.instance_key);
     let patch = PatchParams::apply(FIELD_MANAGER).force();
@@ -2065,7 +2092,7 @@ fn unchanged(
 }
 
 async fn observe_cell(
-    cell: Arc<ProofstormCell>,
+    cell: Arc<LoadedCell>,
     context: &Context,
     applied: &probes::Applied,
 ) -> Result<Action, Error> {
@@ -2347,6 +2374,13 @@ async fn write_teardown_receipt(
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
     let receipts = Api::<ConfigMap>::namespaced(context.client.clone(), &namespace);
+    // Cleanup never waits on the revision: record its lock digest when it is still there.
+    let lock_digest = context
+        .revisions
+        .load(&context.client, cell, &cell.spec.revision_digest)
+        .await
+        .map(|revision| revision.lock.digest.clone())
+        .unwrap_or_default();
     let name = format!("proofstorm-teardown-{}", cell.spec.instance_key);
     let receipt = serde_json::json!({
         "apiVersion": "v1",
@@ -2363,7 +2397,7 @@ async fn write_teardown_receipt(
             "instanceId": cell.spec.instance_id,
             "cellName": cell.name_any(),
             "revisionDigest": cell.spec.revision_digest,
-            "lockDigest": cell.spec.lock.digest,
+            "lockDigest": lock_digest,
             "inventoryDigest": cell.status.as_ref().and_then(|status| status.inventory_digest.clone()).unwrap_or_default(),
             "instanceNamespace": instance_namespace,
             "verifiedAbsent": "true"
@@ -2546,7 +2580,7 @@ fn termination_message(pod: &Pod, target: &str) -> Option<String> {
 
 fn authentication_conformance_artifact(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &LoadedCell,
     pods: &[Pod],
 ) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
     let CellAction::AuthenticationConformance(request) = &action.spec.action else {
@@ -2556,7 +2590,7 @@ fn authentication_conformance_artifact(
         .iter()
         .find_map(|pod| termination_message(pod, "authentication"))?;
     let implementation = &cell
-        .spec
+        .revision
         .cell
         .components
         .iter()
@@ -2757,7 +2791,7 @@ async fn persist_authentication_session(
 
 fn authentication_replay_artifact(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &LoadedCell,
     pods: &[Pod],
 ) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
     let CellAction::AuthenticationReplay(request) = &action.spec.action else {
@@ -2767,7 +2801,7 @@ fn authentication_replay_artifact(
         .iter()
         .find_map(|pod| termination_message(pod, "authentication"))?;
     let implementation = &cell
-        .spec
+        .revision
         .cell
         .components
         .iter()
@@ -3076,16 +3110,18 @@ mod tests {
         };
         let lock =
             proofstorm_core::resolve_lock(&spec, proofstorm_core::default_catalog()).expect("lock");
-        let mut cell = ProofstormCell::new(
-            "backoff",
-            proofstorm_kube::ProofstormCellSpec {
-                workspace_id: "test".into(),
-                instance_id: "test".into(),
-                instance_key: "i0123456789012345678".into(),
-                revision_digest: "sha256:current".into(),
-                cell: spec,
-                lock,
-            },
+        let mut cell = proofstorm_kube::LoadedCell::from_spec(
+            ProofstormCell::new(
+                "backoff",
+                proofstorm_kube::ProofstormCellSpec {
+                    workspace_id: "test".into(),
+                    instance_id: "test".into(),
+                    instance_key: "i0123456789012345678".into(),
+                    revision_digest: "sha256:current".into(),
+                },
+            ),
+            spec,
+            lock,
         );
         cell.metadata.namespace = Some("proofstorm-system".into());
         cell.metadata.generation = Some(1);
@@ -3096,13 +3132,15 @@ mod tests {
             Err::<Action, _>(Error::SecretContract("missing key".into()))
         };
 
-        let error = with_backoff(&cell, &retries, failing()).await.unwrap_err();
+        let error = with_backoff(&cell.resource, &retries, failing())
+            .await
+            .unwrap_err();
         assert_eq!(
-            retry_action(&cell, &error, &retries, "cell"),
+            retry_action(&cell.resource, &error, &retries, "cell"),
             Action::requeue(Duration::from_secs(1))
         );
         // An immediate prober trigger or watch event does no work.
-        let held = with_backoff(&cell, &retries, failing())
+        let held = with_backoff(&cell.resource, &retries, failing())
             .await
             .expect("held");
         assert_ne!(
@@ -3114,12 +3152,16 @@ mod tests {
 
         // An edit is reconciled at once.
         cell.metadata.generation = Some(2);
-        assert!(with_backoff(&cell, &retries, failing()).await.is_err());
+        assert!(
+            with_backoff(&cell.resource, &retries, failing())
+                .await
+                .is_err()
+        );
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
 
         // Cleanup progress keeps its short requeue and records no backoff.
         let pending = retry_action(
-            &cell,
+            &cell.resource,
             &Error::CleanupPending("namespace".into()),
             &retries,
             "cell",
@@ -3736,16 +3778,18 @@ mod tests {
         };
         let lock =
             proofstorm_core::resolve_lock(&spec, proofstorm_core::default_catalog()).expect("lock");
-        let mut cell = ProofstormCell::new(
-            "failure",
-            proofstorm_kube::ProofstormCellSpec {
-                workspace_id: "test".into(),
-                instance_id: "test".into(),
-                instance_key: "i0123456789012345678".into(),
-                revision_digest: "sha256:current".into(),
-                cell: spec,
-                lock,
-            },
+        let mut cell = proofstorm_kube::LoadedCell::from_spec(
+            ProofstormCell::new(
+                "failure",
+                proofstorm_kube::ProofstormCellSpec {
+                    workspace_id: "test".into(),
+                    instance_id: "test".into(),
+                    instance_key: "i0123456789012345678".into(),
+                    revision_digest: "sha256:current".into(),
+                },
+            ),
+            spec,
+            lock,
         );
         cell.metadata.generation = Some(4);
         cell.metadata.annotations = Some(BTreeMap::from([(

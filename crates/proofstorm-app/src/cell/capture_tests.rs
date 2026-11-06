@@ -37,7 +37,7 @@ fn fixture() -> (
         .unwrap();
     cell.metadata.namespace = Some("system".into());
     let cluster = Arc::new(Mutex::new(Cluster {
-        cell,
+        cell: cell.resource,
         pod,
         unavailable: false,
     }));

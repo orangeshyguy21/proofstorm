@@ -178,6 +178,7 @@ mod image_tests {
         let store = Store::memory().unwrap();
         crate::developer::configure(&store, "local", "agent").unwrap();
         let runtime = Runtime {
+            revisions: std::sync::Arc::default(),
             client: kube::Client::new(
                 tower::service_fn(|_: http::Request<kube::client::Body>| async {
                     Err::<http::Response<kube::client::Body>, _>(std::io::Error::other(
