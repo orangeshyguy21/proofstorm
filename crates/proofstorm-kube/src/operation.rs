@@ -12,7 +12,7 @@ use crate::{
     AuthenticationConformanceAction, AuthenticationProtectedSpendAction,
     AuthenticationReplayAction, CellAction, ComponentForensicsAction, ProofstormCell,
     ProofstormCellAction, ReachabilityOracleAction, component_ports, instance_namespace,
-    pod::{container_security, instance_affinity, pod_security},
+    pod::{container_security, pod_security},
 };
 
 use crate::images::PROBE_IMAGE as REACHABILITY_PROBE_IMAGE;
@@ -657,7 +657,6 @@ fn render_native_exec_action(
         "automountServiceAccountToken": false,
         "enableServiceLinks": false,
         "securityContext": pod_security(1000),
-        "affinity": instance_affinity(&action.spec.instance_key),
         "containers": [exec_container],
         "volumes": context.volumes,
     });
@@ -923,7 +922,7 @@ fn render_reachability_oracle_action(
     );
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(1000), "affinity": instance_affinity(&action.spec.instance_key),
+        "securityContext": pod_security(1000),
         "containers": [container("oracle", REACHABILITY_PROBE_IMAGE, &script, &[])]
     });
     let mut rendered = job(
@@ -1105,7 +1104,6 @@ pub fn render_authentication_conformance_job(
         "automountServiceAccountToken": false,
         "enableServiceLinks": false,
         "securityContext": pod_security(1000),
-        "affinity": instance_affinity(instance_key),
         "containers": [authentication]
     });
     job(
@@ -1166,7 +1164,6 @@ pub fn render_authentication_protected_spend_job(
         "automountServiceAccountToken": false,
         "enableServiceLinks": false,
         "securityContext": pod_security(1000),
-        "affinity": instance_affinity(instance_key),
         "containers": [authentication]
     });
     job(
@@ -1237,7 +1234,6 @@ pub fn render_authentication_replay_job(
         "automountServiceAccountToken": false,
         "enableServiceLinks": false,
         "securityContext": pod_security(1000),
-        "affinity": instance_affinity(instance_key),
         "containers": [authentication]
     });
     job(
@@ -1883,7 +1879,7 @@ mod tests {
     }
 
     #[test]
-    fn bounded_jobs_preserve_deadlines_security_and_instance_placement() {
+    fn bounded_jobs_preserve_deadlines_and_security_without_node_affinity() {
         let (cell, action) = action_fixture();
         let job = render_cell_action_job(&action, &cell).expect("probe job");
         let spec = job.spec.expect("job spec");
@@ -1905,13 +1901,8 @@ mod tests {
                 "seccompProfile": {"type": "RuntimeDefault"}
             })
         );
-        assert_eq!(
-            serde_json::to_value(&pod.affinity).unwrap(),
-            json!({"podAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": [{
-                "labelSelector": {"matchLabels": {"proofstorm.dev/instance": action.spec.instance_key}},
-                "topologyKey": "kubernetes.io/hostname"
-            }]}})
-        );
+        // No node affinity: a Job that mounts a component's volume follows it.
+        assert!(pod.affinity.is_none());
         for container in &pod.containers {
             assert_eq!(
                 serde_json::to_value(&container.security_context).unwrap(),

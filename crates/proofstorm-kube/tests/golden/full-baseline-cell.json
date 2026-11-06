@@ -25,20 +25,6 @@
           }
         },
         "spec": {
-          "affinity": {
-            "podAffinity": {
-              "requiredDuringSchedulingIgnoredDuringExecution": [
-                {
-                  "labelSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  },
-                  "topologyKey": "kubernetes.io/hostname"
-                }
-              ]
-            }
-          },
           "automountServiceAccountToken": false,
           "containers": [
             {
@@ -1690,20 +1676,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -2006,20 +1978,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -2178,20 +2136,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -3214,20 +3158,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -3372,20 +3302,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -3530,20 +3446,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -3691,20 +3593,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {

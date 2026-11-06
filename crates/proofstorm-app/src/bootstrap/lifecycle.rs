@@ -365,8 +365,8 @@ async fn resume(
             workloads::scale(installation, workload, 0)?;
         }
         workloads::wait_stopped(installation, &stateless, deadline).await?;
-        // Cell pods share node affinity. Let retained volumes establish placement before
-        // stateless services can pull the cell onto a node that cannot mount its storage.
+        // Volumes fix their pods' nodes, and a pod that mounts another component's
+        // volume follows it. Start those first so placement settles before the rest.
         for workload in &persistent {
             workloads::scale(installation, workload, workload.replicas)?;
         }

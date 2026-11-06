@@ -3,9 +3,9 @@ use super::{
     AdapterError, BTreeMap, CdkMintConfig, ComponentKind, ComponentPlanContract,
     EffectiveComponentConfig, LinkKind, RPC_PASSWORD, RPC_USER, RenderedComponent,
     TargetDescriptorContract, Value, container_security, install_component_driver,
-    instance_affinity, instance_namespace, json, labels, metadata, plan_execution_credential,
-    plan_linked_target, plan_pod_metadata, plan_workload_metadata, pod_security,
-    require_plan_backend, resource, service_from_plan, stateful_set, target_port,
+    instance_namespace, json, labels, metadata, plan_execution_credential, plan_linked_target,
+    plan_pod_metadata, plan_workload_metadata, pod_security, require_plan_backend, resource,
+    service_from_plan, stateful_set, target_port,
 };
 use proofstorm_core::{PaymentMethod, ProcessorProfile, method_list};
 use std::collections::BTreeSet;
@@ -221,7 +221,7 @@ pub fn render_processor(plan: &ComponentPlanContract) -> Result<RenderedComponen
     rendered.deployments.push(resource(json!({
         "apiVersion":"apps/v1","kind":"Deployment","metadata":plan_workload_metadata(plan),
         "spec":{"replicas":1,"strategy":{"type":"Recreate"},"selector":{"matchLabels":labels},"template":{"metadata":plan_pod_metadata(plan,&labels),"spec":{
-            "serviceAccountName":"proofstorm-workload","automountServiceAccountToken":false,"enableServiceLinks":false,"securityContext":pod_security(1000),"affinity":instance_affinity(&plan.instance_key),
+            "serviceAccountName":"proofstorm-workload","automountServiceAccountToken":false,"enableServiceLinks":false,"securityContext":pod_security(1000),
             "containers":[{"name":"component","image":plan.execution_context.image,"imagePullPolicy":"IfNotPresent","command":[crate::drivers::DRIVER_PATH,"exec-ldk-processor"],"env":env,"securityContext":container_security(),
                 "ports":[{"name":"grpc","containerPort":port}],
                 "readinessProbe":{"exec":{"command":[crate::drivers::DRIVER_PATH,"processor-settings",format!("https://127.0.0.1:{port}"),"/processor-client/tls",plan.target_descriptor.backend_id]},"timeoutSeconds":3,"periodSeconds":3},

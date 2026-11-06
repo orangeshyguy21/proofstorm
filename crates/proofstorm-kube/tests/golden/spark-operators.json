@@ -321,20 +321,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-spark-render"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {

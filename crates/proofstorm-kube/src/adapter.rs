@@ -27,7 +27,7 @@ use thiserror::Error;
 use crate::{
     BACKEND_ID_ANNOTATION, EXECUTION_STATE_CONTRACT_ANNOTATION, INSTANCE_LABEL,
     REVISION_DIGEST_ANNOTATION, ROLLOUT_DIGEST_ANNOTATION, instance_namespace,
-    pod::{container_security, instance_affinity, pod_security},
+    pod::{container_security, pod_security},
 };
 
 pub const COMPONENT_LABEL: &str = "proofstorm.dev/component";
@@ -1563,7 +1563,6 @@ pub fn render_postgres_component(
                     "automountServiceAccountToken": false,
                     "enableServiceLinks": false,
                     "securityContext": pod_security(70),
-                    "affinity": instance_affinity(&plan.instance_key),
                     "containers": [{
                         "name": "component",
                         "image": plan.execution_context.image,
@@ -1651,7 +1650,7 @@ pub fn render_keycloak_component(
         "spec": {"replicas": 1, "strategy": {"type": "Recreate"}, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key),
+                "securityContext": pod_security(1000),
                 "initContainers": [database.ensure_container("ensure-database")],
                 "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
@@ -1726,7 +1725,7 @@ pub fn render_redis_component(
         "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "command": ["sh", "-c"],
                     "args": [format!("exec redis-server --bind 0.0.0.0 --protected-mode yes --port {redis_port} --save '' --appendonly no --requirepass \"$REDIS_PASSWORD\" --maxmemory {maxmemory_mb}mb --maxmemory-policy allkeys-lru")],
@@ -1986,7 +1985,7 @@ pub fn render_cdk_component(
     let labels = labels(&plan.instance_key, Some(&plan.component_id));
     let mut pod_spec = json!({
         "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+        "securityContext": pod_security(1000), "containers": [{
             "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
             "command": ["cdk-mintd"],
             "env": runtime.env,
@@ -2670,7 +2669,7 @@ pub fn render_nutshell_mint_component(
         "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "command": command,
                     "envFrom": [{"configMapRef": {"name": config_name}}],
@@ -3214,7 +3213,7 @@ pub fn render_workspace_component(
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
                 "terminationGracePeriodSeconds":15,
-                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "command": [proofstorm_core::workspace::WORKSPACE_RUNNER,"workspace","serve"],
                     "workingDir":"/workspace",
@@ -3343,7 +3342,7 @@ fn render_cli_wallet_workspace(
         "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "command": ["/bin/sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 3600; done"],
                     "env": [{"name": "HOME", "value": "/wallet"}, {"name": "PROOFSTORM_WALLET", "value": plan.component_id}],
@@ -3398,7 +3397,7 @@ fn stateful_set(
         "spec": {"serviceName": component, "replicas": 1, "selector": {"matchLabels": labels},
             "template": {"metadata": template_metadata, "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(1000), "affinity": instance_affinity(instance_key), "containers": [container]
+                "securityContext": pod_security(1000), "containers": [container]
             }},
             "volumeClaimTemplates": [{"metadata": {"name": "data", "labels": labels},
                 "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}}}]
