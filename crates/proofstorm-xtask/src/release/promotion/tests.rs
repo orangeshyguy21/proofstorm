@@ -46,7 +46,7 @@ impl Candidate {
         save(
             &metadata,
             "artifacts.json",
-            &json!([{"artifacts":PLATFORMS.iter().enumerate().map(|(i,(slug,_))| json!({"id":123+i,"name":format!("proofstorm-{slug}-{sha}-2"),"expired":false,"workflow_run":{"id":42,"head_sha":sha}})).collect::<Vec<_>>()}]),
+            &json!([{"artifacts":PLATFORMS.iter().enumerate().map(|(i,(slug,_))| json!({"id":123+i,"name":format!("proofstorm-{slug}-{sha}"),"expired":false,"workflow_run":{"id":42,"head_sha":sha}})).collect::<Vec<_>>()}]),
         );
         save(&metadata, "refs.json", &json!([]));
         save(&metadata, "releases.json", &json!([[]]));
@@ -248,7 +248,6 @@ fn untrusted_failed_stale_or_incomplete_ci_evidence_is_rejected() {
         ("run.json", "/status", json!("in_progress")),
         ("run.json", "/head_sha", json!("bad")),
         ("run.json", "/run_attempt", json!(0)),
-        ("run.json", "/run_attempt", json!(3)),
         ("ancestry.json", "/status", json!("diverged")),
         (
             "ancestry.json",
@@ -270,6 +269,11 @@ fn untrusted_failed_stale_or_incomplete_ci_evidence_is_rejected() {
         ),
         ("artifacts.json", "/0/artifacts/0/id", json!(0)),
         ("artifacts.json", "/0/artifacts/0/name", json!("different")),
+        (
+            "artifacts.json",
+            "/0/artifacts/0/name",
+            json!(format!("proofstorm-linux-amd64-{}-2", "a".repeat(40))),
+        ),
         ("artifacts.json", "/0/artifacts/1/expired", json!(true)),
         ("artifacts.json", "/0/artifacts/1/id", json!(123)),
     ];
@@ -286,6 +290,26 @@ fn untrusted_failed_stale_or_incomplete_ci_evidence_is_rejected() {
         save(&fixture.metadata, name, &duplicate);
         assert!(fixture.verify().is_err(), "duplicate {key}");
         save(&fixture.metadata, name, &original);
+    }
+}
+
+#[test]
+fn a_rerun_of_failed_jobs_still_promotes_bundles_uploaded_earlier() {
+    // Attempt 3 re-ran only a failed qualification shard. The bundle jobs
+    // passed in attempt 1; the attempt-3 job list carries them over.
+    let fixture = Candidate::new(true);
+    fixture.mutate(true, "run.json", "/run_attempt", json!(3));
+    fixture.verify().unwrap();
+    let plan = evidence(&fixture.metadata, REPO, ID, TAG).unwrap();
+    assert_eq!(plan[1], "3");
+    assert_eq!(&plan[4..], &["123", "124"]);
+    let notes = fs::read_to_string(fixture.metadata.join("notes.md")).unwrap();
+    assert!(notes.contains("(attempt 3)"));
+    // The names promotion looks for are the ones the Checks workflow uploads.
+    let checks = include_str!("../../../../../.github/workflows/check.yml");
+    for slug in ["linux-amd64", "macos-arm64"] {
+        let upload = format!("name: proofstorm-{slug}-${{{{ github.sha }}}}\n");
+        assert_eq!(checks.matches(&upload).count(), 1, "{upload}");
     }
 }
 

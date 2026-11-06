@@ -73,14 +73,18 @@ This is not a claim that the Mac runner physically lacks source or build tools.
 
 ## Promotion checks and assets
 
-All six jobs must succeed in the selected run attempt. Exactly one unexpired
-artifact per platform must match its source SHA and attempt:
+All six jobs must succeed in the run's latest attempt. Exactly one unexpired
+artifact per platform must match the run and its source SHA:
 
-- `proofstorm-linux-amd64-COMMIT-ATTEMPT`
-- `proofstorm-macos-arm64-COMMIT-ATTEMPT`
+- `proofstorm-linux-amd64-COMMIT`
+- `proofstorm-macos-arm64-COMMIT`
 
-Artifacts expire after 14 days; diagnostics after 7. When rerunning, rerun all
-required jobs so both artifacts belong to the same attempt. A missing Mac result
+Artifacts expire after 14 days; diagnostics after 7. **Re-run failed jobs** is
+enough after a lost runner or flake: jobs that passed keep their artifacts and
+show as passed in the new attempt, and a job that re-runs replaces its own
+artifact. The same holds for native qualification, whose receipts must match the
+plan they were run from. Qualification's build and image artifacts expire after
+2 days, so re-run within that window or re-run all jobs. A missing Mac result
 never silently becomes a Linux-only release.
 
 Promotion checks safe archive extraction, payload checksums, optimized profiles,

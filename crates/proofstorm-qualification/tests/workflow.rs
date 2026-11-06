@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
@@ -138,10 +138,7 @@ fn image_preparation_is_shared_and_required_before_native_execution() {
         let steps = jobs[job]["steps"].as_array().unwrap();
         let download = steps
             .iter()
-            .position(|step| {
-                step["with"]["name"]
-                    == "qualification-images-${{ github.sha }}-${{ github.run_attempt }}"
-            })
+            .position(|step| step["with"]["name"] == "qualification-images-${{ github.sha }}")
             .unwrap();
         let consumer = steps
             .iter()
@@ -204,4 +201,69 @@ fn upstream_behavioral_suite_is_manual_and_independent_of_required_checks() {
             .values()
             .all(|job| job["uses"] != "./.github/workflows/behavioral.yml")
     );
+}
+
+/// GitHub's "re-run failed jobs" keeps what passed jobs uploaded but reruns
+/// only the failed ones. Every artifact a later job downloads must therefore
+/// be named without the attempt number, and each producer must replace its own
+/// upload when it re-runs; otherwise one lost runner costs a full re-run.
+#[test]
+fn downloaded_artifacts_survive_a_rerun_of_failed_jobs() {
+    for (file, source) in [
+        (
+            "qualification.yml",
+            include_str!("../../../.github/workflows/qualification.yml"),
+        ),
+        (
+            "check.yml",
+            include_str!("../../../.github/workflows/check.yml"),
+        ),
+    ] {
+        let workflow = workflow(source);
+        let mut uploads = BTreeMap::new();
+        let mut downloads = Vec::new();
+        for job in workflow["jobs"].as_object().unwrap().values() {
+            // A reusable-workflow call has no steps of its own.
+            let Some(steps) = job["steps"].as_array() else {
+                continue;
+            };
+            for step in steps {
+                let uses = step["uses"].as_str().unwrap_or_default();
+                let with = &step["with"];
+                if uses.starts_with("actions/upload-artifact@") {
+                    uploads.insert(with["name"].as_str().unwrap(), with["overwrite"] == true);
+                } else if uses.starts_with("actions/download-artifact@") {
+                    downloads.push(with["name"].as_str().or(with["pattern"].as_str()).unwrap());
+                }
+            }
+        }
+        assert!(!downloads.is_empty(), "{file}");
+        for wanted in downloads {
+            assert!(!wanted.contains("run_attempt"), "{file}: {wanted}");
+            let producers: Vec<_> = uploads
+                .iter()
+                .filter(|(name, _)| match wanted.split_once('*') {
+                    Some((prefix, suffix)) => name.starts_with(prefix) && name.ends_with(suffix),
+                    None => **name == wanted,
+                })
+                .collect();
+            assert!(!producers.is_empty(), "{file}: nothing uploads {wanted}");
+            for (name, overwrite) in producers {
+                assert!(
+                    overwrite,
+                    "{file}: {name} must replace its upload on re-run"
+                );
+            }
+        }
+    }
+    // Verify checks the plan's own attempt, which re-runs carry over.
+    let qualification = workflow(include_str!("../../../.github/workflows/qualification.yml"));
+    let jobs = &qualification["jobs"];
+    assert_eq!(
+        jobs["plan"]["outputs"]["attempt"],
+        "${{ steps.plan.outputs.attempt }}"
+    );
+    let verify = serde_json::to_string(&jobs["verify"]).unwrap();
+    assert!(!verify.contains("github.run_attempt"));
+    assert!(verify.contains("needs.plan.outputs.attempt"));
 }
