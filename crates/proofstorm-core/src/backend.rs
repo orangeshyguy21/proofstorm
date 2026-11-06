@@ -3659,6 +3659,7 @@ mod tests {
 
     fn component(id: &str, implementation: &str, kind: ComponentKind) -> ComponentSpec {
         ComponentSpec {
+            resources: None,
             id: id.into(),
             kind,
             implementation: implementation.into(),

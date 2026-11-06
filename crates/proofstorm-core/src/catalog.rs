@@ -2033,6 +2033,7 @@ mod tests {
             api_version: crate::API_VERSION.into(),
             name: "retirement".into(),
             components: vec![crate::ComponentSpec {
+                resources: None,
                 id: "chain".into(),
                 kind: ComponentKind::Bitcoin,
                 implementation: "bitcoin-core".into(),

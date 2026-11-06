@@ -461,6 +461,14 @@ pub fn render_cell_action_job(
             ));
         }
     };
+    if let Some(pod) = job
+        .spec
+        .as_mut()
+        .and_then(|spec| spec.template.spec.as_mut())
+    {
+        let defaults = cell.spec.cell.policy.resources.container_defaults();
+        crate::resources::apply(pod, &defaults, None);
+    }
     mark_controller_owned(&mut job, &action.name_any());
     Ok(job)
 }
@@ -1346,6 +1354,7 @@ mod tests {
 
     fn action_fixture() -> (ProofstormCell, ProofstormCellAction) {
         let component = |id: &str, kind: ComponentKind, implementation: &str| ComponentSpec {
+            resources: None,
             id: id.into(),
             kind,
             implementation: implementation.into(),

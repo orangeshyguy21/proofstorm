@@ -153,6 +153,7 @@ fn spec() -> CellSpec {
         api_version: proofstorm_core::API_VERSION.into(),
         name: "demo".into(),
         components: vec![ComponentSpec {
+            resources: None,
             id: "chain".into(),
             kind: ComponentKind::Bitcoin,
             implementation: "bitcoin-core".into(),
@@ -222,6 +223,7 @@ async fn workspace_control_uses_bounded_recorded_exec_and_exact_retry_identity()
     let cells = service(store.clone(), cluster.clone());
     let mut cell = spec();
     cell.components.push(ComponentSpec {
+        resources: None,
         id: "scripts".into(),
         kind: ComponentKind::Workspace,
         implementation: "workspace".into(),
@@ -295,6 +297,7 @@ async fn workspace_file_write_limits_count_content_bytes_and_preserve_retries() 
     let cells = service(store, cluster.clone());
     let mut cell = spec();
     cell.components.push(ComponentSpec {
+        resources: None,
         id: "scripts".into(),
         kind: ComponentKind::Workspace,
         implementation: "workspace".into(),
@@ -1247,6 +1250,7 @@ async fn workspace_lifecycle_and_fault_grants_check_capabilities_even_through_na
     let cells = service(store.clone(), cluster.clone());
     let mut cell = spec();
     cell.components.push(ComponentSpec {
+        resources: None,
         id: "scripts".into(),
         kind: ComponentKind::Workspace,
         implementation: "workspace".into(),

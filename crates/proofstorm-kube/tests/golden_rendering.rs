@@ -39,6 +39,7 @@ fn component(
     control: ControlClass,
 ) -> ComponentSpec {
     ComponentSpec {
+        resources: None,
         id: id.into(),
         kind,
         implementation: implementation.into(),
@@ -792,7 +793,44 @@ fn keycloak_waits_for_its_actual_database_service_without_database_credentials()
 /// namespace default, so the limit must stay above it or the pod is OOM killed
 /// before it can ever pass its readiness probe.
 #[test]
-fn keycloak_declares_a_memory_limit_above_the_namespace_container_default() {
+fn redis_memory_limit_tracks_its_cache_and_the_user_can_still_override_it() {
+    let memory_limit = |maxmemory: u64, resources: Option<serde_json::Value>| {
+        let (mut spec, id) = backend_cell("redis");
+        let component = spec.components.iter_mut().find(|c| c.id == id).unwrap();
+        component
+            .config
+            .insert("maxmemory_mb".into(), json!(maxmemory));
+        component.resources = resources.map(|r| serde_json::from_value(r).unwrap());
+        let lock = resolve_lock(&spec, default_catalog()).unwrap();
+        let rendered = render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+        let pod = rendered.deployments[0]
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .spec
+            .as_ref()
+            .unwrap();
+        let resources = pod.containers[0].resources.as_ref().unwrap();
+        resources
+            .limits
+            .as_ref()
+            .map(|limits| limits["memory"].0.clone())
+    };
+    assert_eq!(memory_limit(64, None).as_deref(), Some("512Mi"));
+    assert_eq!(memory_limit(1024, None).as_deref(), Some("1088Mi"));
+    assert_eq!(
+        memory_limit(1024, Some(json!({"memory": {"limit": "4Gi"}}))).as_deref(),
+        Some("4Gi")
+    );
+    assert_eq!(
+        memory_limit(1024, Some(json!({"memory": {"limit": "none"}}))),
+        None
+    );
+}
+
+#[test]
+fn keycloak_declares_a_memory_limit_above_the_container_default() {
     let mebibytes = |quantity: &k8s_openapi::apimachinery::pkg::api::resource::Quantity| {
         let value = &quantity.0;
         let (amount, scale) = value.split_at(value.len() - 2);
@@ -803,14 +841,9 @@ fn keycloak_declares_a_memory_limit_above_the_namespace_container_default() {
                 other => panic!("unexpected quantity scale {other:?} in {value:?}"),
             }
     };
-    let default = render_security_spine(INSTANCE_KEY)
-        .limits
-        .spec
-        .unwrap()
-        .limits[0]
-        .default
-        .clone()
-        .unwrap();
+    let default = k8s_openapi::apimachinery::pkg::api::resource::Quantity(
+        proofstorm_core::DEFAULT_MEMORY_LIMIT.into(),
+    );
     let (spec, _) = backend_cell("keycloak");
     let lock = resolve_lock(&spec, default_catalog()).unwrap();
     let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
@@ -830,7 +863,7 @@ fn keycloak_declares_a_memory_limit_above_the_namespace_container_default() {
         .expect("keycloak declares its own resources");
     let limits = resources.limits.as_ref().unwrap();
     let requests = resources.requests.as_ref().unwrap();
-    assert!(mebibytes(&limits["memory"]) > mebibytes(&default["memory"]));
+    assert!(mebibytes(&limits["memory"]) > mebibytes(&default));
     assert!(mebibytes(&requests["memory"]) <= mebibytes(&limits["memory"]));
 }
 
@@ -1859,7 +1892,7 @@ fn full_baseline_cell_matches_its_golden_contract() {
         json!(false)
     );
 
-    let spine = render_security_spine(INSTANCE_KEY);
+    let spine = render_security_spine(INSTANCE_KEY, &proofstorm_core::ResourcePolicy::default());
     assert_golden(
         "full-baseline-cell",
         &json!({

@@ -8,6 +8,7 @@ mod pod;
 pub mod probes;
 pub mod release;
 mod render;
+mod resources;
 
 pub const ACTION_CANCEL_ANNOTATION: &str = "proofstorm.dev/cancel-token";
 pub const BACKEND_ID_ANNOTATION: &str = "proofstorm.dev/backend-id";
@@ -57,8 +58,7 @@ pub use operation::{
     render_cell_action_job, require_open_cell,
 };
 pub use render::{
-    INSTANCE_LABEL, RenderedSecuritySpine, instance_namespace, render_cell_security_spine,
-    render_security_spine,
+    INSTANCE_LABEL, RenderedSecuritySpine, instance_namespace, render_security_spine,
 };
 
 pub use adapter::{RPC_PASSWORD as BITCOIN_RPC_PASSWORD, RPC_USER as BITCOIN_RPC_USER};

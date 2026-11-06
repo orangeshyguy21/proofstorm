@@ -32,6 +32,7 @@ async fn start(cells: &Cells, run: &str) -> String {
         .unwrap();
     for id in ["wallet-a", "wallet-b"] {
         spec.components.push(ComponentSpec {
+            resources: None,
             id: id.into(),
             kind: entry.kind,
             implementation: entry.id.clone(),

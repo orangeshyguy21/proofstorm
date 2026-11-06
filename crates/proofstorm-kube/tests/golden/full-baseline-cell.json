@@ -124,6 +124,15 @@
               "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
               "imagePullPolicy": "IfNotPresent",
               "name": "exec",
+              "resources": {
+                "limits": {
+                  "memory": "512Mi"
+                },
+                "requests": {
+                  "cpu": "100m",
+                  "memory": "128Mi"
+                }
+              },
               "securityContext": {
                 "allowPrivilegeEscalation": false,
                 "capabilities": {
@@ -1732,6 +1741,15 @@
                     "periodSeconds": 3,
                     "timeoutSeconds": 3
                   },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -1787,6 +1805,15 @@
                   "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "wait-for-lightning",
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -1815,6 +1842,15 @@
                   "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "initialize-config",
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -2005,6 +2041,15 @@
                   "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:f0c0e8a710e519774b0880841aac6c128471260cbc51da6306cfe60e9b08deda",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -2038,7 +2083,6 @@
                   "name": "proofstorm-driver",
                   "resources": {
                     "limits": {
-                      "cpu": "200m",
                       "memory": "128Mi"
                     },
                     "requests": {
@@ -2187,7 +2231,6 @@
                   },
                   "resources": {
                     "limits": {
-                      "cpu": "2",
                       "memory": "1Gi"
                     },
                     "requests": {
@@ -2230,7 +2273,6 @@
                   "name": "proofstorm-workspace",
                   "resources": {
                     "limits": {
-                      "cpu": "200m",
                       "memory": "128Mi"
                     },
                     "requests": {
@@ -3223,6 +3265,15 @@
                     "failureThreshold": 40,
                     "periodSeconds": 3
                   },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -3371,6 +3422,15 @@
                     },
                     "failureThreshold": 40,
                     "periodSeconds": 3
+                  },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
@@ -3523,6 +3583,15 @@
                     },
                     "failureThreshold": 40,
                     "periodSeconds": 3
+                  },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
@@ -3677,6 +3746,15 @@
                     "failureThreshold": 40,
                     "periodSeconds": 3
                   },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -3770,10 +3848,6 @@
       "spec": {
         "limits": [
           {
-            "default": {
-              "cpu": "500m",
-              "memory": "512Mi"
-            },
             "defaultRequest": {
               "cpu": "100m",
               "memory": "128Mi"
@@ -3798,26 +3872,7 @@
         "name": "proofstorm-i-golden-b2"
       }
     },
-    "quota": {
-      "apiVersion": "v1",
-      "kind": "ResourceQuota",
-      "metadata": {
-        "labels": {
-          "app.kubernetes.io/managed-by": "proofstormd",
-          "proofstorm.dev/instance": "i-golden-b2"
-        },
-        "name": "proofstorm-instance-quota",
-        "namespace": "proofstorm-i-golden-b2"
-      },
-      "spec": {
-        "hard": {
-          "persistentvolumeclaims": "12",
-          "pods": "40",
-          "requests.cpu": "2",
-          "requests.memory": "4Gi"
-        }
-      }
-    },
+    "quota": null,
     "serviceAccount": {
       "apiVersion": "v1",
       "automountServiceAccountToken": false,

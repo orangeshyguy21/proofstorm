@@ -214,6 +214,7 @@ fn publication_keeps_requested_draft_and_persists_effective_configuration() {
     seed(&store);
     let mut requested = empty_cell("effective-publication");
     requested.components.push(ComponentSpec {
+        resources: None,
         id: "chain".into(),
         kind: ComponentKind::Bitcoin,
         implementation: "bitcoin-core".into(),

@@ -267,7 +267,6 @@
                   "name": "proofstorm-driver",
                   "resources": {
                     "limits": {
-                      "cpu": "200m",
                       "memory": "128Mi"
                     },
                     "requests": {

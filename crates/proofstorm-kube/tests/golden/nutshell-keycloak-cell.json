@@ -1223,7 +1223,6 @@
                   },
                   "resources": {
                     "limits": {
-                      "cpu": "2",
                       "memory": "2Gi"
                     },
                     "requests": {
@@ -1278,7 +1277,6 @@
                   "name": "proofstorm-driver",
                   "resources": {
                     "limits": {
-                      "cpu": "200m",
                       "memory": "128Mi"
                     },
                     "requests": {
@@ -1327,6 +1325,15 @@
                   "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "ensure-database",
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -1465,6 +1472,15 @@
                     "periodSeconds": 3,
                     "timeoutSeconds": 3
                   },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -1513,7 +1529,6 @@
                   "name": "proofstorm-driver",
                   "resources": {
                     "limits": {
-                      "cpu": "200m",
                       "memory": "128Mi"
                     },
                     "requests": {
@@ -1547,6 +1562,15 @@
                   "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "wait-for-lightning",
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -1567,6 +1591,15 @@
                   "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "wait-for-oidc",
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -2455,6 +2488,15 @@
                     "failureThreshold": 40,
                     "periodSeconds": 3
                   },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -2629,6 +2671,15 @@
                     "failureThreshold": 40,
                     "periodSeconds": 3
                   },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -2781,6 +2832,15 @@
                     },
                     "failureThreshold": 40,
                     "periodSeconds": 3
+                  },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,

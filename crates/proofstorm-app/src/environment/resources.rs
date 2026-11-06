@@ -56,7 +56,7 @@ pub(super) fn project(
             "desired resource projection unavailable",
         )
     })?;
-    let spine = render_security_spine(&instance.instance_key);
+    let spine = render_security_spine(&instance.instance_key, &revision.cell.policy.resources);
     let defaults = spine.limits.spec.as_ref().and_then(|s| s.limits.first());
     let request_defaults = quantities(defaults.and_then(|d| d.default_request.as_ref()));
     let limit_defaults = quantities(defaults.and_then(|d| d.default.as_ref()));

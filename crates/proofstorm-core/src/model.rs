@@ -173,6 +173,9 @@ pub struct ComponentSpec {
     pub config_version: String,
     pub control: ControlClass,
     pub config: BTreeMap<String, Value>,
+    /// Main container `{cpu,memory}:{request,limit}`, e.g. `250m`, `2Gi`; limit `none` removes it. Unset values use `policy.resources.defaults`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<crate::Resources>,
 }
 
 #[derive(
@@ -488,6 +491,9 @@ pub struct CellPolicy {
     pub allow: BTreeSet<Capability>,
     #[serde(default)]
     pub limits: CellLimits,
+    /// `defaults` (same shape as a component's `resources`) and optional `quota` (`cpu`, `memory`, `pods`, `volumes` totals). Omit for no caps beyond defaults.
+    #[serde(default, skip_serializing_if = "crate::ResourcePolicy::is_empty")]
+    pub resources: crate::ResourcePolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

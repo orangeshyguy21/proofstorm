@@ -296,6 +296,7 @@ pub fn render_cell(
 ) -> Result<RenderedCell, AdapterError> {
     let namespace = instance_namespace(instance_key);
     let plans = compile_component_plans(instance_key, revision_digest, cell, lock)?;
+    let defaults = cell.policy.resources.container_defaults();
     let mut rendered = RenderedCell {
         plans: plans.clone(),
         ..RenderedCell::default()
@@ -317,7 +318,26 @@ pub fn render_cell(
             .ok_or_else(|| AdapterError::UnsupportedAdapter {
                 adapter: plan.backend_id.clone(),
             })?;
-        rendered.append_component(generator(plan)?);
+        let mut component = generator(plan)?;
+        let own = cell
+            .components
+            .iter()
+            .find(|spec| spec.id == plan.component_id)
+            .and_then(|spec| spec.resources.as_ref());
+        for pod in component
+            .deployments
+            .iter_mut()
+            .filter_map(|d| d.spec.as_mut().and_then(|s| s.template.spec.as_mut()))
+            .chain(
+                component
+                    .stateful_sets
+                    .iter_mut()
+                    .filter_map(|s| s.spec.as_mut().and_then(|s| s.template.spec.as_mut())),
+            )
+        {
+            crate::resources::apply(pod, &defaults, own);
+        }
+        rendered.append_component(component);
     }
     rendered.sort_resources();
     Ok(rendered)
@@ -390,10 +410,7 @@ pub fn protocol_prober_resources() -> k8s_openapi::api::core::v1::ResourceRequir
             ("cpu".into(), Quantity("50m".into())),
             ("memory".into(), Quantity("16Mi".into())),
         ])),
-        limits: Some(BTreeMap::from([
-            ("cpu".into(), Quantity("500m".into())),
-            ("memory".into(), Quantity("64Mi".into())),
-        ])),
+        limits: Some(BTreeMap::from([("memory".into(), Quantity("64Mi".into()))])),
         ..Default::default()
     }
 }
@@ -1658,10 +1675,10 @@ pub fn render_keycloak_component(
                     ],
                     "ports": [{"name": "http", "containerPort": http_port}],
                     "securityContext": container_security(),
-                    // The namespace LimitRange defaults a container to 512Mi. The JVM
-                    // augments and imports the realm at startup, and its peak resident
-                    // set does not fit that default, so declare the limit here.
-                    "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "2", "memory": "2Gi"}},
+                    // Containers default to a 512Mi memory limit. The JVM augments and
+                    // imports the realm at startup, and its peak resident set does not
+                    // fit that default, so declare the limit here.
+                    "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"memory": "2Gi"}},
                     "startupProbe": {"exec": {"command": [crate::drivers::DRIVER_PATH, "keycloak", "configure"]}, "timeoutSeconds": 10, "periodSeconds": 3, "failureThreshold": 60},
                     "readinessProbe": {"httpGet": {"path": "/realms/proofstorm/.well-known/openid-configuration", "port": http_port}, "periodSeconds": 3, "failureThreshold": 60},
                     "volumeMounts": [{"name": "realm-import", "mountPath": "/opt/keycloak/data/import/realm.json", "subPath": "realm.json", "readOnly": true}]
@@ -1716,6 +1733,8 @@ pub fn render_redis_component(
                     "env": [{"name": "REDIS_PASSWORD", "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "REDIS_PASSWORD"}}}],
                     "ports": [{"name": "redis", "containerPort": redis_port}],
                     "securityContext": container_security(),
+                    // Keep the container limit above the cache size, with room for Redis itself.
+                    "resources": {"limits": {"memory": format!("{}Mi", (maxmemory_mb + 64).max(512))}},
                     "readinessProbe": {
                         "exec": {"command": ["sh", "-c", "redis-cli --no-auth-warning -a \"$REDIS_PASSWORD\" ping | grep -qx PONG"]},
                         "periodSeconds": 3,
@@ -3201,7 +3220,7 @@ pub fn render_workspace_component(
                     "workingDir":"/workspace",
                     "env":[{"name":"HOME","value":"/workspace"},{"name":"PROOFSTORM_WORKSPACE","value":"/workspace"},{"name":"PROOFSTORM_RUNTIME_IMAGE","value":plan.execution_context.image}],
                     "securityContext": container_security(),
-                    "resources":{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"cpu":"2","memory":"1Gi"}},
+                    "resources":{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"memory":"1Gi"}},
                     "readinessProbe":{"exec":{"command":[proofstorm_core::workspace::WORKSPACE_RUNNER,"workspace","request","{\"kind\":\"ping\"}"]},"timeoutSeconds":3,"periodSeconds":3},
                     "volumeMounts":[{"name":"workspace","mountPath":"/workspace"}]
                 }],"volumes":[{"name":"workspace","persistentVolumeClaim":{"claimName":data_name}}]
@@ -4008,6 +4027,7 @@ mod tests {
         control: ControlClass,
     ) -> ComponentSpec {
         ComponentSpec {
+            resources: None,
             id: id.into(),
             kind,
             implementation: implementation.into(),

@@ -361,3 +361,22 @@ fn component_parameter_is_inline_and_optional_without_nullable_union() {
         assert_eq!(schema["properties"]["policy"]["type"], "object");
     }
 }
+
+#[test]
+fn resource_fields_stay_compact_but_spell_out_their_shape() {
+    let mcp = service();
+    let tool = mcp
+        .tool_router
+        .list_all()
+        .into_iter()
+        .find(|t| t.name == "cell_up")
+        .unwrap();
+    let schema = json!(tool.input_schema);
+    let component = &schema["properties"]["components"]["items"]["properties"]["resources"];
+    assert!(component.get("properties").is_none());
+    let description = component["description"].as_str().unwrap();
+    for word in ["cpu", "memory", "request", "limit", "none"] {
+        assert!(description.contains(word), "{word}: {description}");
+    }
+    assert!(!schema.to_string().contains("\"defaults\":{\"properties\""));
+}

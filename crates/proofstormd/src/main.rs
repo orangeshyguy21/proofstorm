@@ -56,7 +56,7 @@ use proofstorm_kube::{
     ProofstormCellActionStatus, ProofstormCellStatus, action_result_container,
     compile_component_plans, evaluate_action_admission, instance_namespace,
     observe_component_statuses, render_candidate_build_job, render_cell, render_cell_action_job,
-    render_cell_security_spine, render_component_network_policy,
+    render_component_network_policy, render_security_spine,
 };
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -590,7 +590,7 @@ async fn reconcile_action(
             let cells =
                 Api::<ProofstormCell>::namespaced(context.client.clone(), &control_namespace);
             let cell = cells.get(&action.spec.cell_name).await?;
-            return native_exec::reconcile(action.as_ref(), &cell, &context).await;
+            return Box::pin(native_exec::reconcile(action.as_ref(), &cell, &context)).await;
         }
         return reconcile_action_cancellation(action.as_ref(), &context).await;
     }
@@ -638,7 +638,7 @@ async fn reconcile_action(
             .as_ref()
             .is_some_and(|status| status.native_execution.is_some())
     {
-        return native_exec::reconcile(action.as_ref(), &cell, &context).await;
+        return Box::pin(native_exec::reconcile(action.as_ref(), &cell, &context)).await;
     }
     if !action
         .status
@@ -935,7 +935,7 @@ async fn reconcile_component_exec_live(
     cell: &ProofstormCell,
     context: &Context,
 ) -> Result<Action, Error> {
-    native_exec::reconcile(action, cell, context).await
+    Box::pin(native_exec::reconcile(action, cell, context)).await
 }
 
 async fn read_bounded_output(reader: impl AsyncRead + Unpin) -> Result<(Vec<u8>, bool), Error> {
@@ -1729,11 +1729,7 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
         cell.status = Some(status);
     }
     let cell = Arc::new(cell);
-    let rendered = render_cell_security_spine(
-        &cell.spec.instance_key,
-        cell.spec.cell.components.len(),
-        cell.status.as_ref().map_or(0, |s| s.retained_storage.len()),
-    );
+    let rendered = render_security_spine(&cell.spec.instance_key, &cell.spec.cell.policy.resources);
     let client = context.client.clone();
     let namespace_name = instance_namespace(&cell.spec.instance_key);
     let patch = PatchParams::apply(FIELD_MANAGER).force();
@@ -1741,13 +1737,22 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     Api::<Namespace>::all(client.clone())
         .patch(&namespace_name, &patch, &Patch::Apply(&rendered.namespace))
         .await?;
-    Api::<ResourceQuota>::namespaced(client.clone(), &namespace_name)
-        .patch(
-            "proofstorm-instance-quota",
-            &patch,
-            &Patch::Apply(&rendered.quota),
-        )
-        .await?;
+    let quotas = Api::<ResourceQuota>::namespaced(client.clone(), &namespace_name);
+    if let Some(quota) = &rendered.quota {
+        quotas
+            .patch("proofstorm-instance-quota", &patch, &Patch::Apply(quota))
+            .await?;
+    } else {
+        // A quota is the user's choice; remove one an earlier revision or version set.
+        match quotas
+            .delete("proofstorm-instance-quota", &DeleteParams::default())
+            .await
+        {
+            Ok(_) => {}
+            Err(kube::Error::Api(error)) if error.code == 404 => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
     Api::<LimitRange>::namespaced(client.clone(), &namespace_name)
         .patch(
             "proofstorm-container-limits",

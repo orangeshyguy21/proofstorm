@@ -5,7 +5,12 @@ use schemars::{Schema, transform::transform_subschemas};
 use serde_json::{Map, Value};
 
 pub(crate) fn portable_input(input: &Map<String, Value>) -> Arc<Map<String, Value>> {
-    let mut schema = Schema::from(input.clone());
+    let mut input = Value::Object(input.clone());
+    compact_resources(&mut input);
+    let Value::Object(input) = input else {
+        unreachable!("an object schema stays an object")
+    };
+    let mut schema = Schema::from(input);
     tagged_unions(&mut schema);
     if let Some(expanded) = inline_local_references(&schema) {
         schema = expanded;
@@ -16,6 +21,34 @@ pub(crate) fn portable_input(input: &Map<String, Value>) -> Arc<Map<String, Valu
         unreachable!("an object schema stays an object")
     };
     Arc::new(object)
+}
+
+/// Cell and component `resources` appear in several tools, and their full shape
+/// in every copy would spend the discovery budget. Keep each copy's type and
+/// description, which spells the shape out; requests are still validated in full.
+fn compact_resources(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::Object(resources)) = map
+                .get_mut("properties")
+                .and_then(|properties| properties.get_mut("resources"))
+            {
+                let shape = resources
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .map(|fields| fields.keys().map(String::as_str).collect::<Vec<_>>());
+                if matches!(
+                    shape.as_deref(),
+                    Some(["cpu", "memory"] | ["defaults", "quota"])
+                ) {
+                    resources.retain(|key, _| key == "type" || key == "description");
+                }
+            }
+            map.values_mut().for_each(compact_resources);
+        }
+        Value::Array(items) => items.iter_mut().for_each(compact_resources),
+        _ => {}
+    }
 }
 
 const MAX_EXPANSION_BYTES: usize = 256 * 1024;

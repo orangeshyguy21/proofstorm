@@ -247,7 +247,6 @@
                   },
                   "resources": {
                     "limits": {
-                      "cpu": "2",
                       "memory": "1Gi"
                     },
                     "requests": {
@@ -290,7 +289,6 @@
                   "name": "proofstorm-workspace",
                   "resources": {
                     "limits": {
-                      "cpu": "200m",
                       "memory": "128Mi"
                     },
                     "requests": {

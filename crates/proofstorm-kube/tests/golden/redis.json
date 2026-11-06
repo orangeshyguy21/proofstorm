@@ -242,6 +242,11 @@
                     "failureThreshold": 40,
                     "periodSeconds": 3
                   },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {

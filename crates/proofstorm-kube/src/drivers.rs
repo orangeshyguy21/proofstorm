@@ -31,13 +31,16 @@ pub fn install(pod: &mut PodSpec) -> Result<(), serde_json::Error> {
                 "name":"proofstorm-driver","mountPath":"/opt/proofstorm","readOnly":true
             }))?);
     }
-    pod.init_containers.get_or_insert_default().insert(0,serde_json::from_value(json!({
-        "name":"proofstorm-driver", "image":DRIVER_IMAGE, "imagePullPolicy":"IfNotPresent",
-        "command":["/usr/local/lib/proofstorm-driver","install"],
-        "securityContext":installer_security(),
-        "resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"cpu":"200m","memory":"128Mi"}},
-        "volumeMounts":[{"name":"proofstorm-driver","mountPath":"/opt/proofstorm"}]
-    }))?);
+    pod.init_containers.get_or_insert_default().insert(
+        0,
+        serde_json::from_value(json!({
+            "name":"proofstorm-driver", "image":DRIVER_IMAGE, "imagePullPolicy":"IfNotPresent",
+            "command":["/usr/local/lib/proofstorm-driver","install"],
+            "securityContext":installer_security(),
+            "resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"memory":"128Mi"}},
+            "volumeMounts":[{"name":"proofstorm-driver","mountPath":"/opt/proofstorm"}]
+        }))?,
+    );
     Ok(())
 }
 
@@ -66,13 +69,15 @@ pub fn install_workspace(pod: &mut PodSpec) -> Result<(), serde_json::Error> {
     for container in &mut pod.containers {
         container.volume_mounts.get_or_insert_default().push(serde_json::from_value(json!({"name":"proofstorm-workspace","mountPath":"/opt/proofstorm","readOnly":true}))?);
     }
-    pod.init_containers.get_or_insert_default().push(serde_json::from_value(json!({
-        "name":"proofstorm-workspace","image":DRIVER_IMAGE,"imagePullPolicy":"IfNotPresent",
-        "command":["/usr/local/lib/proofstorm-exec","workspace","install"],
-        "securityContext":installer_security(),
-        "resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"cpu":"200m","memory":"128Mi"}},
-        "volumeMounts":[{"name":"proofstorm-workspace","mountPath":"/opt/proofstorm"}]
-    }))?);
+    pod.init_containers
+        .get_or_insert_default()
+        .push(serde_json::from_value(json!({
+            "name":"proofstorm-workspace","image":DRIVER_IMAGE,"imagePullPolicy":"IfNotPresent",
+            "command":["/usr/local/lib/proofstorm-exec","workspace","install"],
+            "securityContext":installer_security(),
+            "resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"memory":"128Mi"}},
+            "volumeMounts":[{"name":"proofstorm-workspace","mountPath":"/opt/proofstorm"}]
+        }))?);
     Ok(())
 }
 

@@ -373,6 +373,7 @@ mod tests {
 
     fn payment_cell(method: crate::PaymentMethod, unit: &str) -> CellSpec {
         let component = |id: &str, implementation: &str, kind, control| ComponentSpec {
+            resources: None,
             id: id.into(),
             kind,
             implementation: implementation.into(),
@@ -410,6 +411,7 @@ mod tests {
     #[test]
     fn lock_is_deterministic_across_component_order() {
         let component = |id: &str, implementation: &str, kind| ComponentSpec {
+            resources: None,
             id: id.into(),
             kind,
             implementation: implementation.into(),
@@ -498,6 +500,7 @@ mod tests {
     #[test]
     fn database_roles_refuse_crossed_primary_and_cache_implementations() {
         let component = |id: &str, implementation: &str, kind, control| ComponentSpec {
+            resources: None,
             id: id.into(),
             kind,
             implementation: implementation.into(),
@@ -564,6 +567,7 @@ mod tests {
             api_version: crate::API_VERSION.into(),
             name: "effective-defaults".into(),
             components: vec![ComponentSpec {
+                resources: None,
                 id: "chain".into(),
                 kind: ComponentKind::Bitcoin,
                 implementation: "bitcoin-core".into(),
@@ -711,6 +715,7 @@ mod tests {
     #[test]
     fn rollout_digest_changes_only_for_render_affecting_input() {
         let component = |id: &str, implementation: &str, kind| ComponentSpec {
+            resources: None,
             id: id.into(),
             kind,
             implementation: implementation.into(),
@@ -793,6 +798,7 @@ mod tests {
     #[test]
     fn rollout_digest_covers_catalog_and_canonical_map_inputs() {
         let component = |config| ComponentSpec {
+            resources: None,
             id: "chain".into(),
             kind: ComponentKind::Bitcoin,
             implementation: "bitcoin-core".into(),
@@ -854,6 +860,7 @@ mod tests {
             api_version: crate::API_VERSION.into(),
             name: "strict-lock".into(),
             components: vec![ComponentSpec {
+                resources: None,
                 id: "chain".into(),
                 kind: ComponentKind::Bitcoin,
                 implementation: "bitcoin-core".into(),
@@ -888,6 +895,7 @@ mod tests {
             api_version: crate::API_VERSION.into(),
             name: "config-version-test".into(),
             components: vec![ComponentSpec {
+                resources: None,
                 id: "chain".into(),
                 kind: ComponentKind::Bitcoin,
                 implementation: "bitcoin-core".into(),
@@ -920,6 +928,7 @@ mod tests {
         older.support_lifecycle = SupportLifecycle::Supported;
         catalog.entries.push(older);
         let mut component = ComponentSpec {
+            resources: None,
             id: "chain".into(),
             kind: ComponentKind::Bitcoin,
             implementation: "bitcoin-core".into(),
@@ -959,6 +968,7 @@ mod tests {
             api_version: crate::API_VERSION.into(),
             name: "support-contract-lock".into(),
             components: vec![ComponentSpec {
+                resources: None,
                 id: "chain".into(),
                 kind: ComponentKind::Bitcoin,
                 implementation: "bitcoin-core".into(),

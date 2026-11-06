@@ -10,6 +10,7 @@ use k8s_openapi::{
     },
     apimachinery::pkg::{api::resource::Quantity, apis::meta::v1::ObjectMeta},
 };
+use proofstorm_core::{CellQuota, ResourcePolicy};
 
 pub const INSTANCE_LABEL: &str = "proofstorm.dev/instance";
 const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by";
@@ -17,7 +18,8 @@ const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by";
 #[derive(Debug, Clone)]
 pub struct RenderedSecuritySpine {
     pub namespace: Namespace,
-    pub quota: ResourceQuota,
+    /// Present only when the cell sets `policy.resources.quota`.
+    pub quota: Option<ResourceQuota>,
     pub limits: LimitRange,
     pub default_deny: NetworkPolicy,
     pub service_account: ServiceAccount,
@@ -28,8 +30,10 @@ pub fn instance_namespace(instance_key: &str) -> String {
     format!("proofstorm-{instance_key}")
 }
 
+/// The namespace, its default requests, an optional quota, deny-all networking
+/// and the workload service account. Container limits are rendered per container.
 #[must_use]
-pub fn render_security_spine(instance_key: &str) -> RenderedSecuritySpine {
+pub fn render_security_spine(instance_key: &str, policy: &ResourcePolicy) -> RenderedSecuritySpine {
     let namespace_name = instance_namespace(instance_key);
     let labels = BTreeMap::from([
         (INSTANCE_LABEL.to_owned(), instance_key.to_owned()),
@@ -44,21 +48,28 @@ pub fn render_security_spine(instance_key: &str) -> RenderedSecuritySpine {
 
     let namespace = restricted_namespace(instance_key, &namespace_name);
 
-    let quota = instance_quota(namespaced_metadata("proofstorm-instance-quota"));
+    let quota = policy
+        .quota
+        .as_ref()
+        .map(|quota| instance_quota(namespaced_metadata("proofstorm-instance-quota"), quota));
+    let defaults = policy.container_defaults();
 
     let limits = LimitRange {
         metadata: namespaced_metadata("proofstorm-container-limits"),
         spec: Some(LimitRangeSpec {
             limits: vec![LimitRangeItem {
                 type_: "Container".to_owned(),
-                default: Some(BTreeMap::from([
-                    ("cpu".to_owned(), Quantity("500m".to_owned())),
-                    ("memory".to_owned(), Quantity("512Mi".to_owned())),
-                ])),
-                default_request: Some(BTreeMap::from([
-                    ("cpu".to_owned(), Quantity("100m".to_owned())),
-                    ("memory".to_owned(), Quantity("128Mi".to_owned())),
-                ])),
+                // Requests only: a default limit here would bind containers that
+                // set `none`. Rendered containers carry their limits explicitly.
+                default_request: Some(
+                    [
+                        ("cpu", defaults.cpu_request),
+                        ("memory", defaults.memory_request),
+                    ]
+                    .into_iter()
+                    .filter_map(|(key, value)| value.map(|v| (key.to_owned(), Quantity(v))))
+                    .collect(),
+                ),
                 ..LimitRangeItem::default()
             }],
         }),
@@ -86,37 +97,6 @@ pub fn render_security_spine(instance_key: &str) -> RenderedSecuritySpine {
         default_deny,
         service_account,
     }
-}
-
-/// Grow the namespace allowance with the cell instead of silently stopping at twelve volumes.
-/// This is a namespace ceiling, not a claim that the cluster can schedule the demand.
-/// It bounds reservations (requests), pods and volumes only: each container's own limit
-/// caps its usage, and a sum of idle limits would refuse cells the plan accepted.
-#[must_use]
-pub fn render_cell_security_spine(
-    instance_key: &str,
-    components: usize,
-    retained_volumes: usize,
-) -> RenderedSecuritySpine {
-    let mut spine = render_security_spine(instance_key);
-    let units = components
-        .saturating_add(retained_volumes)
-        .div_ceil(8)
-        .max(1);
-    if let Some(hard) = spine.quota.spec.as_mut().and_then(|s| s.hard.as_mut()) {
-        for (name, amount, suffix) in [
-            ("requests.cpu", 2, ""),
-            ("requests.memory", 4, "Gi"),
-            ("pods", 40, ""),
-            ("persistentvolumeclaims", 12, ""),
-        ] {
-            hard.insert(
-                name.into(),
-                Quantity(format!("{}{suffix}", units.saturating_mul(amount))),
-            );
-        }
-    }
-    spine
 }
 
 fn restricted_namespace(instance_key: &str, namespace_name: &str) -> Namespace {
@@ -149,19 +129,25 @@ fn restricted_namespace(instance_key: &str, namespace_name: &str) -> Namespace {
     }
 }
 
-fn instance_quota(metadata: ObjectMeta) -> ResourceQuota {
+/// The user's cell totals. Requests only: each container's own limit caps its
+/// usage, and a sum of idle limits would refuse cells the plan accepted.
+fn instance_quota(metadata: ObjectMeta, quota: &CellQuota) -> ResourceQuota {
+    let hard = [
+        ("requests.cpu", quota.cpu.clone()),
+        ("requests.memory", quota.memory.clone()),
+        ("pods", quota.pods.map(|count| count.to_string())),
+        (
+            "persistentvolumeclaims",
+            quota.volumes.map(|count| count.to_string()),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(key, value)| value.map(|value| (key.to_owned(), Quantity(value))))
+    .collect();
     ResourceQuota {
         metadata,
         spec: Some(ResourceQuotaSpec {
-            hard: Some(BTreeMap::from([
-                ("requests.cpu".to_owned(), Quantity("2".to_owned())),
-                ("requests.memory".to_owned(), Quantity("4Gi".to_owned())),
-                ("pods".to_owned(), Quantity("40".to_owned())),
-                (
-                    "persistentvolumeclaims".to_owned(),
-                    Quantity("12".to_owned()),
-                ),
-            ])),
+            hard: Some(hard),
             scopes: None,
             scope_selector: None,
         }),
@@ -180,7 +166,7 @@ mod tests {
             "proofstorm-01abcxyz7890"
         );
         assert_eq!(
-            render_security_spine("01abcxyz7890")
+            render_security_spine("01abcxyz7890", &ResourcePolicy::default())
                 .namespace
                 .metadata
                 .name
@@ -191,7 +177,7 @@ mod tests {
 
     #[test]
     fn rendered_namespace_enforces_restricted_pod_security() {
-        let rendered = render_security_spine("01abcxyz7890");
+        let rendered = render_security_spine("01abcxyz7890", &ResourcePolicy::default());
         let labels = rendered.namespace.metadata.labels.expect("labels");
         assert_eq!(
             labels
@@ -207,7 +193,7 @@ mod tests {
 
     #[test]
     fn rendered_network_policy_denies_both_directions() {
-        let rendered = render_security_spine("01abcxyz7890");
+        let rendered = render_security_spine("01abcxyz7890", &ResourcePolicy::default());
         let spec = rendered.default_deny.spec.expect("network policy spec");
         assert_eq!(
             spec.policy_types,
@@ -218,16 +204,40 @@ mod tests {
     }
 
     #[test]
-    fn cell_quota_bounds_reservations_not_container_limits() {
-        let rendered = render_cell_security_spine("01abcxyz7890", 9, 0);
-        let hard = rendered
+    fn a_cell_has_no_quota_and_no_default_limits_unless_it_sets_them() {
+        let rendered = render_security_spine("01abcxyz7890", &ResourcePolicy::default());
+        assert!(rendered.quota.is_none());
+        let item = &rendered.limits.spec.expect("limit range").limits[0];
+        assert!(item.default.is_none());
+        assert_eq!(
+            item.default_request,
+            Some(BTreeMap::from([
+                ("cpu".to_owned(), Quantity("100m".to_owned())),
+                ("memory".to_owned(), Quantity("128Mi".to_owned())),
+            ]))
+        );
+    }
+
+    #[test]
+    fn a_user_quota_bounds_reservations_not_container_limits() {
+        let policy: ResourcePolicy = serde_json::from_value(serde_json::json!({
+            "quota": {"cpu": "20", "memory": "64Gi", "pods": 500}
+        }))
+        .expect("policy");
+        let hard = render_security_spine("01abcxyz7890", &policy)
             .quota
+            .expect("quota")
             .spec
             .expect("quota spec")
             .hard
             .expect("hard quota");
-        assert!(!hard.contains_key("limits.cpu"));
-        assert!(!hard.contains_key("limits.memory"));
-        assert_eq!(hard.get("requests.cpu"), Some(&Quantity("4".to_owned())));
+        assert_eq!(
+            hard,
+            BTreeMap::from([
+                ("pods".to_owned(), Quantity("500".to_owned())),
+                ("requests.cpu".to_owned(), Quantity("20".to_owned())),
+                ("requests.memory".to_owned(), Quantity("64Gi".to_owned())),
+            ])
+        );
     }
 }
