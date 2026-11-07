@@ -54,12 +54,19 @@ fn current(container: &Container) -> Effective {
     }
 }
 
+/// A quantity map of the amounts that are set.
+pub(crate) fn quantities<const N: usize>(
+    amounts: [(&str, Option<String>); N],
+) -> BTreeMap<String, Quantity> {
+    amounts
+        .into_iter()
+        .filter_map(|(key, value)| value.map(|value| (key.to_owned(), Quantity(value))))
+        .collect()
+}
+
 fn write(container: &mut Container, effective: Effective) {
     let map = |cpu: Option<String>, memory: Option<String>| {
-        let map: BTreeMap<String, Quantity> = [("cpu", cpu), ("memory", memory)]
-            .into_iter()
-            .filter_map(|(key, value)| value.map(|value| (key.to_owned(), Quantity(value))))
-            .collect();
+        let map = quantities([("cpu", cpu), ("memory", memory)]);
         (!map.is_empty()).then_some(map)
     };
     let mut resources = container.resources.take().unwrap_or_default();

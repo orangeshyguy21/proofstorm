@@ -258,9 +258,6 @@ async fn remove_receipts(
         }
     }
     for mut map in maps {
-        if !removable(&map) {
-            continue;
-        }
         let mut attempts = 0;
         loop {
             let uid = map.uid().ok_or_else(mismatch)?;

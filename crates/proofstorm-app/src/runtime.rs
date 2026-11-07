@@ -1,6 +1,9 @@
 //! Kubernetes lifecycle and observation, independent of any wire transport.
 use crate::Error;
-use k8s_openapi::api::core::v1::{ConfigMap, Namespace};
+use k8s_openapi::{
+    api::core::v1::{ConfigMap, Namespace},
+    apimachinery::pkg::apis::meta::v1::ObjectMeta,
+};
 use kube::{
     Api, Client, ResourceExt,
     api::{DeleteParams, Patch, PatchParams},
@@ -33,12 +36,13 @@ pub struct Runtime {
     pub revisions: std::sync::Arc<proofstorm_kube::RevisionCache>,
 }
 impl Runtime {
-    /// Current cluster inventory; a failed list must never look like an empty cluster.
-    /// A metadata-only list from the API server's cache: ids are all it needs.
-    pub(crate) async fn current_instance_ids(
+    /// The workspace's cells as metadata from the API server's cache: who each
+    /// cell is, without its spec or status. A failed list must never look like
+    /// an empty cluster.
+    pub(crate) async fn workspace_cells(
         &self,
         workspace: &str,
-    ) -> Result<std::collections::BTreeSet<String>, Error> {
+    ) -> Result<Vec<(proofstorm_kube::CellIdentity, ObjectMeta)>, Error> {
         let api = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
         let cells = tokio::time::timeout(
             std::time::Duration::from_secs(3),
@@ -48,10 +52,24 @@ impl Runtime {
         .map_err(|_| inventory_timeout("cluster inventory timed out"))??;
         Ok(cells
             .items
-            .iter()
-            .filter_map(|cell| proofstorm_kube::cell_identity(&cell.metadata))
-            .filter(|identity| identity.workspace_id == workspace)
-            .map(|identity| identity.instance_id)
+            .into_iter()
+            .filter_map(|cell| {
+                let identity = proofstorm_kube::cell_identity(&cell.metadata)?;
+                (identity.workspace_id == workspace).then_some((identity, cell.metadata))
+            })
+            .collect())
+    }
+
+    /// Current cluster inventory: the ids of the workspace's cells.
+    pub(crate) async fn current_instance_ids(
+        &self,
+        workspace: &str,
+    ) -> Result<std::collections::BTreeSet<String>, Error> {
+        Ok(self
+            .workspace_cells(workspace)
+            .await?
+            .into_iter()
+            .map(|(identity, _)| identity.instance_id)
             .collect())
     }
 
@@ -75,18 +93,16 @@ impl Runtime {
             .collect())
     }
 
-    /// The component status objects of one cell instance, or of every cell.
-    /// Read them after the cells they belong to; see
-    /// [`proofstorm_kube::assemble_component_statuses`].
+    /// The component status objects of one cell instance. Read them after the
+    /// cell they belong to; see [`proofstorm_kube::assemble_component_statuses`].
     pub(crate) async fn component_objects(
         &self,
-        instance_key: Option<&str>,
+        instance_key: &str,
     ) -> Result<Vec<ProofstormComponent>, Error> {
         let api =
             Api::<ProofstormComponent>::namespaced(self.client.clone(), &self.control_namespace);
-        let params = instance_key.map_or_else(kube::api::ListParams::default, |key| {
-            kube::api::ListParams::default().labels(&format!("{INSTANCE_LABEL}={key}"))
-        });
+        let params =
+            kube::api::ListParams::default().labels(&format!("{INSTANCE_LABEL}={instance_key}"));
         Ok(api.list(&params).await.map_err(kube_error)?.items)
     }
 
@@ -418,11 +434,8 @@ impl Runtime {
     }
 
     async fn with_components(&self, mut loaded: LoadedCell) -> Result<LoadedCell, Error> {
-        let objects = self
-            .component_objects(Some(&loaded.spec.instance_key))
-            .await?;
-        let LoadedCell { resource, revision } = &mut loaded;
-        proofstorm_kube::assemble_component_statuses(resource, Some(&revision.cell), &objects);
+        let objects = self.component_objects(&loaded.spec.instance_key).await?;
+        loaded.assemble_components(&objects);
         Ok(loaded)
     }
 

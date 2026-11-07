@@ -191,16 +191,10 @@ fn server_holding(action: &ProofstormCellAction) -> Server {
 }
 
 fn context(client: kube::Client) -> Arc<Context> {
-    Arc::new(Context {
-        probes: probes::Manager::new(client.clone(), "fixture".into()).0,
-        client,
-        retries: Arc::default(),
-        native: Arc::default(),
-        limits: proofstorm_core::ControllerLimits::default(),
-        cells: kube::runtime::reflector::store().0,
-        revisions: std::sync::Arc::default(),
-        components: kube::runtime::reflector::store().0,
-    })
+    Arc::new(Context::for_tests(
+        client.clone(),
+        probes::Manager::new(client, "fixture".into()).0,
+    ))
 }
 
 async fn reconcile(

@@ -898,14 +898,8 @@ async fn edit_conflict_retry_rereads_the_latest_durable_generation() {
         .unwrap();
     assert_eq!(cell["spec"]["revisionDigest"], next_revision);
     // The cell names its revision; the components live in the stored revision.
-    let revision = cluster
-        .objects
-        .values()
-        .filter_map(|value| {
-            serde_json::from_value::<k8s_openapi::api::core::v1::ConfigMap>(value.clone()).ok()
-        })
-        .filter_map(|map| proofstorm_kube::decode_revision(&map).ok())
-        .find(|revision| revision.revision_digest == next_revision)
+    let revision = environment_tests::stored_revisions(&cluster.objects)
+        .remove(&next_revision)
         .expect("the new revision is stored");
     assert_eq!(revision.cell.components.len(), 3);
     assert_eq!(

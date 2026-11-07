@@ -126,16 +126,10 @@ fn policy_request(
 
 fn context(cluster: &Arc<Mutex<Cluster>>) -> Context {
     let client = client(cluster.clone());
-    let context = Context {
-        probes: crate::probes::Manager::new(client.clone(), "fixture".into()).0,
-        client,
-        retries: std::sync::Arc::default(),
-        native: std::sync::Arc::default(),
-        limits: proofstorm_core::ControllerLimits::default(),
-        cells: kube::runtime::reflector::store().0,
-        revisions: std::sync::Arc::default(),
-        components: kube::runtime::reflector::store().0,
-    };
+    let context = Context::for_tests(
+        client.clone(),
+        crate::probes::Manager::new(client, "fixture".into()).0,
+    );
     // This fake API serves no revision objects; the controller has read this one.
     context
         .revisions

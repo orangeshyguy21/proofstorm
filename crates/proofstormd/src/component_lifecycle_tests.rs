@@ -161,16 +161,10 @@ fn fixture(
         conflict: false,
     }));
     let client = client(cluster.clone());
-    let context = Context {
-        probes: crate::probes::Manager::new(client.clone(), "fixture-controller".into()).0,
-        client,
-        retries: std::sync::Arc::default(),
-        native: std::sync::Arc::default(),
-        limits: proofstorm_core::ControllerLimits::default(),
-        cells: kube::runtime::reflector::store().0,
-        revisions: std::sync::Arc::default(),
-        components: kube::runtime::reflector::store().0,
-    };
+    let context = Context::for_tests(
+        client.clone(),
+        crate::probes::Manager::new(client, "fixture-controller".into()).0,
+    );
     (
         rendered
             .plans
@@ -273,20 +267,10 @@ async fn interrupted_stops_wait_for_pods_and_never_delete_storage() {
         tick(
             &plan,
             &cluster,
-            &Context {
-                probes: crate::probes::Manager::new(
-                    client(cluster.clone()),
-                    "fixture-controller".into(),
-                )
-                .0,
-                client: client(cluster.clone()),
-                retries: std::sync::Arc::default(),
-                native: std::sync::Arc::default(),
-                limits: proofstorm_core::ControllerLimits::default(),
-                cells: kube::runtime::reflector::store().0,
-                revisions: std::sync::Arc::default(),
-                components: kube::runtime::reflector::store().0,
-            },
+            &Context::for_tests(
+                client(cluster.clone()),
+                crate::probes::Manager::new(client(cluster.clone()), "fixture-controller".into()).0,
+            ),
             Control::Stop,
         )
         .await;

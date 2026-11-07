@@ -67,7 +67,9 @@ impl CellRevision {
     ///
     /// [`RevisionError::DigestMismatch`] when it isn't.
     pub fn verify(&self) -> Result<(), RevisionError> {
-        if digest_json(&(&self.workspace_id, &self.cell, &self.lock)) == self.revision_digest {
+        if proofstorm_core::publication_digest(&self.workspace_id, &self.cell, &self.lock)
+            == self.revision_digest
+        {
             Ok(())
         } else {
             Err(RevisionError::DigestMismatch(self.revision_digest.clone()))
@@ -210,6 +212,32 @@ impl LoadedCell {
             resource,
             revision: Arc::new(revision),
         }
+    }
+
+    /// The component plans this cell's revision compiles to.
+    ///
+    /// # Errors
+    ///
+    /// A revision the adapters can't compile.
+    pub fn plans(
+        &self,
+    ) -> Result<Vec<proofstorm_core::ComponentPlanContract>, crate::AdapterError> {
+        crate::compile_component_plans(
+            &self.spec.instance_key,
+            &self.spec.revision_digest,
+            &self.revision.cell,
+            &self.revision.lock,
+        )
+    }
+
+    /// Fill `status.components` from the cell's component objects, in
+    /// revision order; see [`crate::assemble_component_statuses`].
+    pub fn assemble_components<'a>(
+        &mut self,
+        objects: impl IntoIterator<Item = &'a crate::ProofstormComponent>,
+    ) {
+        let Self { resource, revision } = self;
+        crate::assemble_component_statuses(resource, Some(&revision.cell), objects);
     }
 
     /// Pair a cell with one of its earlier revisions, as an action bound to

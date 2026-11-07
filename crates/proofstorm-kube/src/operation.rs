@@ -152,13 +152,9 @@ pub fn evaluate_action_admission_at(
         ActionRenderError::Identity(field) => ActionAdmissionError::Identity(field),
         _ => ActionAdmissionError::InvalidPlan(error.to_string()),
     })?;
-    let plans = crate::compile_component_plans(
-        &cell.spec.instance_key,
-        &cell.spec.revision_digest,
-        &cell.revision.cell,
-        &cell.revision.lock,
-    )
-    .map_err(|error| ActionAdmissionError::InvalidPlan(error.to_string()))?;
+    let plans = cell
+        .plans()
+        .map_err(|error| ActionAdmissionError::InvalidPlan(error.to_string()))?;
     let mut statuses = cell
         .status
         .as_ref()
@@ -607,13 +603,9 @@ fn render_native_exec_action(
         ));
     }
 
-    let plans = crate::compile_component_plans(
-        &cell.spec.instance_key,
-        &cell.spec.revision_digest,
-        &cell.revision.cell,
-        &cell.revision.lock,
-    )
-    .map_err(|error| ActionRenderError::InvalidPlan(error.to_string()))?;
+    let plans = cell
+        .plans()
+        .map_err(|error| ActionRenderError::InvalidPlan(error.to_string()))?;
     let component = plans
         .iter()
         .find(|plan| plan.component_id == request.component)
@@ -1438,13 +1430,7 @@ mod tests {
     }
 
     fn ready_admission_status(cell: &mut crate::LoadedCell) {
-        let plans = crate::compile_component_plans(
-            &cell.spec.instance_key,
-            &cell.spec.revision_digest,
-            &cell.revision.cell,
-            &cell.revision.lock,
-        )
-        .expect("plans");
+        let plans = cell.plans().expect("plans");
         let components = plans
             .iter()
             .map(|plan| ComponentStatus {
@@ -2082,13 +2068,7 @@ mod tests {
         assert_eq!(mounts[2].mount_path, "/lnd");
         assert_eq!(mounts[2].read_only, Some(true));
 
-        let mut plans = crate::compile_component_plans(
-            &cell.spec.instance_key,
-            &cell.spec.revision_digest,
-            &cell.revision.cell,
-            &cell.revision.lock,
-        )
-        .expect("compiled plans");
+        let mut plans = cell.plans().expect("compiled plans");
         let mint = plans
             .iter_mut()
             .find(|plan| plan.component_id == "mint")

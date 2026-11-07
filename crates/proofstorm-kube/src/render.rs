@@ -8,7 +8,7 @@ use k8s_openapi::{
         },
         networking::v1::{NetworkPolicy, NetworkPolicySpec},
     },
-    apimachinery::pkg::{api::resource::Quantity, apis::meta::v1::ObjectMeta},
+    apimachinery::pkg::apis::meta::v1::ObjectMeta,
 };
 use proofstorm_core::{CellQuota, ResourcePolicy};
 
@@ -61,15 +61,10 @@ pub fn render_security_spine(instance_key: &str, policy: &ResourcePolicy) -> Ren
                 type_: "Container".to_owned(),
                 // Requests only: a default limit here would bind containers that
                 // set `none`. Rendered containers carry their limits explicitly.
-                default_request: Some(
-                    [
-                        ("cpu", defaults.cpu_request),
-                        ("memory", defaults.memory_request),
-                    ]
-                    .into_iter()
-                    .filter_map(|(key, value)| value.map(|v| (key.to_owned(), Quantity(v))))
-                    .collect(),
-                ),
+                default_request: Some(crate::resources::quantities([
+                    ("cpu", defaults.cpu_request),
+                    ("memory", defaults.memory_request),
+                ])),
                 ..LimitRangeItem::default()
             }],
         }),
@@ -132,7 +127,7 @@ fn restricted_namespace(instance_key: &str, namespace_name: &str) -> Namespace {
 /// The user's cell totals. Requests only: each container's own limit caps its
 /// usage, and a sum of idle limits would refuse cells the plan accepted.
 fn instance_quota(metadata: ObjectMeta, quota: &CellQuota) -> ResourceQuota {
-    let hard = [
+    let hard = crate::resources::quantities([
         ("requests.cpu", quota.cpu.clone()),
         ("requests.memory", quota.memory.clone()),
         ("pods", quota.pods.map(|count| count.to_string())),
@@ -140,10 +135,7 @@ fn instance_quota(metadata: ObjectMeta, quota: &CellQuota) -> ResourceQuota {
             "persistentvolumeclaims",
             quota.volumes.map(|count| count.to_string()),
         ),
-    ]
-    .into_iter()
-    .filter_map(|(key, value)| value.map(|value| (key.to_owned(), Quantity(value))))
-    .collect();
+    ]);
     ResourceQuota {
         metadata,
         spec: Some(ResourceQuotaSpec {
@@ -158,6 +150,7 @@ fn instance_quota(metadata: ObjectMeta, quota: &CellQuota) -> ResourceQuota {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 
     #[test]
     fn namespace_identity_is_stable_across_reconciliation() {

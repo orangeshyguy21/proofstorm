@@ -38,7 +38,7 @@ type Namespaced<K> = BTreeMap<String, BTreeMap<String, K>>;
 /// A cell whose spec and annotations haven't changed is re-applied this often,
 /// only to repair drift. Changes apply at once, and then only the documents
 /// that changed are sent, so this pass is the only one that scales with size.
-pub(super) const RESYNC_SECONDS: u64 = 600;
+const RESYNC_SECONDS: u64 = 600;
 
 #[derive(Clone)]
 pub(super) struct Applied {
@@ -232,7 +232,7 @@ impl State {
     }
 
     fn resources(&self, key: &str) -> Resources {
-        if self.ready.len() != 6 {
+        if !self.caches_ready() {
             return Resources::default();
         }
         let namespace = proofstorm_kube::instance_namespace(key);
@@ -247,9 +247,14 @@ impl State {
         }
     }
 
+    /// Whether all six resource watches have listed.
+    fn caches_ready(&self) -> bool {
+        self.ready.len() == 6
+    }
+
     /// The cell's ready worker of this image, found without copying the cache.
     fn worker(&self, key: &str, cell: &Cell, image: &str) -> Option<(Identity, String)> {
-        if self.ready.len() != 6 {
+        if !self.caches_ready() {
             return None;
         }
         let pod = self
@@ -438,33 +443,33 @@ impl Manager {
         }
     }
 
+    /// The last apply of this cell's current signature, while it is recent
+    /// enough to skip applying again.
     pub fn applied(&self, cell: &ProofstormCell) -> Option<Applied> {
-        self.state
-            .lock()
-            .expect("prober state lock")
-            .cells
-            .get(&cell.spec.instance_key)
-            .filter(|binding| Some(&binding.uid) == cell.metadata.uid.as_ref())?
-            .applied
-            .as_ref()
-            .filter(|applied| {
-                applied.signature == signature(cell)
-                    && applied.at.elapsed()
-                        < Duration::from_secs(if applied.pruned { RESYNC_SECONDS } else { 3 })
-            })
-            .cloned()
+        self.read_applied(cell, |applied| {
+            (applied.signature == signature(cell)
+                && applied.at.elapsed()
+                    < Duration::from_secs(if applied.pruned { RESYNC_SECONDS } else { 3 }))
+            .then(|| applied.clone())
+        })
     }
 
     /// The last completed apply of this exact cell, however old.
     pub fn last_applied(&self, cell: &ProofstormCell) -> Option<Applied> {
-        self.state
-            .lock()
-            .expect("prober state lock")
+        self.read_applied(cell, |applied| Some(applied.clone()))
+    }
+
+    fn read_applied<R>(
+        &self,
+        cell: &ProofstormCell,
+        read: impl FnOnce(&Applied) -> Option<R>,
+    ) -> Option<R> {
+        let state = self.state.lock().expect("prober state lock");
+        let binding = state
             .cells
             .get(&cell.spec.instance_key)
-            .filter(|binding| Some(&binding.uid) == cell.metadata.uid.as_ref())?
-            .applied
-            .clone()
+            .filter(|binding| Some(&binding.uid) == cell.metadata.uid.as_ref())?;
+        read(binding.applied.as_ref()?)
     }
 
     pub fn snapshot(&self, key: &str) -> Resources {

@@ -126,6 +126,20 @@ pub struct RenderedComponent {
     pub persistent_volume_claims: Vec<PersistentVolumeClaim>,
 }
 
+impl RenderedComponent {
+    /// The pod templates of every workload.
+    fn pod_specs_mut(&mut self) -> impl Iterator<Item = &mut k8s_openapi::api::core::v1::PodSpec> {
+        self.deployments
+            .iter_mut()
+            .filter_map(|workload| workload.spec.as_mut()?.template.spec.as_mut())
+            .chain(
+                self.stateful_sets
+                    .iter_mut()
+                    .filter_map(|workload| workload.spec.as_mut()?.template.spec.as_mut()),
+            )
+    }
+}
+
 /// Cluster observations supplied to the pure component status projector.
 pub struct ComponentObservationResources<'a> {
     pub deployments: &'a [Deployment],
@@ -310,6 +324,11 @@ pub fn render_cell(
         .network_policies
         .push(render_cell_network_policy(instance_key, &[])?);
 
+    let own_resources: BTreeMap<_, _> = cell
+        .components
+        .iter()
+        .map(|spec| (spec.id.as_str(), spec.resources.as_ref()))
+        .collect();
     for plan in &plans {
         let generator = COMPONENT_RENDERERS
             .get(plan.backend_id.as_str())
@@ -317,22 +336,11 @@ pub fn render_cell(
                 adapter: plan.backend_id.clone(),
             })?;
         let mut component = generator(plan)?;
-        let own = cell
-            .components
-            .iter()
-            .find(|spec| spec.id == plan.component_id)
-            .and_then(|spec| spec.resources.as_ref());
-        for pod in component
-            .deployments
-            .iter_mut()
-            .filter_map(|d| d.spec.as_mut().and_then(|s| s.template.spec.as_mut()))
-            .chain(
-                component
-                    .stateful_sets
-                    .iter_mut()
-                    .filter_map(|s| s.spec.as_mut().and_then(|s| s.template.spec.as_mut())),
-            )
-        {
+        let own = own_resources
+            .get(plan.component_id.as_str())
+            .copied()
+            .flatten();
+        for pod in component.pod_specs_mut() {
             crate::resources::apply(pod, &defaults, own);
         }
         rendered.append_component(component);
@@ -2745,22 +2753,7 @@ pub fn render_nutshell_mint_component(
 }
 
 fn install_component_driver(rendered: &mut RenderedComponent) -> Result<(), AdapterError> {
-    let pods = rendered
-        .deployments
-        .iter_mut()
-        .filter_map(|workload| {
-            workload
-                .spec
-                .as_mut()
-                .and_then(|spec| spec.template.spec.as_mut())
-        })
-        .chain(rendered.stateful_sets.iter_mut().filter_map(|workload| {
-            workload
-                .spec
-                .as_mut()
-                .and_then(|spec| spec.template.spec.as_mut())
-        }));
-    for pod in pods {
+    for pod in rendered.pod_specs_mut() {
         crate::drivers::install(pod)?;
     }
     Ok(())

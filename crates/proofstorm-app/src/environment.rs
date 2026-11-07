@@ -268,7 +268,7 @@ impl Cells {
         // cell's components, so it gets the longer bound.
         let objects = match tokio::time::timeout(
             crate::runtime::GROWING_LIST_TIMEOUT,
-            self.runtime.component_objects(Some(&instance.instance_key)),
+            self.runtime.component_objects(&instance.instance_key),
         )
         .await
         {

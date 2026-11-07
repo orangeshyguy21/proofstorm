@@ -14,7 +14,7 @@ use kube::{
     api::{ApiResource, DynamicObject, ListParams},
 };
 use proofstorm_core::Capability;
-use proofstorm_kube::{COMPONENT_LABEL, INSTANCE_LABEL, ProofstormCell, instance_namespace};
+use proofstorm_kube::{COMPONENT_LABEL, INSTANCE_LABEL, instance_namespace};
 use proofstorm_view::{CellUsage, ProcessUsage, SystemView, UsageTotals};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{sync::watch, task::JoinHandle};
@@ -63,22 +63,10 @@ impl Cells {
             self.store
                 .authorize(&self.workspace, &self.principal, capability)?;
         }
-        let api = Api::<ProofstormCell>::namespaced(
-            self.runtime.client.clone(),
-            &self.runtime.control_namespace,
-        );
         // Identity is all the sampler needs from a cell: read metadata only.
-        let resources = tokio::time::timeout(
-            Duration::from_secs(3),
-            api.list_metadata(&ListParams::default().match_any()),
-        )
-        .await
-        .map_err(|_| Error::failure("system inventory timed out", None))??;
         let mut scoped = Vec::new();
-        for (identity, resource_name) in resources.items.into_iter().filter_map(|cell| {
-            let identity = proofstorm_kube::cell_identity(&cell.metadata)?;
-            (identity.workspace_id == self.workspace).then(|| (identity, cell.name_any()))
-        }) {
+        for (identity, metadata) in self.runtime.workspace_cells(&self.workspace).await? {
+            let resource_name = metadata.name.unwrap_or_default();
             match self.store.environment_entry(
                 &self.workspace,
                 &self.principal,
@@ -175,12 +163,17 @@ impl Cells {
         if measurements.is_none() {
             usage.metrics_error = Some("CPU and memory metrics unavailable.".into());
         }
+        let by_pod = measurements
+            .iter()
+            .flat_map(|list| &list.items)
+            .filter_map(|metric| Some((metric.metadata.name.as_deref()?, metric)))
+            .collect::<std::collections::HashMap<_, _>>();
         for pod in &pod_list.items {
-            let measurement = measurements.as_ref().and_then(|list| {
-                list.items
-                    .iter()
-                    .find(|metric| metric.name_any() == pod.name_any())
-            });
+            let measurement = pod
+                .metadata
+                .name
+                .as_deref()
+                .and_then(|name| by_pod.get(name).copied());
             usage.processes.extend(processes(pod, measurement));
         }
         usage
@@ -203,18 +196,14 @@ impl Cells {
                 self.store
                     .revision(&self.workspace, &self.principal, &instance.revision_digest)
             {
-                let resource = ProofstormCell::new(
-                    resource_name,
-                    proofstorm_kube::ProofstormCellSpec {
-                        workspace_id: identity.workspace_id.clone(),
-                        instance_id: identity.instance_id.clone(),
-                        instance_key: identity.instance_key.clone(),
-                        revision_digest: instance.revision_digest.clone(),
-                    },
-                );
-                let loaded =
-                    proofstorm_kube::LoadedCell::from_spec(resource, revision.cell, revision.lock);
-                usage.balances = balances::sample(&loaded, &pods, &pod_list.items).await;
+                let revision = proofstorm_kube::CellRevision {
+                    workspace_id: identity.workspace_id.clone(),
+                    instance_key: identity.instance_key.clone(),
+                    revision_digest: instance.revision_digest.clone(),
+                    cell: revision.cell,
+                    lock: revision.lock,
+                };
+                usage.balances = balances::sample(&revision, &pods, &pod_list.items).await;
             }
         }
         usage
@@ -388,6 +377,7 @@ mod tests {
 #[cfg(test)]
 mod live_relationship_tests {
     use super::*;
+    use proofstorm_kube::ProofstormCell;
     #[tokio::test]
     #[ignore = "requires an explicit existing test cell and kubeconfig"]
     async fn standalone_ldk_channels_match_their_peer_observations() {
@@ -408,7 +398,7 @@ mod live_relationship_tests {
             .unwrap();
         let pods = Api::<Pod>::namespaced(client, &instance_namespace(&cell.spec.instance_key));
         let inventory = pods.list(&ListParams::default()).await.unwrap().items;
-        let observations = balances::sample(&cell, &pods, &inventory).await;
+        let observations = balances::sample(&cell.revision, &pods, &inventory).await;
         let components = cell
             .revision
             .cell
@@ -474,7 +464,7 @@ mod live_relationship_tests {
             .unwrap();
         let pods = Api::<Pod>::namespaced(client, &instance_namespace(&cell.spec.instance_key));
         let inventory = pods.list(&ListParams::default()).await.unwrap().items;
-        let observations = balances::sample(&cell, &pods, &inventory).await;
+        let observations = balances::sample(&cell.revision, &pods, &inventory).await;
         let bitcoin = observations
             .iter()
             .filter_map(|b| b.bitcoin.as_ref())

@@ -4,10 +4,9 @@ use std::{fs, path::PathBuf};
 fn cores(quantity: &serde_yaml::Value) -> f64 {
     match quantity {
         serde_yaml::Value::Number(number) => number.as_f64().expect("CPU number"),
-        serde_yaml::Value::String(text) => text.strip_suffix('m').map_or_else(
-            || text.parse().expect("CPU cores"),
-            |milli| milli.parse::<f64>().expect("CPU millicores") / 1000.0,
-        ),
+        serde_yaml::Value::String(text) => {
+            proofstorm_core::quantity_value(text).expect("CPU quantity")
+        }
         other => panic!("CPU quantity {other:?}"),
     }
 }

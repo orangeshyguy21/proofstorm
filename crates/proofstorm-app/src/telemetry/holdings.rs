@@ -6,7 +6,7 @@ use proofstorm_view::{BalanceAmount, HoldingsObservation, MintHolding};
 use serde_json::Value;
 
 pub(super) fn project(
-    cell: &proofstorm_kube::LoadedCell,
+    revision: &proofstorm_kube::CellRevision,
     implementation: &str,
     data: &Value,
 ) -> Option<(Vec<BalanceAmount>, HoldingsObservation)> {
@@ -46,7 +46,7 @@ pub(super) fn project(
             .collect::<Option<Vec<_>>>()?;
         mints.push(MintHolding {
             id: proofstorm_core::digest_json(&url),
-            mint: match_mint(cell, url),
+            mint: match_mint(revision, url),
             amounts,
         });
     }
@@ -63,10 +63,10 @@ pub(super) fn project(
         },
     ))
 }
-fn match_mint(cell: &proofstorm_kube::LoadedCell, url: &str) -> Option<String> {
+fn match_mint(revision: &proofstorm_kube::CellRevision, url: &str) -> Option<String> {
     // Match only exact in-cell service aliases. Never infer an external URL by its first label.
-    let namespace = instance_namespace(&cell.spec.instance_key);
-    cell.revision
+    let namespace = instance_namespace(&revision.instance_key);
+    revision
         .cell
         .components
         .iter()
@@ -89,29 +89,24 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
     use serde_json::json;
-    fn cell() -> proofstorm_kube::LoadedCell {
-        proofstorm_kube::LoadedCell::from_spec(
-            proofstorm_kube::ProofstormCell::new(
-                "cell",
-                proofstorm_kube::ProofstormCellSpec {
-                    workspace_id: "workspace".into(),
-                    instance_id: "cell".into(),
-                    instance_key: "instance".into(),
-                    revision_digest: "revision".into(),
-                },
-            ),
-            serde_json::from_str(include_str!("../../../../examples/developer-cell.json")).unwrap(),
-            proofstorm_core::ResolvedLock {
+    fn cell() -> proofstorm_kube::CellRevision {
+        proofstorm_kube::CellRevision {
+            workspace_id: "workspace".into(),
+            instance_key: "instance".into(),
+            revision_digest: "revision".into(),
+            cell: serde_json::from_str(include_str!("../../../../examples/developer-cell.json"))
+                .unwrap(),
+            lock: proofstorm_core::ResolvedLock {
                 api_version: "lock".into(),
                 digest: "lock".into(),
                 entries: vec![],
             },
-        )
+        }
     }
     #[test]
     fn mint_matching_is_exact_and_unknown_urls_stay_private() {
         let cell = cell();
-        let ns = instance_namespace(&cell.spec.instance_key);
+        let ns = instance_namespace(&cell.instance_key);
         assert_eq!(
             match_mint(&cell, &format!("http://mint.{ns}.svc.cluster.local:3338/")),
             Some("mint".into())

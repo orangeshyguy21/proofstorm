@@ -10,7 +10,7 @@ use std::{
 };
 
 pub(super) fn project(
-    cell: &proofstorm_kube::LoadedCell,
+    revision: &proofstorm_kube::CellRevision,
     inventory: &[Pod],
     response: &Value,
 ) -> Option<BitcoinObservation> {
@@ -22,13 +22,12 @@ pub(super) fn project(
         let Some(id) = pod.labels().get(COMPONENT_LABEL) else {
             continue;
         };
-        if !cell
-            .revision
+        if !revision
             .cell
             .components
             .iter()
             .any(|c| &c.id == id && c.implementation == "bitcoin-core")
-            || !cell.revision.lock.entries.iter().any(|e| {
+            || !revision.lock.entries.iter().any(|e| {
                 &e.component_id == id
                     && pod.annotations().get(ROLLOUT_DIGEST_ANNOTATION) == Some(&e.rollout_digest)
             })

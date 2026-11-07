@@ -6,8 +6,8 @@ use super::{
     EXECUTION_STATE_CONTRACT_ANNOTATION, Error, LIFECYCLE_RESTART_ANNOTATION,
     LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, ListParams, Patch, PatchParams, Pod,
     ProofstormCellAction, ProofstormCellActionStatus, ResourceExt, StatefulSet,
-    WorkloadControllerKind, compile_component_plans, instance_namespace, now_unix,
-    patch_action_failure, patch_action_status, patch_invalid_action, status_object,
+    WorkloadControllerKind, instance_namespace, now_unix, patch_action_failure,
+    patch_action_status, patch_invalid_action, status_object,
 };
 use k8s_openapi::{api::core::v1::PodTemplateSpec, apimachinery::pkg::apis::meta::v1::ObjectMeta};
 use serde::{Serialize, de::DeserializeOwned};
@@ -42,12 +42,7 @@ pub(super) async fn reconcile(
         return patch_invalid_action(action, context, "component lifecycle capability mismatch")
             .await;
     }
-    let plans = compile_component_plans(
-        &cell.spec.instance_key,
-        &cell.spec.revision_digest,
-        &cell.revision.cell,
-        &cell.revision.lock,
-    )?;
+    let plans = cell.plans()?;
     let Some(plan) = plans.iter().find(|p| p.component_id == request.component) else {
         return patch_invalid_action(action, context, "component is not in the accepted cell")
             .await;

@@ -789,9 +789,6 @@ fn keycloak_waits_for_its_actual_database_service_without_database_credentials()
     }
 }
 
-/// The JVM augments and imports its realm at startup and does not fit the
-/// namespace default, so the limit must stay above it or the pod is OOM killed
-/// before it can ever pass its readiness probe.
 #[test]
 fn redis_memory_limit_tracks_its_cache_and_the_user_can_still_override_it() {
     let memory_limit = |maxmemory: u64, resources: Option<serde_json::Value>| {
@@ -829,6 +826,9 @@ fn redis_memory_limit_tracks_its_cache_and_the_user_can_still_override_it() {
     );
 }
 
+/// The JVM augments and imports its realm at startup and needs more than the
+/// container default, so its limit must stay above it or the pod is OOM killed
+/// before it can ever pass its readiness probe.
 #[test]
 fn keycloak_declares_a_memory_limit_above_the_container_default() {
     let mebibytes = |quantity: &k8s_openapi::apimachinery::pkg::api::resource::Quantity| {
@@ -2470,22 +2470,6 @@ fn nutshell_native_env_reaches_the_mint_environment() {
 #[test]
 #[ignore = "timing report, run by hand"]
 fn scale_timing_of_plan_compile_and_render() {
-    let one = {
-        let spec = cell(
-            "scale",
-            vec![
-                component(
-                    "chain",
-                    ComponentKind::Bitcoin,
-                    "bitcoin-core",
-                    ControlClass::Cell,
-                ),
-                component("ln-0", ComponentKind::Lightning, "lnd", ControlClass::Cell),
-            ],
-            vec![chain_link("ln-0", "chain")],
-        );
-        resolve_lock(&spec, default_catalog()).unwrap()
-    };
     for size in [100_usize, 500, 1000, 2000] {
         let mut components = vec![component(
             "chain",
@@ -2514,7 +2498,6 @@ fn scale_timing_of_plan_compile_and_render() {
         let started = std::time::Instant::now();
         let rendered = render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
         let render = started.elapsed();
-        let _ = &one;
         // The stored revision object, as the API server receives it.
         let revision = proofstorm_kube::CellRevision {
             workspace_id: "workspace".into(),

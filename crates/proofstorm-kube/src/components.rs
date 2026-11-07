@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
-use proofstorm_core::{CellSpec, ComponentStatus, digest_json};
+use proofstorm_core::{CellSpec, ComponentStatus};
 
 use crate::{
     COMPONENT_LABEL, CellPhase, INSTANCE_LABEL, ProofstormCell, ProofstormComponent,
@@ -49,17 +49,32 @@ pub fn component_object(
     }
 }
 
-/// A digest of everything about `status` except when it was last probed, so
-/// a component object is rewritten only when its state changes.
+/// Whether `a` and `b` differ only in when they were last probed, so a
+/// component object is rewritten only when its state changes.
 #[must_use]
-pub fn material_digest(status: &ComponentStatus) -> String {
-    let mut status = status.clone();
-    if let Some(observation) = status.protocol_observation.as_mut() {
-        observation.observed_at_unix = 0;
-        observation.expires_at_unix = 0;
-        observation.elapsed_micros = 0;
-    }
-    digest_json(&status)
+pub fn same_material(a: &ComponentStatus, b: &ComponentStatus) -> bool {
+    // Destructured so a new field can't be left out by accident.
+    let ComponentStatus {
+        id,
+        kind,
+        observed_revision_digest,
+        observed_rollout_digest,
+        conditions,
+        ready,
+        protocol_observation,
+        service,
+        ports,
+    } = a;
+    *id == b.id
+        && *kind == b.kind
+        && *observed_revision_digest == b.observed_revision_digest
+        && *observed_rollout_digest == b.observed_rollout_digest
+        && *conditions == b.conditions
+        && *ready == b.ready
+        // An observation holds only probe times, which the cell's heartbeat carries.
+        && protocol_observation.is_some() == b.protocol_observation.is_some()
+        && *service == b.service
+        && *ports == b.ports
 }
 
 /// The window every probed component was confirmed in: the oldest observation
@@ -134,7 +149,7 @@ pub fn assemble_component_statuses<'a>(
                 observation.expires_at_unix.max(freshness.expires_at_unix);
         }
     }
-    status.components = std::mem::take(&mut components);
+    status.components = components;
 }
 
 #[cfg(test)]
@@ -202,11 +217,6 @@ mod tests {
         LoadedCell::from_spec(resource, spec, lock)
     }
 
-    fn assemble(loaded: &mut LoadedCell, objects: &[ProofstormComponent]) {
-        let LoadedCell { resource, revision } = loaded;
-        assemble_component_statuses(resource, Some(&revision.cell), objects);
-    }
-
     #[test]
     fn without_the_spec_every_object_of_the_cell_is_used_in_id_order() {
         let mut cell = cell(&[]).resource;
@@ -231,10 +241,10 @@ mod tests {
     fn a_new_probe_alone_does_not_change_the_material_state() {
         let first = status("chain", 100);
         let reprobed = status("chain", 160);
-        assert_eq!(material_digest(&first), material_digest(&reprobed));
+        assert!(same_material(&first, &reprobed));
         let mut down = reprobed;
         down.ready = false;
-        assert_ne!(material_digest(&first), material_digest(&down));
+        assert!(!same_material(&first, &down));
     }
 
     #[test]
@@ -262,7 +272,7 @@ mod tests {
             component_object("other", "system", &status("chain", 100), None),
             component_object("ikey", "system", &status("removed", 100), None),
         ];
-        assemble(&mut loaded, &objects);
+        loaded.assemble_components(&objects);
         let components = &loaded.status.as_ref().unwrap().components;
         assert_eq!(
             components.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
@@ -286,7 +296,7 @@ mod tests {
             &status("chain", 100),
             None,
         )];
-        assemble(&mut loaded, &objects);
+        loaded.assemble_components(&objects);
         assert!(loaded.status.as_ref().unwrap().components.is_empty());
     }
 
@@ -303,7 +313,7 @@ mod tests {
             &status("chain", 100),
             None,
         )];
-        assemble(&mut loaded, &objects);
+        loaded.assemble_components(&objects);
         let observation = loaded.status.as_ref().unwrap().components[0]
             .protocol_observation
             .clone()
@@ -323,7 +333,7 @@ mod tests {
             &status("chain", 100),
             None,
         )];
-        assemble(&mut loaded, &objects);
+        loaded.assemble_components(&objects);
         let observation = loaded.status.as_ref().unwrap().components[0]
             .protocol_observation
             .clone()

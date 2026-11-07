@@ -55,8 +55,7 @@ pub use candidate::{
     CandidateBuildRenderError, candidate_bundle_secret, render_candidate_build_job,
 };
 pub use components::{
-    assemble_component_statuses, component_object, component_object_name, material_digest,
-    protocol_freshness,
+    assemble_component_statuses, component_object, protocol_freshness, same_material,
 };
 pub use identity::{
     CellIdentity, INSTANCE_ID_ANNOTATION, WORKSPACE_ID_ANNOTATION, cell_identity, identify_cell,
@@ -72,8 +71,7 @@ pub use render::{
     INSTANCE_LABEL, RenderedSecuritySpine, instance_namespace, render_security_spine,
 };
 pub use revision::{
-    CellRevision, LoadedCell, MAX_REVISION_BYTES, RevisionCache, RevisionError, decode_revision,
-    revision_config_map, revision_object_name,
+    CellRevision, LoadedCell, RevisionCache, RevisionError, decode_revision, revision_config_map,
 };
 
 pub use adapter::{RPC_PASSWORD as BITCOIN_RPC_PASSWORD, RPC_USER as BITCOIN_RPC_USER};

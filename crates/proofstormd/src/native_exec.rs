@@ -2,9 +2,9 @@
 use super::{
     ACTION_CANCEL_ANNOTATION, Action, ActionPhase, Api, AttachParams, COMPONENT_LABEL, CellAction,
     Context, Duration, Error, INSTANCE_LABEL, ListParams, Pod, ProofstormCellAction,
-    ProofstormCellActionStatus, ResourceExt, compile_component_plans, exec_exit_code,
-    instance_namespace, now_unix, patch_action_failure, patch_action_status, patch_invalid_action,
-    read_bounded_output, status_object,
+    ProofstormCellActionStatus, ResourceExt, exec_exit_code, instance_namespace, now_unix,
+    patch_action_failure, patch_action_status, patch_invalid_action, read_bounded_output,
+    status_object,
 };
 use kube::api::{Patch, PatchParams};
 use proofstorm_core::native::{NativeCommand, cap_public_streams};
@@ -377,12 +377,7 @@ pub async fn reconcile(
     if let Err(message) = command.validate() {
         return patch_invalid_action(action, context, message).await;
     }
-    let plans = compile_component_plans(
-        &cell.spec.instance_key,
-        &cell.spec.revision_digest,
-        &cell.revision.cell,
-        &cell.revision.lock,
-    )?;
+    let plans = cell.plans()?;
     let Some(component) = plans
         .iter()
         .find(|plan| plan.component_id == request.component)
@@ -872,18 +867,9 @@ mod tests {
     }
 
     fn install(base: &str, input: &[u8], expected_bytes: usize) -> std::process::Output {
-        install_as(base, input, expected_bytes, &digest(input))
-    }
-
-    fn install_as(
-        base: &str,
-        input: &[u8],
-        expected_bytes: usize,
-        digest: &str,
-    ) -> std::process::Output {
         let mut child = Command::new("/bin/sh")
             .arg("-c")
-            .arg(install_script(base, expected_bytes, digest))
+            .arg(install_script(base, expected_bytes, &digest(input)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

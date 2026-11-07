@@ -178,16 +178,10 @@ fn fixture() -> (ProofstormCellAction, Arc<Mutex<Cluster>>, Context, Mailbox) {
         cancellations: 0,
     }));
     let client = client(cluster.clone());
-    let context = Context {
-        probes: crate::probes::Manager::new(client.clone(), "fixture".into()).0,
-        client,
-        retries: std::sync::Arc::default(),
-        native: std::sync::Arc::default(),
-        limits: proofstorm_core::ControllerLimits::default(),
-        cells: kube::runtime::reflector::store().0,
-        revisions: std::sync::Arc::default(),
-        components: kube::runtime::reflector::store().0,
-    };
+    let context = Context::for_tests(
+        client.clone(),
+        crate::probes::Manager::new(client, "fixture".into()).0,
+    );
     (parent, cluster, context, mailbox)
 }
 

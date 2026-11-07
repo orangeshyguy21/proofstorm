@@ -54,9 +54,9 @@ use proofstorm_kube::{
     LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, LoadedCell,
     ProofstormCandidateBuild, ProofstormCandidateBuildStatus, ProofstormCell, ProofstormCellAction,
     ProofstormCellActionStatus, ProofstormCellStatus, ProofstormComponent, action_result_container,
-    compile_component_plans, evaluate_action_admission, instance_namespace,
-    observe_component_statuses, render_candidate_build_job, render_cell, render_cell_action_job,
-    render_cell_network_policy, render_component_network_policy, render_security_spine,
+    evaluate_action_admission, instance_namespace, observe_component_statuses,
+    render_candidate_build_job, render_cell, render_cell_action_job, render_cell_network_policy,
+    render_component_network_policy, render_security_spine,
 };
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -89,30 +89,51 @@ struct Context {
     components: reflector::Store<ProofstormComponent>,
 }
 
-/// The component status cache, once its first list has landed. A cache with
-/// no writer (tests) is used as it is.
-async fn component_cache(context: &Context) -> Result<(), Error> {
-    match tokio::time::timeout(
+#[cfg(test)]
+impl Context {
+    /// A context around a fake API, with default limits and empty caches.
+    fn for_tests(client: Client, probes: Arc<probes::Manager>) -> Self {
+        Self {
+            client,
+            probes,
+            retries: Arc::default(),
+            native: Arc::default(),
+            limits: proofstorm_core::ControllerLimits::default(),
+            cells: reflector::store().0,
+            revisions: Arc::default(),
+            components: reflector::store().0,
+        }
+    }
+}
+
+/// Ok when the object was deleted or was already gone.
+fn gone<T>(result: Result<T, kube::Error>) -> Result<(), Error> {
+    match result {
+        Ok(_) => Ok(()),
+        Err(kube::Error::Api(error)) if error.code == 404 => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// The cached component objects of one cell instance, once the cache's first
+/// list has landed. A cache with no writer (tests) is used as it is.
+async fn stored_components(
+    context: &Context,
+    instance_key: &str,
+) -> Result<Vec<Arc<ProofstormComponent>>, Error> {
+    // A dropped writer still counts as ready: the cache keeps what it has.
+    let _ = tokio::time::timeout(
         Duration::from_secs(10),
         context.components.wait_until_ready(),
     )
     .await
-    {
-        Ok(_) => Ok(()),
-        Err(_) => Err(Error::ControllerInvariant(
-            "component status cache is not ready",
-        )),
-    }
-}
-
-/// The cached component objects of one cell instance.
-fn stored_components(context: &Context, instance_key: &str) -> Vec<Arc<ProofstormComponent>> {
-    context
+    .map_err(|_| Error::ControllerInvariant("component status cache is not ready"))?;
+    Ok(context
         .components
         .state()
         .into_iter()
         .filter(|object| object.spec.instance_key == instance_key)
-        .collect()
+        .collect())
 }
 
 /// The loaded cell with its component statuses filled from the cache.
@@ -120,14 +141,8 @@ async fn with_component_statuses(
     context: &Context,
     mut cell: LoadedCell,
 ) -> Result<LoadedCell, Error> {
-    component_cache(context).await?;
-    let stored = stored_components(context, &cell.spec.instance_key);
-    let LoadedCell { resource, revision } = &mut cell;
-    proofstorm_kube::assemble_component_statuses(
-        resource,
-        Some(&revision.cell),
-        stored.iter().map(AsRef::as_ref),
-    );
+    let stored = stored_components(context, &cell.spec.instance_key).await?;
+    cell.assemble_components(stored.iter().map(AsRef::as_ref));
     Ok(cell)
 }
 
@@ -975,12 +990,7 @@ async fn reconcile_component_logs(
     let CellAction::ComponentLogs(request) = &action.spec.action else {
         return Err(Error::ControllerInvariant("expected component logs action"));
     };
-    let plans = compile_component_plans(
-        &cell.spec.instance_key,
-        &cell.spec.revision_digest,
-        &cell.revision.cell,
-        &cell.revision.lock,
-    )?;
+    let plans = cell.plans()?;
     if !plans
         .iter()
         .any(|plan| plan.component_id == request.component)
@@ -1346,23 +1356,20 @@ async fn apply_network_fault_policies(
     for (name, policy) in &existing {
         let own = policy.labels().get(COMPONENT_LABEL) == Some(name);
         if own && !exclusions.contains_key(name) {
-            match policies
-                .delete(
-                    name,
-                    &DeleteParams {
-                        preconditions: Some(kube::api::Preconditions {
-                            uid: policy.metadata.uid.clone(),
-                            resource_version: policy.metadata.resource_version.clone(),
-                        }),
-                        ..DeleteParams::default()
-                    },
-                )
-                .await
-            {
-                Ok(_) => {}
-                Err(kube::Error::Api(error)) if error.code == 404 => {}
-                Err(error) => return Err(error.into()),
-            }
+            gone(
+                policies
+                    .delete(
+                        name,
+                        &DeleteParams {
+                            preconditions: Some(kube::api::Preconditions {
+                                uid: policy.metadata.uid.clone(),
+                                resource_version: policy.metadata.resource_version.clone(),
+                            }),
+                            ..DeleteParams::default()
+                        },
+                    )
+                    .await,
+            )?;
         }
     }
     Ok(active)
@@ -1932,14 +1939,11 @@ async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error
             .await?;
     } else {
         // A quota is the user's choice; remove one an earlier revision or version set.
-        match quotas
-            .delete("proofstorm-instance-quota", &DeleteParams::default())
-            .await
-        {
-            Ok(_) => {}
-            Err(kube::Error::Api(error)) if error.code == 404 => {}
-            Err(error) => return Err(error.into()),
-        }
+        gone(
+            quotas
+                .delete("proofstorm-instance-quota", &DeleteParams::default())
+                .await,
+        )?;
     }
     Api::<LimitRange>::namespaced(client.clone(), &namespace_name)
         .patch(
@@ -2165,8 +2169,7 @@ async fn observe_cell(
     let namespace_name = instance_namespace(&cell.spec.instance_key);
     let snapshot = context.probes.snapshot(&cell.spec.instance_key);
     let observed_resources = snapshot.observed();
-    component_cache(context).await?;
-    let stored = stored_components(context, &cell.spec.instance_key);
+    let stored = stored_components(context, &cell.spec.instance_key).await?;
     // Statuses of an older revision or rollout never carry their condition
     // transitions over: the observation matches on both digests.
     let previous_components = stored
@@ -2355,14 +2358,11 @@ async fn cleanup(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action,
         .await?;
     if !runtime_actions.items.is_empty() {
         for action in runtime_actions.items {
-            match actions
-                .delete(&action.name_any(), &DeleteParams::default())
-                .await
-            {
-                Ok(_) => {}
-                Err(kube::Error::Api(error)) if error.code == 404 => {}
-                Err(error) => return Err(error.into()),
-            }
+            gone(
+                actions
+                    .delete(&action.name_any(), &DeleteParams::default())
+                    .await,
+            )?;
         }
         return Err(Error::ActionCleanupPending(cell.spec.instance_key.clone()));
     }
@@ -2459,11 +2459,10 @@ async fn write_component_objects(
     let writes = components
         .iter()
         .filter(|status| {
-            by_id
+            !by_id
                 .get(status.id.as_str())
                 .and_then(|object| object.status.as_ref())
-                .map(proofstorm_kube::material_digest)
-                != Some(proofstorm_kube::material_digest(status))
+                .is_some_and(|stored| proofstorm_kube::same_material(stored, status))
         })
         .map(|status| {
             let mut object = proofstorm_kube::component_object(
@@ -2499,19 +2498,20 @@ async fn write_component_objects(
         .iter()
         .map(|status| status.id.as_str())
         .collect::<BTreeSet<_>>();
-    for object in stored
+    let deletes = stored
         .iter()
         .filter(|object| !desired.contains(object.spec.component_id.as_str()))
-    {
-        match api
-            .delete(&object.name_any(), &DeleteParams::default())
-            .await
-        {
-            Ok(_) => {}
-            Err(kube::Error::Api(error)) if error.code == 404 => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
+        .map(|object| {
+            let (api, name) = (api.clone(), object.name_any());
+            async move { gone(api.delete(&name, &DeleteParams::default()).await) }
+        })
+        .collect::<Vec<_>>();
+    futures::stream::iter(deletes)
+        .buffer_unordered(COMPONENT_WRITE_CONCURRENCY)
+        .collect::<Vec<Result<(), Error>>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<()>, Error>>()?;
     Ok(())
 }
 
@@ -4121,16 +4121,7 @@ mod tests {
             "system",
         );
         let (probes, _receive) = probes::Manager::new(client.clone(), "prober".into());
-        let context = Context {
-            client,
-            probes,
-            retries: Arc::default(),
-            native: Arc::default(),
-            limits: proofstorm_core::ControllerLimits::default(),
-            cells: kube::runtime::reflector::store().0,
-            revisions: Arc::default(),
-            components: kube::runtime::reflector::store().0,
-        };
+        let context = Context::for_tests(client, probes);
         let heartbeat = |at| proofstorm_kube::ProtocolFreshness {
             observed_at_unix: at,
             expires_at_unix: at + 30,

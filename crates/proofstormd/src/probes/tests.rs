@@ -308,14 +308,8 @@ async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_
     );
     let (component_store, mut component_writer) = kube::runtime::reflector::store();
     let context = Arc::new(crate::Context {
-        client,
-        probes: manager.clone(),
-        retries: Arc::default(),
-        native: Arc::default(),
-        limits: proofstorm_core::ControllerLimits::default(),
-        cells: kube::runtime::reflector::store().0,
-        revisions: std::sync::Arc::default(),
         components: component_store,
+        ..crate::Context::for_tests(client, manager.clone())
     });
     // This fake API serves no revision objects; the controller has read this one.
     context.revisions.insert((*cell.revision).clone());

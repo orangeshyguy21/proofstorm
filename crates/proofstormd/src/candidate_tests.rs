@@ -102,16 +102,10 @@ fn fixture(cancel: bool) -> (Arc<Mutex<Cluster>>, Arc<Context>) {
         }),
         "system",
     );
-    let context = Arc::new(Context {
-        probes: probes::Manager::new(client.clone(), "candidate-fixture".into()).0,
-        client,
-        retries: std::sync::Arc::default(),
-        native: std::sync::Arc::default(),
-        limits: proofstorm_core::ControllerLimits::default(),
-        cells: kube::runtime::reflector::store().0,
-        revisions: std::sync::Arc::default(),
-        components: kube::runtime::reflector::store().0,
-    });
+    let context = Arc::new(Context::for_tests(
+        client.clone(),
+        probes::Manager::new(client, "candidate-fixture".into()).0,
+    ));
     (cluster, context)
 }
 
