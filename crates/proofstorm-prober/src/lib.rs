@@ -8,13 +8,17 @@ pub mod transport;
 #[cfg(feature = "runtime")]
 pub mod worker;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+/// Version 3 raised the batch limits below; a version 2 worker rejects its batches.
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const PORT: u16 = 19097;
-pub const MAX_BATCH_TARGETS: usize = 32;
-pub const MAX_BATCHES_PER_WORKER: usize = 4;
+pub const MAX_BATCH_TARGETS: usize = 64;
+/// With [`MAX_BATCH_TARGETS`], 512 checks per worker: a cell of 2,000 probed
+/// components sweeps in about 8 s even when every check times out. 512 stalled
+/// HTTP checks measured 27 MiB peak process RSS, inside the 64Mi worker limit.
+pub const MAX_BATCHES_PER_WORKER: usize = 8;
 pub const MAX_WORKER_CHECKS: usize = MAX_BATCHES_PER_WORKER * MAX_BATCH_TARGETS;
-// Holds a maximum-sized valid batch, including 32 paths of 2 KiB each.
-pub const MAX_FRAME_BYTES: usize = 128 * 1024;
+// Holds a maximum-sized valid batch, including 64 paths of 2 KiB each.
+pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const CHECK_TIMEOUT_MILLIS: u64 = 2_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

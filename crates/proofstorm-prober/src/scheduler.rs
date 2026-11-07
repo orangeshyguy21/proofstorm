@@ -6,7 +6,9 @@ use std::{
 
 use crate::{MAX_BATCH_TARGETS, Observation, PROTOCOL_VERSION, Request, Response, Target};
 
-pub const MAX_INFLIGHT_BATCHES: usize = 8;
+/// Each in-flight batch holds one Kubernetes port-forward. Room for four cells
+/// at their full per-worker share, so large cells don't divide one cell's capacity.
+pub const MAX_INFLIGHT_BATCHES: usize = 32;
 pub const CHECK_INTERVAL_MILLIS: u64 = 5_000;
 pub const OBSERVATION_TTL_MILLIS: u64 = 30_000;
 
@@ -565,5 +567,79 @@ mod tests {
         assert!(!scheduler.complete(&old, Some(response(&old)), 3));
         assert!(scheduler.observations(&identity, 3).is_empty());
         assert_eq!(scheduler.dispatch(3).unwrap().request.targets.len(), 1);
+    }
+
+    /// Run the scheduler against simulated checks: a batch holding any stalled
+    /// target takes the full check timeout, any other batch 40 ms, and the
+    /// controller dispatches on completions and on its 250 ms tick. Returns the
+    /// longest gap between two checks of any one target.
+    fn longest_recheck_gap(
+        cells: usize,
+        size: usize,
+        stalled_percent: usize,
+        run_millis: u64,
+    ) -> u64 {
+        let mut scheduler = Scheduler::default();
+        for cell in 0..cells {
+            scheduler
+                .register(identity(&format!("cell-{cell}")), targets(size), 0)
+                .unwrap();
+        }
+        // Spread the stalled targets through the cell rather than in one block.
+        let stalled = |component: &str| {
+            let index: usize = component.trim_start_matches("node-").parse().unwrap();
+            index * 7_919 % 100 < stalled_percent
+        };
+        let mut inflight: Vec<(u64, Job)> = Vec::new();
+        let mut checked: BTreeMap<(String, String), u64> = BTreeMap::new();
+        let mut longest = 0;
+        let mut now = 0;
+        while now <= run_millis {
+            let (done, running): (Vec<_>, Vec<_>) =
+                inflight.into_iter().partition(|(at, _)| *at <= now);
+            inflight = running;
+            for (_, job) in done {
+                for target in &job.request.targets {
+                    let key = (job.identity.instance_key.clone(), target.component.clone());
+                    if let Some(previous) = checked.insert(key, job.started_at_millis) {
+                        longest = longest.max(job.started_at_millis - previous);
+                    }
+                }
+                scheduler.complete(&job, Some(response(&job)), now);
+            }
+            while let Some(job) = scheduler.dispatch(now) {
+                let slow = job
+                    .request
+                    .targets
+                    .iter()
+                    .any(|target| stalled(&target.component));
+                let duration = if slow {
+                    crate::CHECK_TIMEOUT_MILLIS + 40
+                } else {
+                    40
+                };
+                inflight.push((now + duration, job));
+            }
+            let next_completion = inflight.iter().map(|(at, _)| *at).min();
+            now = next_completion
+                .unwrap_or(u64::MAX)
+                .min((now / 250 + 1) * 250);
+        }
+        assert_eq!(checked.len(), cells * size, "every target was checked");
+        longest
+    }
+
+    #[test]
+    fn two_thousand_targets_stay_fresh_when_some_checks_time_out() {
+        // A timed-out check holds its whole batch for the timeout, so a few
+        // stalled targets slow every batch they land in. Four large cells
+        // still each get a full worker's share of the global slots.
+        for (cells, stalled_percent) in [(1, 5), (1, 100), (4, 5)] {
+            let gap = longest_recheck_gap(cells, 2_000, stalled_percent, 60_000);
+            assert!(
+                gap < OBSERVATION_TTL_MILLIS / 2,
+                "{cells} cells, {stalled_percent}% stalled: rechecked after {gap} ms"
+            );
+        }
     }
 }

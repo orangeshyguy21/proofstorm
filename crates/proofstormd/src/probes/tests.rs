@@ -398,6 +398,84 @@ async fn stable_results_coalesce_but_expiry_and_resource_changes_notify() {
     );
 }
 
+#[tokio::test]
+async fn target_changes_wait_for_the_retarget_interval_but_worker_changes_do_not() {
+    let (cell, resources) = fixture();
+    let plans = Arc::new(
+        proofstorm_kube::compile_component_plans(
+            KEY,
+            "revision",
+            &cell.revision.cell,
+            &cell.revision.lock,
+        )
+        .unwrap(),
+    );
+    let (manager, _receive) = Manager::new(no_api(), IMAGE.into());
+    manager.register(&cell, plans).unwrap();
+    let mut state = manager.state.lock().unwrap();
+    populate(&mut state, resources);
+    state.refresh(IMAGE, 0);
+    let first = state.scheduler.dispatch(0).expect("ready target scheduled");
+    assert!(state.scheduler.complete(&first, Some(response(&first)), 1));
+    let namespace = proofstorm_kube::instance_namespace(KEY);
+    let set_endpoint_ready = |state: &mut State, ready: bool| {
+        state
+            .endpoints
+            .get_mut(&namespace)
+            .unwrap()
+            .get_mut("chain-endpoints")
+            .unwrap()
+            .endpoints[0]
+            .conditions
+            .as_mut()
+            .unwrap()
+            .ready = Some(ready);
+        state.changed("endpoints", CacheChange::Namespace(namespace.clone()));
+    };
+
+    set_endpoint_ready(&mut state, false);
+    state.refresh(IMAGE, 500);
+    assert!(state.retarget.contains(KEY), "the recompute waits");
+    assert_eq!(state.scheduler.observations(&first.identity, 500).len(), 1);
+    state.refresh(IMAGE, RETARGET_MILLIS);
+    assert!(state.retarget.is_empty());
+    assert!(
+        state
+            .scheduler
+            .observations(&first.identity, RETARGET_MILLIS)
+            .is_empty(),
+        "the unready target is dropped"
+    );
+
+    set_endpoint_ready(&mut state, true);
+    state.refresh(IMAGE, RETARGET_MILLIS + 100);
+    assert!(state.retarget.contains(KEY));
+    state
+        .pods
+        .get_mut(&namespace)
+        .unwrap()
+        .get_mut("worker")
+        .unwrap()
+        .status
+        .as_mut()
+        .unwrap()
+        .container_statuses
+        .as_mut()
+        .unwrap()[0]
+        .restart_count = 1;
+    state.changed("pods", CacheChange::Namespace(namespace.clone()));
+    state.refresh(IMAGE, RETARGET_MILLIS + 200);
+    assert!(
+        state.retarget.is_empty(),
+        "a restarted worker applies at once"
+    );
+    let current = state
+        .scheduler
+        .dispatch(RETARGET_MILLIS + 200)
+        .expect("target registered with the restarted worker");
+    assert_ne!(current.identity, first.identity);
+}
+
 #[test]
 fn observation_wall_time_follows_the_current_wall_clock() {
     let ttl = i64::try_from(OBSERVATION_TTL_MILLIS / 1000).unwrap();
