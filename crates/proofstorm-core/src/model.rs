@@ -173,7 +173,7 @@ pub struct ComponentSpec {
     pub config_version: String,
     pub control: ControlClass,
     pub config: BTreeMap<String, Value>,
-    /// Main container `{cpu,memory}:{request,limit}`, e.g. `250m`, `2Gi`; limit `none` removes it. Unset values use `policy.resources.defaults`.
+    /// Main container `{cpu,memory}:{request,limit}`, e.g. `250m`, `2Gi`; limit `none` removes it. Unset values use the component's own defaults, then `policy.resources.defaults`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<crate::Resources>,
 }

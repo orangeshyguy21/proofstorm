@@ -30,13 +30,30 @@ fn deployment_refuses_retired_actions_before_replacing_runtime_schemas() {
             validate_existing_specs::<proofstorm_kube::ProofstormCellActionSpec>(&resources)
                 .unwrap_err();
         let message = format!("{error:#}");
-        assert!(message.contains("old-action") && message.contains("before upgrading"));
+        assert!(message.contains("old-action") && message.contains("storm setup --recreate"));
         assert!(message.contains(&format!("unknown variant `{kind}`")));
     }
     assert!(
         validate_existing_specs::<proofstorm_kube::ProofstormCellActionSpec>(&json!({"items":[]}))
             .is_ok()
     );
+}
+
+#[test]
+fn deployment_refuses_cells_that_carry_their_spec_inline() {
+    // Cells from before revisions moved out of the cell carry `cell` and `lock`.
+    let mut resources = json!({"items":[{"metadata":{"name":"old-cell"},"spec":{
+        "workspaceId":"workspace", "instanceId":"instance", "instanceKey":"key",
+        "revisionDigest":"sha256:revision"
+    }}]});
+    assert!(validate_existing_specs::<proofstorm_kube::ProofstormCellSpec>(&resources).is_ok());
+    resources["items"][0]["spec"]["lock"] = json!({});
+    resources["items"][0]["spec"]["cell"] = json!({});
+    let message = format!(
+        "{:#}",
+        validate_existing_specs::<proofstorm_kube::ProofstormCellSpec>(&resources).unwrap_err()
+    );
+    assert!(message.contains("old-cell") && message.contains("storm setup --recreate"));
 }
 
 fn sample_lock() -> proofstorm_core::ResolvedLock {

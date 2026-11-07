@@ -759,7 +759,7 @@ fn validate_existing_specs<T: serde::de::DeserializeOwned>(resources: &Value) ->
     {
         serde_json::from_value::<T>(resource["spec"].clone()).with_context(|| {
             format!(
-                "existing runtime resource {} is incompatible; close its cell with the currently installed version before upgrading; no automatic migration or deletion",
+                "existing runtime resource {} is from an earlier release and can't be migrated, so setup changed nothing. Run storm setup --recreate to replace the runtime, which deletes all cells",
                 resource["metadata"]["name"]
             )
         })?;

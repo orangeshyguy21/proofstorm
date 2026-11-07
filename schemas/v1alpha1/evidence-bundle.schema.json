@@ -617,7 +617,7 @@
         },
         "resources": {
           "additionalProperties": false,
-          "description": "Main container `{cpu,memory}:{request,limit}`, e.g. `250m`, `2Gi`; limit `none` removes it. Unset values use `policy.resources.defaults`.",
+          "description": "Main container `{cpu,memory}:{request,limit}`, e.g. `250m`, `2Gi`; limit `none` removes it. Unset values use the component's own defaults, then `policy.resources.defaults`.",
           "properties": {
             "cpu": {
               "additionalProperties": false,
