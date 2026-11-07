@@ -3479,12 +3479,14 @@ pub fn render_component_network_policy(
 /// The name of the cell's shared component allow-list.
 pub const CELL_NETWORK_POLICY: &str = "allow-cell-components";
 
-/// One allow-list for every component pod that isn't in an active partition:
-/// the same rules as a component policy without exclusions. A partitioned
-/// component instead gets its own policy, and this one stops selecting it,
-/// because policies only add permissions and a pod selected by both would be
-/// allowed everything. Action and prober pods carry no component label and
-/// keep their own policy.
+/// One allow-list for every pod acting as a component that isn't in an active
+/// partition: the same rules as a component policy without exclusions. Pods
+/// are selected by network identity, not component label, so native exec and
+/// reachability pods that borrow a component's identity get its rules. A
+/// partitioned component instead gets its own policy, and this one stops
+/// selecting it, because policies only add permissions and a pod selected by
+/// both would be allowed everything. Action and prober pods carry the
+/// operation label and keep their own policy.
 ///
 /// # Errors
 ///
@@ -3495,7 +3497,10 @@ pub fn render_cell_network_policy(
 ) -> Result<NetworkPolicy, AdapterError> {
     let namespace = instance_namespace(instance_key);
     let peers = json!({"matchLabels": {INSTANCE_LABEL: instance_key}});
-    let mut selected = vec![json!({"key": COMPONENT_LABEL, "operator": "Exists"})];
+    let mut selected = vec![
+        json!({"key": NETWORK_IDENTITY_LABEL, "operator": "Exists"}),
+        json!({"key": "proofstorm.dev/operation", "operator": "DoesNotExist"}),
+    ];
     if !partitioned.is_empty() {
         selected.push(
             json!({"key": NETWORK_IDENTITY_LABEL, "operator": "NotIn", "values": partitioned}),

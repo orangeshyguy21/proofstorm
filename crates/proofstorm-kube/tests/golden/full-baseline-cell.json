@@ -2297,8 +2297,12 @@
           "podSelector": {
             "matchExpressions": [
               {
-                "key": "proofstorm.dev/component",
+                "key": "proofstorm.dev/network-identity",
                 "operator": "Exists"
+              },
+              {
+                "key": "proofstorm.dev/operation",
+                "operator": "DoesNotExist"
               }
             ],
             "matchLabels": {

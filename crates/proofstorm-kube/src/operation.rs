@@ -1963,6 +1963,109 @@ mod tests {
         assert!(!pod_labels.contains_key("proofstorm.dev/operation"));
     }
 
+    /// Whether `policy` selects a pod with `labels`, for the selector
+    /// operators the renderer uses.
+    fn selects(
+        policy: &k8s_openapi::api::networking::v1::NetworkPolicy,
+        labels: &BTreeMap<String, String>,
+    ) -> bool {
+        let selector = policy
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.pod_selector.as_ref())
+            .expect("pod selector");
+        selector
+            .match_labels
+            .iter()
+            .flatten()
+            .all(|(key, value)| labels.get(key) == Some(value))
+            && selector
+                .match_expressions
+                .iter()
+                .flatten()
+                .all(|expression| {
+                    let value = labels.get(&expression.key);
+                    let values = expression.values.as_deref().unwrap_or_default();
+                    match expression.operator.as_str() {
+                        "Exists" => value.is_some(),
+                        "DoesNotExist" => value.is_none(),
+                        "In" => value.is_some_and(|value| values.contains(value)),
+                        "NotIn" => value.is_none_or(|value| !values.contains(value)),
+                        other => panic!("unexpected selector operator {other}"),
+                    }
+                })
+    }
+
+    fn pod_labels(job: &Job) -> BTreeMap<String, String> {
+        job.spec
+            .as_ref()
+            .and_then(|spec| spec.template.metadata.as_ref())
+            .and_then(|metadata| metadata.labels.clone())
+            .expect("pod labels")
+    }
+
+    #[test]
+    fn pods_acting_as_a_component_get_the_cell_policy_and_its_partitions() {
+        let (cell, mut action) = action_fixture();
+        let key = cell.spec.instance_key.clone();
+        action.spec.capability = Capability::OracleRun;
+        action.spec.action = CellAction::ReachabilityOracle(ReachabilityOracleAction {
+            from_component: "chain".into(),
+            to_component: "chain-b".into(),
+            service: "rpc".into(),
+            timeout_seconds: 2,
+            attempts: 1,
+        });
+        let oracle = pod_labels(&render_cell_action_job(&action, &cell).expect("oracle job"));
+        action.spec.capability = Capability::ComponentForensics;
+        action.spec.action = CellAction::ComponentForensics(ComponentForensicsAction {
+            component: "chain".into(),
+            target_component: "chain-b".into(),
+            script: "bitcoin-cli getblockchaininfo".into(),
+            timeout_seconds: 30,
+        });
+        let exec = pod_labels(&render_cell_action_job(&action, &cell).expect("exec job"));
+        let component = BTreeMap::from([
+            (crate::INSTANCE_LABEL.to_owned(), key.clone()),
+            (crate::COMPONENT_LABEL.to_owned(), "chain".to_owned()),
+            (
+                "proofstorm.dev/network-identity".to_owned(),
+                "chain".to_owned(),
+            ),
+        ]);
+        let prober = crate::render_protocol_prober(&cell.plans().expect("plans"), "prober")
+            .expect("prober")
+            .expect("a probed component")
+            .spec
+            .and_then(|spec| spec.template.metadata)
+            .and_then(|metadata| metadata.labels)
+            .expect("prober labels");
+
+        let open = crate::render_cell_network_policy(&key, &[]).expect("cell policy");
+        for (pod, labels) in [
+            ("component", &component),
+            ("oracle", &oracle),
+            ("exec", &exec),
+        ] {
+            assert!(
+                selects(&open, labels),
+                "the cell policy must select the {pod} pod"
+            );
+        }
+        // The prober keeps the controller-action policy.
+        assert!(!selects(&open, &prober));
+
+        // In a partition the component's own policy governs every pod acting as it.
+        let partitioned =
+            crate::render_cell_network_policy(&key, &["chain".into()]).expect("cell policy");
+        let own = crate::render_component_network_policy(&key, "chain", &["chain-b".into()])
+            .expect("component policy");
+        for labels in [&component, &oracle, &exec] {
+            assert!(!selects(&partitioned, labels));
+            assert!(selects(&own, labels));
+        }
+    }
+
     #[test]
     fn native_exec_can_target_a_distinct_bitcoin_component() {
         let (cell, mut action) = action_fixture();

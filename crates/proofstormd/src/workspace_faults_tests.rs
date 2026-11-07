@@ -247,7 +247,7 @@ async fn partial_cleanup_recovers_without_replaying_or_removing_another_tasks_pa
     // The shared policy stops selecting both partitioned components.
     assert_eq!(
         cluster.policies[proofstorm_kube::CELL_NETWORK_POLICY]["spec"]["podSelector"]["matchExpressions"]
-            [1],
+            [2],
         json!({"key": "proofstorm.dev/network-identity", "operator": "NotIn", "values": ["chain", "scripts"]})
     );
 }
@@ -302,7 +302,10 @@ async fn expiry_and_missing_owner_heal_without_workspace_access_and_stale_snapsh
     assert!(!cluster.policies.contains_key("scripts"));
     assert_eq!(
         cluster.policies[proofstorm_kube::CELL_NETWORK_POLICY]["spec"]["podSelector"]["matchExpressions"],
-        json!([{"key": "proofstorm.dev/component", "operator": "Exists"}])
+        json!([
+            {"key": "proofstorm.dev/network-identity", "operator": "Exists"},
+            {"key": "proofstorm.dev/operation", "operator": "DoesNotExist"}
+        ])
     );
     assert_eq!(
         cluster.actions["one"].annotations()[RELEASED_ANNOTATION],
