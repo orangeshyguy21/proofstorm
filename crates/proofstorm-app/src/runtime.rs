@@ -16,6 +16,14 @@ use proofstorm_kube::{
 };
 use std::collections::BTreeMap;
 
+/// Lists that grow with a cell's component count get this long. Metadata and
+/// single-object reads keep a 3 s bound.
+pub(crate) const GROWING_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn inventory_timeout(message: &str) -> Error {
+    Error::failure(message, Some(serde_json::json!({"code":"runtime_failure"})))
+}
+
 #[derive(Clone)]
 pub struct Runtime {
     pub client: Client,
@@ -26,33 +34,39 @@ pub struct Runtime {
 }
 impl Runtime {
     /// Current cluster inventory; a failed list must never look like an empty cluster.
+    /// A metadata-only list from the API server's cache: ids are all it needs.
     pub(crate) async fn current_instance_ids(
         &self,
         workspace: &str,
     ) -> Result<std::collections::BTreeSet<String>, Error> {
-        Ok(self
-            .current_instances(workspace)
-            .await?
-            .into_keys()
+        let api = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
+        let cells = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            api.list_metadata(&kube::api::ListParams::default().match_any()),
+        )
+        .await
+        .map_err(|_| inventory_timeout("cluster inventory timed out"))??;
+        Ok(cells
+            .items
+            .iter()
+            .filter_map(|cell| proofstorm_kube::cell_identity(&cell.metadata))
+            .filter(|identity| identity.workspace_id == workspace)
+            .map(|identity| identity.instance_id)
             .collect())
     }
 
+    /// The workspace's cells in full, from the API server's cache.
     pub(crate) async fn current_instances(
         &self,
         workspace: &str,
     ) -> Result<std::collections::BTreeMap<String, ProofstormCell>, Error> {
         let api = Api::<ProofstormCell>::namespaced(self.client.clone(), &self.control_namespace);
         let resources = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            api.list(&kube::api::ListParams::default()),
+            GROWING_LIST_TIMEOUT,
+            api.list(&kube::api::ListParams::default().match_any()),
         )
         .await
-        .map_err(|_| {
-            Error::failure(
-                "cluster inventory timed out",
-                Some(serde_json::json!({"code":"runtime_failure"})),
-            )
-        })??;
+        .map_err(|_| inventory_timeout("cluster inventory timed out"))??;
         Ok(resources
             .items
             .into_iter()
@@ -82,17 +96,16 @@ impl Runtime {
         &self,
         cells: &mut std::collections::BTreeMap<String, ProofstormCell>,
     ) -> Result<(), Error> {
+        let api =
+            Api::<ProofstormComponent>::namespaced(self.client.clone(), &self.control_namespace);
         let objects = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            self.component_objects(None),
+            GROWING_LIST_TIMEOUT,
+            api.list(&kube::api::ListParams::default().match_any()),
         )
         .await
-        .map_err(|_| {
-            Error::failure(
-                "component status inventory timed out",
-                Some(serde_json::json!({"code":"runtime_failure"})),
-            )
-        })??;
+        .map_err(|_| inventory_timeout("component status inventory timed out"))?
+        .map_err(kube_error)?
+        .items;
         for cell in cells.values_mut() {
             proofstorm_kube::assemble_component_statuses(cell, None, &objects);
         }
@@ -317,6 +330,7 @@ impl Runtime {
             },
         );
         resource.metadata.namespace = Some(self.control_namespace.clone());
+        proofstorm_kube::identify_cell(&mut resource);
         if let Some(existing) = cells
             .get_opt(&instance.resource_name)
             .await

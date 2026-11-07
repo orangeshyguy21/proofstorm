@@ -264,9 +264,10 @@ impl Cells {
                 );
             }
         };
-        // After the cell, as assembly requires.
+        // After the cell, as assembly requires. The list grows with the
+        // cell's components, so it gets the longer bound.
         let objects = match tokio::time::timeout(
-            Duration::from_secs(3),
+            crate::runtime::GROWING_LIST_TIMEOUT,
             self.runtime.component_objects(Some(&instance.instance_key)),
         )
         .await

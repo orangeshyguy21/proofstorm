@@ -55,46 +55,49 @@ async fn signature(cells: &Cells) -> (Option<(i64, u64)>, Option<String>) {
     {
         return (journal, None);
     }
+    // Metadata from the API server's cache: a resourceVersion moves whenever
+    // its object changes, so versions alone say when to refresh.
     let api = Api::<ProofstormCell>::namespaced(
         cells.runtime.client.clone(),
         &cells.runtime.control_namespace,
     );
-    let runtime =
-        tokio::time::timeout(Duration::from_secs(3), api.list(&ListParams::default())).await;
+    let runtime = tokio::time::timeout(
+        Duration::from_secs(3),
+        api.list_metadata(&ListParams::default().match_any()),
+    )
+    .await;
     let workspace_cells = runtime.ok().and_then(Result::ok).map(|list| {
         list.items
             .into_iter()
-            .filter(|cell| cell.spec.workspace_id == cells.workspace)
+            .filter_map(|cell| {
+                let identity = proofstorm_kube::cell_identity(&cell.metadata)?;
+                (identity.workspace_id == cells.workspace).then_some((identity, cell.metadata))
+            })
             .collect::<Vec<_>>()
     });
     let keys = workspace_cells.as_ref().map(|list| {
         list.iter()
-            .map(|cell| cell.spec.instance_key.clone())
+            .map(|(identity, _)| identity.instance_key.clone())
             .collect::<std::collections::BTreeSet<_>>()
     });
     let versions = workspace_cells.map(|list| {
         list.into_iter()
-            .map(|cell| {
+            .map(|(identity, metadata)| {
                 (
-                    cell.spec.instance_id,
-                    (
-                        cell.metadata.resource_version,
-                        cell.metadata.generation,
-                        cell.status,
-                    ),
+                    identity.instance_id,
+                    (metadata.resource_version, metadata.generation),
                 )
             })
             .collect::<BTreeMap<_, _>>()
     });
-    // Component statuses live in their own objects; their versions alone
-    // say when one changed.
+    // Component statuses live in their own objects.
     let components = Api::<ProofstormComponent>::namespaced(
         cells.runtime.client.clone(),
         &cells.runtime.control_namespace,
     );
     let components = tokio::time::timeout(
         Duration::from_secs(3),
-        components.list_metadata(&ListParams::default()),
+        components.list_metadata(&ListParams::default().match_any()),
     )
     .await
     .ok()

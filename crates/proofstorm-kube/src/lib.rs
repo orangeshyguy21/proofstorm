@@ -2,6 +2,7 @@ mod adapter;
 mod api;
 mod candidate;
 mod components;
+mod identity;
 pub mod images;
 mod observation;
 mod operation;
@@ -56,6 +57,9 @@ pub use candidate::{
 pub use components::{
     assemble_component_statuses, component_object, component_object_name, material_digest,
     protocol_freshness,
+};
+pub use identity::{
+    CellIdentity, INSTANCE_ID_ANNOTATION, WORKSPACE_ID_ANNOTATION, cell_identity, identify_cell,
 };
 pub use operation::{
     ActionAdmissionError, ActionRenderError, AuthenticationConformanceJobSpec,

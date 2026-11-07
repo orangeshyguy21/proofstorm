@@ -67,30 +67,36 @@ impl Cells {
             self.runtime.client.clone(),
             &self.runtime.control_namespace,
         );
-        let resources =
-            tokio::time::timeout(Duration::from_secs(3), api.list(&ListParams::default()))
-                .await
-                .map_err(|_| Error::failure("system inventory timed out", None))??;
+        // Identity is all the sampler needs from a cell: read metadata only.
+        let resources = tokio::time::timeout(
+            Duration::from_secs(3),
+            api.list_metadata(&ListParams::default().match_any()),
+        )
+        .await
+        .map_err(|_| Error::failure("system inventory timed out", None))??;
         let mut scoped = Vec::new();
-        for cell in resources
-            .items
-            .into_iter()
-            .filter(|cell| cell.spec.workspace_id == self.workspace)
-        {
+        for (identity, resource_name) in resources.items.into_iter().filter_map(|cell| {
+            let identity = proofstorm_kube::cell_identity(&cell.metadata)?;
+            (identity.workspace_id == self.workspace).then(|| (identity, cell.name_any()))
+        }) {
             match self.store.environment_entry(
                 &self.workspace,
                 &self.principal,
-                &cell.spec.instance_id,
+                &identity.instance_id,
             ) {
-                Ok(entry) => scoped.push((cell, entry.handle.map(|handle| handle.name))),
+                Ok(entry) => scoped.push((
+                    identity,
+                    resource_name,
+                    entry.handle.map(|handle| handle.name),
+                )),
                 Err(proofstorm_store::StoreError::NotFound { .. }) => {}
                 Err(error) => return Err(error.into()),
             }
         }
         let mut cells = stream::iter(scoped)
-            .map(|(cell, name)| {
+            .map(|(identity, resource_name, name)| {
                 let service = (*self).clone();
-                async move { service.sample_cell(&cell, name).await }
+                async move { service.sample_cell(&identity, &resource_name, name).await }
             })
             .buffer_unordered(2)
             .collect::<Vec<_>>()
@@ -110,29 +116,37 @@ impl Cells {
         })
     }
 
-    async fn sample_cell(&self, cell: &ProofstormCell, name: Option<String>) -> CellUsage {
+    async fn sample_cell(
+        &self,
+        identity: &proofstorm_kube::CellIdentity,
+        resource_name: &str,
+        name: Option<String>,
+    ) -> CellUsage {
         let mut usage = CellUsage {
-            incarnation: format!("{}:{}", cell.spec.workspace_id, cell.spec.instance_key),
-            id: cell.spec.instance_id.clone(),
-            name: name.unwrap_or_else(|| cell.spec.instance_id.clone()),
+            incarnation: format!("{}:{}", identity.workspace_id, identity.instance_key),
+            id: identity.instance_id.clone(),
+            name: name.unwrap_or_else(|| identity.instance_id.clone()),
             ..CellUsage::default()
         };
-        if self
+        let Some(instance) = self
             .store
-            .instance(&self.workspace, &self.principal, &cell.spec.instance_id)
+            .instance(&self.workspace, &self.principal, &identity.instance_id)
             .ok()
-            .is_none_or(|instance| {
-                instance.instance_key != cell.spec.instance_key
-                    || instance.resource_name != cell.name_any()
+            .filter(|instance| {
+                instance.instance_key == identity.instance_key
+                    && instance.resource_name == resource_name
             })
-        {
+        else {
             usage.error = Some("Runtime identity unavailable.".into());
             return usage;
-        }
-        let namespace = instance_namespace(&cell.spec.instance_key);
+        };
+        let namespace = instance_namespace(&identity.instance_key);
         let pods = Api::<Pod>::namespaced(self.runtime.client.clone(), &namespace);
-        let params =
-            ListParams::default().labels(&format!("{INSTANCE_LABEL}={}", cell.spec.instance_key));
+        // A cell's pod list grows with its components: read it from the API
+        // server's cache, with the longer bound.
+        let params = ListParams::default()
+            .labels(&format!("{INSTANCE_LABEL}={}", identity.instance_key))
+            .match_any();
         let resource = ApiResource {
             group: "metrics.k8s.io".into(),
             version: "v1beta1".into(),
@@ -147,8 +161,11 @@ impl Cells {
         );
         let metric_params = ListParams::default();
         let (pod_list, metric_list) = tokio::join!(
-            tokio::time::timeout(Duration::from_secs(3), pods.list(&params)),
-            tokio::time::timeout(Duration::from_secs(3), metrics.list(&metric_params))
+            tokio::time::timeout(crate::runtime::GROWING_LIST_TIMEOUT, pods.list(&params)),
+            tokio::time::timeout(
+                crate::runtime::GROWING_LIST_TIMEOUT,
+                metrics.list(&metric_params)
+            )
         );
         let Ok(Ok(pod_list)) = pod_list else {
             usage.error = Some("Processes unavailable.".into());
@@ -180,8 +197,23 @@ impl Cells {
             )
             .is_ok()
         {
-            // Balances need the cell's components and lock, from its revision.
-            if let Ok(loaded) = self.runtime.loaded(cell.clone()).await {
+            // Balances need the cell's components and lock: the store's
+            // published revision has them, so the cell itself is never read.
+            if let Ok(revision) =
+                self.store
+                    .revision(&self.workspace, &self.principal, &instance.revision_digest)
+            {
+                let resource = ProofstormCell::new(
+                    resource_name,
+                    proofstorm_kube::ProofstormCellSpec {
+                        workspace_id: identity.workspace_id.clone(),
+                        instance_id: identity.instance_id.clone(),
+                        instance_key: identity.instance_key.clone(),
+                        revision_digest: instance.revision_digest.clone(),
+                    },
+                );
+                let loaded =
+                    proofstorm_kube::LoadedCell::from_spec(resource, revision.cell, revision.lock);
                 usage.balances = balances::sample(&loaded, &pods, &pod_list.items).await;
             }
         }

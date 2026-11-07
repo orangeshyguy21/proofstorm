@@ -26,6 +26,8 @@ use std::{
 struct Cluster {
     objects: BTreeMap<String, Value>,
     requests: Vec<(String, String)>,
+    /// Each request's path, query and Accept header.
+    reads: Vec<(String, String, String)>,
     fail_materialize: bool,
     fail_reads: bool,
     conflict_lease: bool,
@@ -45,6 +47,20 @@ enum DeletionRace {
     FinishBeforeRepeatedDelete,
 }
 
+/// A request's path, query and Accept header.
+fn read_of(request: &Request<Body>) -> (String, String, String) {
+    (
+        request.uri().path().to_owned(),
+        request.uri().query().unwrap_or_default().to_owned(),
+        request
+            .headers()
+            .get(http::header::ACCEPT)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned(),
+    )
+}
+
 fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
     kube::Client::new(
         tower::service_fn(move |request: Request<Body>| {
@@ -52,9 +68,11 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
             async move {
                 let method = request.method().to_string();
                 let path = request.uri().path().to_string();
+                let read = read_of(&request);
                 let bytes = request.into_body().collect_bytes().await.unwrap();
                 let mut cluster = cluster.lock().unwrap();
                 cluster.requests.push((method.clone(), path.clone()));
+                cluster.reads.push(read);
                 let (status,body)=match method.as_str() {
                 "PATCH" | "POST" | "PUT" => {
                     let mut path=path.clone();
@@ -129,10 +147,7 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                 "GET" if path.ends_with("/configmaps") => (200,json!({"apiVersion":"v1","kind":"ConfigMapList","metadata":{},"items":cluster.objects.iter().filter(|(p,_)|p.contains("/configmaps/")).map(|(_,v)|v.clone()).collect::<Vec<_>>()})),
                 "GET" if path.ends_with("/proofstormcellactions") => (200,json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellActionList","metadata":{},"items":[]})),
                 "GET" if path.ends_with("/proofstormcomponents") => (200,component_list(&cluster.objects)),
-                "GET" if path.ends_with("/proofstormcells")=> {
-                    let items=cluster.objects.iter().filter(|(p,_)|p.contains("/proofstormcells/")).map(|(_,v)|v.clone()).collect::<Vec<_>>();
-                    (200,json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellList","metadata":{},"items":items}))
-                },
+                "GET" if path.ends_with("/proofstormcells")=> (200,cell_list(&cluster.objects)),
                 "GET"=>cluster.objects.get(&path).cloned().map_or((404,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","message":"absent","code":404})),|v|(200,v)),
                 _=>panic!("unexpected request {method} {path}"),
             };
@@ -147,6 +162,15 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
         }),
         "system",
     )
+}
+
+fn cell_list(objects: &BTreeMap<String, Value>) -> Value {
+    let items = objects
+        .iter()
+        .filter(|(path, _)| path.contains("/proofstormcells/"))
+        .map(|(_, cell)| cell.clone())
+        .collect::<Vec<_>>();
+    json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellList","metadata":{},"items":items})
 }
 
 /// The component objects the controller writes for the fake cells' statuses.
@@ -1117,10 +1141,31 @@ async fn cleanup_retains_records_on_failed_reads_and_remaining_namespace() {
         .unwrap()
         .objects
         .retain(|path, _| !path.starts_with("/api/v1/namespaces/proofstorm-"));
+    cluster.lock().unwrap().reads.clear();
     proofstorm_app::lifecycle::sweep(&cells.runtime, &store, "local", "developer", "")
         .await
         .unwrap();
     assert!(store.instance("local", "developer", &old.id).is_err());
+    // Removal picks receipts from ConfigMap metadata, so revision payloads are
+    // never listed; the cell's own revision is still removed.
+    let cluster = cluster.lock().unwrap();
+    let lists = cluster
+        .reads
+        .iter()
+        .filter(|(path, _, _)| path.ends_with("/configmaps"))
+        .collect::<Vec<_>>();
+    assert!(!lists.is_empty());
+    assert!(
+        lists
+            .iter()
+            .all(|(_, _, accept)| accept.contains("as=PartialObjectMetadataList"))
+    );
+    assert!(
+        !cluster
+            .objects
+            .keys()
+            .any(|path| path.contains("/configmaps/revision-"))
+    );
 }
 
 #[tokio::test]
