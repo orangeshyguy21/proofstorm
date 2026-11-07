@@ -44,6 +44,7 @@ pub mod progress;
 pub mod quote_composition;
 pub mod reliable_exec;
 pub mod runtime_lifecycle;
+pub mod scale;
 pub mod slice2;
 pub mod slice4;
 pub mod slice5;
@@ -120,6 +121,10 @@ pub const NAMES: &[&str] = &[
     "quote-composition",
     "nutshell-oidc",
     "keycloak",
+    "scale-100",
+    "scale-500",
+    "scale-1000",
+    "scale-2000",
 ];
 
 /// Managed payment-stack gates whose exact images can be cached before a runtime exists.
@@ -227,6 +232,10 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "quote-composition" => quote_composition::run(context),
         "nutshell-oidc" => nutshell_oidc::run(context),
         "keycloak" => keycloak::run(context),
+        "scale-100" => scale::run(context, 100),
+        "scale-500" => scale::run(context, 500),
+        "scale-1000" => scale::run(context, 1000),
+        "scale-2000" => scale::run(context, 2000),
         other => bail!(
             "unknown gate {other}; available gates: {}",
             NAMES.join(", ")

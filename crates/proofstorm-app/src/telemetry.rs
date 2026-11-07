@@ -305,7 +305,8 @@ fn metric_is_current(metric: &DynamicObject, pod: &Pod) -> bool {
 }
 
 /// Kubernetes decimal and binary quantities, including metrics-server nanocores.
-fn quantity(value: &str) -> Option<f64> {
+#[must_use]
+pub fn quantity(value: &str) -> Option<f64> {
     let suffixes = [
         ("Ki", 1024.0),
         ("Mi", 1024.0_f64.powi(2)),
