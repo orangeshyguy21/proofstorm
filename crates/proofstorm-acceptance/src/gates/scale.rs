@@ -3,21 +3,16 @@
 //!
 //! It fails only on broken behaviour. Timings, controller usage, object sizes,
 //! writes while the cell is idle and API errors go to `scale-<size>.json`.
+use super::measure::{self, Report, succeeded};
 use crate::{
-    GateContext, McpClient, cell, json as expect,
+    GateContext, cell, json as expect,
     kubectl::{CONTROL_NAMESPACE, Kubectl},
     native,
 };
-use anyhow::{Result, bail, ensure};
-use proofstorm_app::telemetry::quantity;
+use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -29,50 +24,12 @@ const PRINCIPAL: &str = "scale-designer";
 const IDLE: Duration = Duration::from_secs(120);
 
 pub fn run(context: &GateContext, size: usize) -> Result<()> {
-    let sampler = Sampler::start(context)?;
-    let mut report = Report {
-        started: Instant::now(),
-        phase: sampler.phase.clone(),
-        steps: Vec::new(),
-        facts: serde_json::Map::new(),
-    };
-    report.facts.insert("components".into(), json!(size));
-    let before = api_requests(&context.kubectl)?;
-    let result = scenario(context, size, &mut report);
-    let samples = sampler.stop();
-    let after = api_requests(&context.kubectl);
-    let mut document = json!({
-        "components": size,
-        "passed": result.is_ok(),
-        "seconds": report.started.elapsed().as_secs_f64(),
-        "steps": report.steps,
-        "facts": report.facts,
-        "controller_usage": usage_summary(&samples),
-    });
-    if let Ok(after) = &after {
-        let changed = delta(&before, after);
-        document["api_errors"] = json!(
-            changed
-                .iter()
-                .filter(|(key, _)| key
-                    .rsplit(' ')
-                    .next()
-                    .is_some_and(|code| code.starts_with(['4', '5'])))
-                .collect::<BTreeMap<_, _>>()
-        );
-    }
-    let log = controller_log(&context.kubectl, report.started.elapsed());
-    document["controller_log"] = log_summary(&log);
-    context.record(&format!("scale-{size}.json"), &document)?;
-    context.record(&format!("scale-{size}-controller-log.json"), &json!(log))?;
-    context.record(&format!("scale-{size}-usage.json"), &json!(samples))?;
-    eprintln!(
-        "scale: {size} components, steps {}",
-        serde_json::to_string(&document["steps"])?
-    );
-    result?;
-    after?;
-    Ok(())
+    measure::measured(
+        context,
+        &format!("scale-{size}"),
+        vec![measure::control_pods()],
+        |report| scenario(context, size, report),
+    )
 }
 
 fn scenario(context: &GateContext, size: usize, report: &mut Report) -> Result<()> {
@@ -86,6 +43,7 @@ fn scenario(context: &GateContext, size: usize, report: &mut Report) -> Result<(
         .clone();
     let component = |id: &str| json!({"id":id,"kind":entry["kind"],"implementation":"workspace","version":entry["version"],"config_version":entry["config_version"],"control":entry["recommended_control"],"config":{}});
     let ids: Vec<String> = (0..size).map(|index| format!("w{index:04}")).collect();
+    report.facts.insert("components".into(), json!(size));
     let spec = json!({"api_version":"proofstorm/v1alpha1","name":NAME,
         "components":ids.iter().map(|id| component(id)).collect::<Vec<_>>(),"links":[]});
 
@@ -103,7 +61,7 @@ fn scenario(context: &GateContext, size: usize, report: &mut Report) -> Result<(
     );
     cell::apply(&mut client, &preview)?;
     report.step("apply", started);
-    wait_ready(&mut client, None, size)?;
+    measure::wait_ready(&mut client, NAME, None, ready_minutes(size))?;
     report.step("ready", started);
     let status = cell::status(&mut client, NAME)?;
     let namespace = expect::string(&status, "/instance_namespace")?.to_owned();
@@ -154,25 +112,8 @@ fn scenario(context: &GateContext, size: usize, report: &mut Report) -> Result<(
         .insert("objects".into(), objects(kubectl, &namespace)?);
 
     report.phase("idle");
-    let before = api_requests(kubectl)?;
-    thread::sleep(IDLE);
-    let writes: BTreeMap<String, u64> = delta(&before, &api_requests(kubectl)?)
-        .into_iter()
-        .filter(|(key, _)| {
-            ["POST ", "PUT ", "PATCH ", "APPLY ", "DELETE "]
-                .iter()
-                .any(|verb| key.starts_with(verb))
-        })
-        .collect();
-    let proofstorm: u64 = writes
-        .iter()
-        .filter(|(key, _)| key.contains("proofstorm.dev"))
-        .map(|(_, count)| count)
-        .sum();
-    report.facts.insert(
-        "idle_writes".into(),
-        json!({"seconds":IDLE.as_secs(),"proofstorm_writes":proofstorm,"by_request":writes}),
-    );
+    let (_, writes) = measure::idle_writes(kubectl, IDLE)?;
+    report.facts.insert("idle_writes".into(), writes);
 
     report.phase("edit");
     let inspected = client.call("cell_inspect", json!({"name":NAME}))?;
@@ -190,7 +131,7 @@ fn scenario(context: &GateContext, size: usize, report: &mut Report) -> Result<(
     let started = Instant::now();
     cell::apply(&mut client, &plan)?;
     report.step("edit-apply", started);
-    wait_ready(&mut client, Some(generation + 1), size)?;
+    measure::wait_ready(&mut client, NAME, Some(generation + 1), ready_minutes(size))?;
     report.step("edit-ready", started);
     let edited_pods = pod_uids(kubectl, &namespace)?;
     let replaced: Vec<&String> = pods
@@ -272,71 +213,9 @@ fn scenario(context: &GateContext, size: usize, report: &mut Report) -> Result<(
     Ok(())
 }
 
-struct Report {
-    started: Instant,
-    phase: Arc<Mutex<String>>,
-    steps: Vec<Value>,
-    facts: serde_json::Map<String, Value>,
-}
-
-impl Report {
-    fn phase(&self, name: &str) {
-        eprintln!("scale: {name}");
-        if let Ok(mut phase) = self.phase.lock() {
-            name.clone_into(&mut phase);
-        }
-    }
-
-    fn step(&mut self, step: &str, started: Instant) {
-        self.steps
-            .push(json!({"step":step,"seconds":started.elapsed().as_secs_f64()}));
-    }
-
-    /// One timed MCP call, with its result size.
-    fn call(
-        &mut self,
-        client: &mut McpClient,
-        step: &str,
-        tool: &str,
-        arguments: Value,
-    ) -> Result<Value> {
-        let started = Instant::now();
-        let value = client.call(tool, arguments)?;
-        self.steps.push(
-            json!({"step":step,"tool":tool,"seconds":started.elapsed().as_secs_f64(),
-            "bytes":serde_json::to_string(&value)?.len()}),
-        );
-        Ok(value)
-    }
-}
-
-/// Wait for readiness, allowing ten minutes plus three seconds per component.
-fn wait_ready(client: &mut McpClient, generation: Option<u64>, size: usize) -> Result<()> {
-    for _ in 0..10 + size / 20 {
-        let mut request = json!({"name":NAME,"target_phase":"ready","timeout_seconds":60});
-        if let Some(generation) = generation {
-            request["expected_generation"] = json!(generation);
-        }
-        let waited = client.call("cell_wait", request)?;
-        if waited["reached"] == true {
-            return Ok(());
-        }
-        ensure!(
-            waited["timed_out"] == true,
-            "cell readiness blocked or superseded: {waited}"
-        );
-    }
-    bail!("{size}-component cell did not become ready")
-}
-
-/// Long-poll one operation to success, so timings aren't rounded to a poll interval.
-fn succeeded(client: &mut McpClient, id: &str) -> Result<Value> {
-    let operation = cell::wait_one(client, id, 120)?;
-    ensure!(
-        operation["phase"] == "succeeded",
-        "operation {id} did not succeed: {operation}"
-    );
-    Ok(operation)
+/// Ten minutes plus three seconds per component.
+fn ready_minutes(size: usize) -> usize {
+    10 + size / 20
 }
 
 /// Component ID to its pod's UID.
@@ -408,7 +287,27 @@ fn startup(kubectl: &Kubectl, namespace: &str) -> Result<Value> {
             .or_default()
             .push(json!({"object":event["involvedObject"]["name"],"at":at,"count":event["count"]}));
     }
-    Ok(json!({"pods":pods,"claims":claims,"events":reasons}))
+    // When the cell object, its namespace and each field manager's writes
+    // happened, to tell controller delays from scheduling and storage.
+    let writes = |object: &Value| {
+        json!({"created":object["metadata"]["creationTimestamp"],"writes":object["metadata"]["managedFields"]
+            .as_array().into_iter().flatten().map(|field| json!({"manager":field["manager"],
+            "operation":field["operation"],"subresource":field["subresource"],"time":field["time"]})).collect::<Vec<_>>()})
+    };
+    let cells = kubectl.get_json(&[
+        "get",
+        "proofstormcells",
+        "-n",
+        CONTROL_NAMESPACE,
+        "--show-managed-fields",
+    ])?;
+    let cells: Vec<Value> = expect::array(&cells, "/items")?
+        .iter()
+        .map(writes)
+        .collect();
+    let namespace =
+        writes(&kubectl.get_json(&["get", "namespace", namespace, "--show-managed-fields"])?);
+    Ok(json!({"cells":cells,"namespace":namespace,"pods":pods,"claims":claims,"events":reasons}))
 }
 
 fn policies(kubectl: &Kubectl, namespace: &str) -> Result<Vec<String>> {
@@ -458,168 +357,4 @@ fn objects(kubectl: &Kubectl, namespace: &str) -> Result<Value> {
     Ok(
         json!({"counts":counts,"largest":sizes.into_iter().map(|(bytes, object)| json!({"object":object,"bytes":bytes})).collect::<Vec<_>>()}),
     )
-}
-
-/// `apiserver_request_total` keyed by "VERB group/resource/subresource CODE".
-fn api_requests(kubectl: &Kubectl) -> Result<BTreeMap<String, u64>> {
-    let text = kubectl.run(&["get", "--raw", "/metrics"])?;
-    let mut counts = BTreeMap::new();
-    for line in text.lines() {
-        let Some((labels, value)) = line
-            .strip_prefix("apiserver_request_total{")
-            .and_then(|rest| rest.rsplit_once("} "))
-        else {
-            continue;
-        };
-        let label = |key: &str| {
-            labels
-                .split(',')
-                .find_map(|pair| {
-                    pair.strip_prefix(key)?
-                        .strip_prefix("=\"")?
-                        .strip_suffix('"')
-                })
-                .unwrap_or_default()
-        };
-        let resource: Vec<&str> = [label("group"), label("resource"), label("subresource")]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .collect();
-        let key = format!("{} {} {}", label("verb"), resource.join("/"), label("code"));
-        *counts.entry(key).or_default() += value.parse::<u64>().unwrap_or_default();
-    }
-    Ok(counts)
-}
-
-fn delta(before: &BTreeMap<String, u64>, after: &BTreeMap<String, u64>) -> BTreeMap<String, u64> {
-    after
-        .iter()
-        .map(|(key, count)| {
-            (
-                key.clone(),
-                count.saturating_sub(before.get(key).copied().unwrap_or_default()),
-            )
-        })
-        .filter(|(_, change)| *change > 0)
-        .collect()
-}
-
-/// The controller's log lines since the gate started; empty if unreadable.
-fn controller_log(kubectl: &Kubectl, elapsed: Duration) -> Vec<String> {
-    let since = format!("--since={}s", elapsed.as_secs() + 60);
-    kubectl
-        .run(&[
-            "logs",
-            "deployment/proofstormd",
-            "-n",
-            CONTROL_NAMESPACE,
-            &since,
-        ])
-        .map(|log| log.lines().map(str::to_owned).collect())
-        .unwrap_or_default()
-}
-
-/// Count the controller's error and warning lines.
-fn log_summary(log: &[String]) -> Value {
-    let mut result = json!({"lines":log.len()});
-    for level in ["ERROR", "WARN"] {
-        let matching: Vec<&String> = log.iter().filter(|line| line.contains(level)).collect();
-        result[level] = json!({"count":matching.len(),
-            "first":matching.iter().take(20).map(|line| line.chars().take(400).collect::<String>()).collect::<Vec<_>>()});
-    }
-    result
-}
-
-/// Samples the control namespace's pod usage every ten seconds.
-struct Sampler {
-    stop: Arc<AtomicBool>,
-    phase: Arc<Mutex<String>>,
-    handle: thread::JoinHandle<Vec<Value>>,
-}
-
-impl Sampler {
-    fn start(context: &GateContext) -> Result<Self> {
-        let kubectl = Kubectl::for_installation(&context.installation)?;
-        let stop = Arc::new(AtomicBool::new(false));
-        let phase = Arc::new(Mutex::new("start".to_owned()));
-        let (stopped, current) = (stop.clone(), phase.clone());
-        let path = format!("/apis/metrics.k8s.io/v1beta1/namespaces/{CONTROL_NAMESPACE}/pods");
-        let handle = thread::spawn(move || {
-            let started = Instant::now();
-            let mut samples = Vec::new();
-            while !stopped.load(Ordering::Relaxed) {
-                let usage = kubectl
-                    .run(&["get", "--raw", &path])
-                    .ok()
-                    .and_then(|text| serde_json::from_str::<Value>(&text).ok());
-                let phase = current
-                    .lock()
-                    .map(|phase| phase.clone())
-                    .unwrap_or_default();
-                for pod in usage
-                    .as_ref()
-                    .and_then(|usage| usage["items"].as_array())
-                    .into_iter()
-                    .flatten()
-                {
-                    let total = |resource: &str| -> f64 {
-                        pod["containers"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|container| container["usage"][resource].as_str())
-                            .filter_map(quantity)
-                            .sum()
-                    };
-                    samples.push(json!({"seconds":started.elapsed().as_secs(),"phase":phase,
-                        "pod":pod["metadata"]["name"],"cpu_millicores":(total("cpu") * 1000.0).round(),
-                        "memory_mib":(total("memory") / 1_048_576.0).round()}));
-                }
-                for _ in 0..10 {
-                    if stopped.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    thread::sleep(Duration::from_secs(1));
-                }
-            }
-            samples
-        });
-        Ok(Self {
-            stop,
-            phase,
-            handle,
-        })
-    }
-
-    fn stop(self) -> Vec<Value> {
-        self.stop.store(true, Ordering::Relaxed);
-        self.handle.join().unwrap_or_default()
-    }
-}
-
-/// Peak and mean usage per phase and pod.
-fn usage_summary(samples: &[Value]) -> Value {
-    let mut grouped: BTreeMap<(String, String), Vec<(f64, f64)>> = BTreeMap::new();
-    for sample in samples {
-        let key = (
-            sample["phase"].as_str().unwrap_or_default().to_owned(),
-            sample["pod"].as_str().unwrap_or_default().to_owned(),
-        );
-        grouped.entry(key).or_default().push((
-            sample["cpu_millicores"].as_f64().unwrap_or_default(),
-            sample["memory_mib"].as_f64().unwrap_or_default(),
-        ));
-    }
-    let mut summary = serde_json::Map::new();
-    for ((phase, pod), values) in grouped {
-        #[allow(clippy::cast_precision_loss)]
-        let mean = values.iter().map(|(cpu, _)| cpu).sum::<f64>() / values.len() as f64;
-        summary.entry(phase).or_insert_with(|| json!({}))[pod] = json!({
-            "samples":values.len(),
-            "cpu_millicores_max":values.iter().map(|(cpu, _)| *cpu).fold(0.0, f64::max),
-            "cpu_millicores_mean":mean.round(),
-            "memory_mib_max":values.iter().map(|(_, memory)| *memory).fold(0.0, f64::max),
-        });
-    }
-    Value::Object(summary)
 }

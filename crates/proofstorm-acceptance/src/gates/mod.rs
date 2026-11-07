@@ -31,6 +31,7 @@ pub mod gui;
 pub mod isolation;
 pub mod keycloak;
 pub mod ldk_server;
+mod measure;
 pub mod mint_management;
 pub mod native_exec;
 pub mod nutshell_cln;
@@ -40,6 +41,7 @@ pub mod nutshell_postgres;
 pub mod onboarding;
 pub mod private_handoff;
 pub mod private_transfer;
+pub mod prober;
 pub mod progress;
 pub mod quote_composition;
 pub mod reliable_exec;
@@ -125,6 +127,8 @@ pub const NAMES: &[&str] = &[
     "scale-500",
     "scale-1000",
     "scale-2000",
+    "prober-50",
+    "prober-1000",
 ];
 
 /// Managed payment-stack gates whose exact images can be cached before a runtime exists.
@@ -236,6 +240,8 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "scale-500" => scale::run(context, 500),
         "scale-1000" => scale::run(context, 1000),
         "scale-2000" => scale::run(context, 2000),
+        "prober-50" => prober::run(context, 50),
+        "prober-1000" => prober::run(context, 1000),
         other => bail!(
             "unknown gate {other}; available gates: {}",
             NAMES.join(", ")
