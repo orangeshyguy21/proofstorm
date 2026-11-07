@@ -1773,6 +1773,9 @@ async fn reconcile(cell: Arc<ProofstormCell>, context: Arc<Context>) -> Result<A
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
     let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &namespace);
+    let Some(cell) = with_finalizer(&cells, cell).await? else {
+        return Ok(Action::await_change());
+    };
     finalizer(&cells, FINALIZER, cell, |event| async {
         match event {
             Event::Apply(cell) => {
@@ -1815,6 +1818,50 @@ async fn reconcile(cell: Arc<ProofstormCell>, context: Arc<Context>) -> Result<A
             Error::ControllerInvariant("invalid finalizer JSON patch")
         }
     })
+}
+
+/// The cell with the cleanup finalizer, so its first apply happens in this
+/// reconcile. kube's helper adds the finalizer and waits for the watch to
+/// report it, and a late watch event held new cells back for about five
+/// minutes, until the watch relisted. The cached copy may be behind too, so
+/// read the live cell before adding it. `None` once the cell is gone.
+async fn with_finalizer(
+    cells: &Api<ProofstormCell>,
+    cell: Arc<ProofstormCell>,
+) -> Result<Option<Arc<ProofstormCell>>, Error> {
+    if finalizer_patch(&cell).is_none() {
+        return Ok(Some(cell));
+    }
+    let Some(live) = cells.get_opt(&cell.name_any()).await? else {
+        return Ok(None);
+    };
+    let Some(patch) = finalizer_patch(&live) else {
+        return Ok(Some(Arc::new(live)));
+    };
+    let patched = cells
+        .patch(
+            &live.name_any(),
+            &PatchParams::default(),
+            &Patch::Merge(patch),
+        )
+        .await?;
+    Ok(Some(Arc::new(patched)))
+}
+
+/// The merge patch that adds the cleanup finalizer to a live cell, fenced on
+/// its resource version; `None` when it has the finalizer or is being deleted.
+fn finalizer_patch(cell: &ProofstormCell) -> Option<serde_json::Value> {
+    if cell.metadata.deletion_timestamp.is_some()
+        || cell.finalizers().iter().any(|name| name == FINALIZER)
+    {
+        return None;
+    }
+    let mut finalizers = cell.finalizers().to_vec();
+    finalizers.push(FINALIZER.to_owned());
+    Some(serde_json::json!({"metadata": {
+        "resourceVersion": cell.resource_version(),
+        "finalizers": finalizers,
+    }}))
 }
 
 fn reconciliation_failure_status(
@@ -3274,6 +3321,39 @@ fn status_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_cell_gets_its_finalizer_fenced_and_keeps_others() {
+        let mut cell = ProofstormCell::new(
+            "cell",
+            proofstorm_kube::ProofstormCellSpec {
+                workspace_id: "test".into(),
+                instance_id: "test".into(),
+                instance_key: "i0123456789012345678".into(),
+                revision_digest: "sha256:current".into(),
+            },
+        );
+        cell.metadata.resource_version = Some("612".into());
+        assert_eq!(
+            finalizer_patch(&cell),
+            Some(
+                serde_json::json!({"metadata": {"resourceVersion": "612", "finalizers": [FINALIZER]}})
+            )
+        );
+        cell.metadata.finalizers = Some(vec!["example.com/other".into()]);
+        assert_eq!(
+            finalizer_patch(&cell).unwrap()["metadata"]["finalizers"],
+            serde_json::json!(["example.com/other", FINALIZER])
+        );
+        cell.metadata.finalizers = Some(vec![FINALIZER.into()]);
+        assert_eq!(finalizer_patch(&cell), None, "already has it");
+        cell.metadata.finalizers = None;
+        cell.metadata.deletion_timestamp =
+            Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                k8s_openapi::jiff::Timestamp::UNIX_EPOCH,
+            ));
+        assert_eq!(finalizer_patch(&cell), None, "a deleted cell gets none");
+    }
 
     #[tokio::test]
     async fn failing_cells_are_held_back_whatever_triggers_the_next_reconcile() {
