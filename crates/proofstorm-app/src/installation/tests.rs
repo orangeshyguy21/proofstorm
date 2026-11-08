@@ -243,6 +243,19 @@ fn selected_ports_cannot_collide_or_change_on_retry() {
 }
 
 #[test]
+fn a_waiting_lock_gets_the_installation_once_the_holder_finishes() {
+    let root = tempfile::tempdir().unwrap();
+    let guard = Installation::lock(root.path()).unwrap();
+    assert!(Installation::lock_within(root.path(), Duration::from_millis(50)).is_err());
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        drop(guard);
+    });
+    Installation::lock_within(root.path(), Duration::from_secs(10)).unwrap();
+    release.join().unwrap();
+}
+
+#[test]
 fn lock_serializes_independent_connections_and_releases_on_drop() {
     let root = tempfile::tempdir().unwrap();
     let guard = Installation::lock(root.path()).unwrap();

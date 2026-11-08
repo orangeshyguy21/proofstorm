@@ -485,13 +485,18 @@ pub fn prefetch_cell_images(
 }
 
 /// Only explicit, authorized cell mutations call this. Reads never start downloads.
+/// How long preparing an edit's images waits for another installation operation.
+const IMAGE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub(crate) async fn prepare_images(
     installation: Installation,
     lock: proofstorm_core::ResolvedLock,
 ) -> Result<()> {
     let selected = selected_images(&installation, &lock)?;
     tokio::task::spawn_blocking(move || {
-        let _guard = Installation::lock(&installation.home)?;
+        // Another agent's image mirror or a prefetch often holds the lock
+        // briefly; an accepted edit waits for it rather than stalling.
+        let _guard = Installation::lock_within(&installation.home, IMAGE_LOCK_WAIT)?;
         ensure!(
             Installation::load(&installation.home)? == installation,
             "installation identity changed"

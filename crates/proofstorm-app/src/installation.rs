@@ -48,20 +48,26 @@ impl Drop for InstallationGuard {
 impl Installation {
     /// Serialize all future setup/reset mutations using this same guard.
     pub fn lock(home: &Path) -> Result<InstallationGuard> {
-        let checkout = crate::dev_reset::checkout_guard(home)?;
+        Self::lock_within(home, Duration::ZERO)
+    }
+
+    /// As [`Self::lock`], waiting up to `wait` for another operation to finish.
+    pub fn lock_within(home: &Path, wait: Duration) -> Result<InstallationGuard> {
+        let checkout = crate::dev_reset::checkout_guard(home, wait)?;
         crate::dev_reset::check_pending(home)?;
-        Self::lock_state(home, checkout)
+        Self::lock_state(home, checkout, wait)
     }
 
     pub(crate) fn lock_state(
         home: &Path,
         checkout: Option<Connection>,
+        wait: Duration,
     ) -> Result<InstallationGuard> {
         private_directory(home)?;
         let path = home.join("installation-lock.sqlite3");
         create_private_file(&path)?;
         let db = Connection::open(&path)?;
-        db.busy_timeout(Duration::ZERO)?;
+        db.busy_timeout(wait)?;
         db.execute_batch("BEGIN IMMEDIATE")
             .context("another installation operation is running; retry when it finishes")?;
         Ok(InstallationGuard(db, checkout))

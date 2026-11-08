@@ -120,15 +120,20 @@ pub(crate) fn check_pending(home: &Path) -> Result<()> {
 
 // Outside `state`: the lock remains stable while that directory is archived.
 // Setup, registration and GUI startup take the same operation lock as reset.
-pub(crate) fn checkout_guard(home: &Path) -> Result<Option<Connection>> {
+/// The checkout's operation lock, waiting up to `wait` for another holder.
+pub(crate) fn checkout_guard(home: &Path, wait: Duration) -> Result<Option<Connection>> {
     let Some(work) = checkout(home).filter(|work| work.join("owner.json").exists()) else {
         return Ok(None);
     };
     target(home)?;
-    operation_lock(work).map(Some)
+    operation_lock_within(work, wait).map(Some)
 }
 
 fn operation_lock(work: &Path) -> Result<Connection> {
+    operation_lock_within(work, Duration::ZERO)
+}
+
+fn operation_lock_within(work: &Path, wait: Duration) -> Result<Connection> {
     let path = work.join("operation-lock.sqlite3");
     if !path.try_exists()? {
         use std::os::unix::fs::OpenOptionsExt;
@@ -145,7 +150,7 @@ fn operation_lock(work: &Path) -> Result<Connection> {
     }
     regular(&path)?;
     let db = Connection::open(&path)?;
-    db.busy_timeout(Duration::ZERO)?;
+    db.busy_timeout(wait)?;
     db.execute_batch("BEGIN IMMEDIATE")
         .context("another installation operation is running; retry after it finishes")?;
     Ok(db)
@@ -245,7 +250,7 @@ pub async fn run(home: &Path, expected_id: &str, progress: &dyn Fn(&str)) -> Res
     if !journal.runtime_removed {
         progress("Stopping GUI");
         crate::gui::stop(home).await?;
-        let _state = Installation::lock_state(home, None)?;
+        let _state = Installation::lock_state(home, None, Duration::ZERO)?;
         ensure!(
             Installation::load(home)? == journal.previous,
             "installation changed during reset"

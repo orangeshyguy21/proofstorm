@@ -158,7 +158,8 @@ version and can reset after verified teardown. Use `instance_key` to identify
 an incarnation. Existing saved handles with the old field remain readable.
 
 Acceptance does not mean readiness. Inspect after admission; if
-`runtime_reconciliation_failed` is true, retry the same request to reconcile.
+`runtime_reconciliation_failed` is true, `reconciliation_error` gives its code,
+message and recovery; retry the same request to reconcile.
 If `activity_ready` is false, retry it to restore the default run/session.
 
 ## Regression checks

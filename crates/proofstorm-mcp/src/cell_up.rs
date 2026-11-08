@@ -18,6 +18,9 @@ pub(super) fn result(up: UpResult) -> Result<CallToolResult, ErrorData> {
         "revision_digest": applied.revision_digest,
         "current_revision_digest": applied.instance.revision_digest,
         "runtime_reconciliation_failed": applied.reconciliation_error.is_some(),
+        // Code, message and recovery, so an agent can tell a busy installation
+        // from a real failure.
+        "reconciliation_error": applied.reconciliation_error,
         "activity_ready": up.activity_ready,
         "next_tool": "cell_inspect",
     }))
