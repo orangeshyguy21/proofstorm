@@ -294,14 +294,21 @@ impl RuntimeSettings {
     ///
     /// Describes the first problem found.
     pub fn validate(&self) -> Result<(), String> {
-        for (name, amount) in [
-            ("cpu", &self.controller.cpu),
-            ("memory", &self.controller.memory),
+        for (name, amount, default_request, default_limit) in [
+            ("cpu", &self.controller.cpu, CONTROLLER_CPU_REQUEST, None),
+            (
+                "memory",
+                &self.controller.memory,
+                CONTROLLER_MEMORY_REQUEST,
+                Some(CONTROLLER_MEMORY_LIMIT),
+            ),
         ] {
-            let Some(amount) = amount else { continue };
-            let request = amount.request.as_deref();
-            let limit = amount.limit.as_deref().filter(|limit| *limit != NO_LIMIT);
-            for (field, value) in [("request", request), ("limit", limit)] {
+            let request = amount.as_ref().and_then(|amount| amount.request.as_deref());
+            let limit = amount.as_ref().and_then(|amount| amount.limit.as_deref());
+            for (field, value) in [
+                ("request", request),
+                ("limit", limit.filter(|limit| *limit != NO_LIMIT)),
+            ] {
                 if let Some(value) = value
                     && !quantity_value(value).is_some_and(|value| value > 0.0)
                 {
@@ -310,13 +317,24 @@ impl RuntimeSettings {
                     ));
                 }
             }
-            if let (Some(request), Some(limit)) = (
-                request.and_then(quantity_value),
-                limit.and_then(quantity_value),
-            ) && request > limit
+            // Compare what the controller gets: an unset value is the default.
+            let shown = |value: Option<&str>, default: &str| match value {
+                Some(value) => value.to_owned(),
+                None => format!("{default} by default"),
+            };
+            let effective_limit = match limit {
+                Some(NO_LIMIT) => None,
+                Some(limit) => Some(limit),
+                None => default_limit,
+            };
+            if let Some(effective_limit) = effective_limit
+                && quantity_value(request.unwrap_or(default_request))
+                    > quantity_value(effective_limit)
             {
                 return Err(format!(
-                    "controller.{name}.request must not exceed controller.{name}.limit"
+                    "controller.{name}.request ({}) must not exceed controller.{name}.limit ({}); set both",
+                    shown(request, default_request),
+                    shown(limit, effective_limit),
                 ));
             }
         }
@@ -395,6 +413,34 @@ mod tests {
         }}))
         .unwrap();
         assert!(bad.validate().unwrap_err().contains("must not exceed"));
+        // An unset value is its default: 250m CPU requested, a 256Mi memory limit.
+        for (setting, message) in [
+            (
+                serde_json::json!({"cpu": {"limit": "100m"}}),
+                "controller.cpu.request (250m by default) must not exceed controller.cpu.limit (100m)",
+            ),
+            (
+                serde_json::json!({"memory": {"request": "512Mi"}}),
+                "controller.memory.request (512Mi) must not exceed controller.memory.limit (256Mi by default)",
+            ),
+            (
+                serde_json::json!({"memory": {"limit": "32Mi"}}),
+                "controller.memory.request (64Mi by default)",
+            ),
+        ] {
+            let below: RuntimeSettings =
+                serde_json::from_value(serde_json::json!({"controller": setting})).unwrap();
+            let error = below.validate().unwrap_err();
+            assert!(error.contains(message), "{error}");
+        }
+        for fine in [
+            serde_json::json!({"cpu": {"limit": "250m"}}),
+            serde_json::json!({"memory": {"request": "512Mi", "limit": "none"}}),
+        ] {
+            let settings: RuntimeSettings =
+                serde_json::from_value(serde_json::json!({"controller": fine})).unwrap();
+            settings.validate().unwrap();
+        }
         assert!(
             serde_json::from_value::<RuntimeSettings>(
                 serde_json::json!({"controller": {"slots": 1}})

@@ -745,11 +745,10 @@ fn deploy(
     ];
     args.extend(settings_args.iter().map(String::as_str));
     args.extend(["--wait", "--timeout", "120s", "--rollback-on-failure"]);
-    process::run(
+    process::controller_deploy(
         &installation.home,
         &tool(&installation.home, "helm")?,
         &args,
-        150,
     )?;
     ensure!(!expected.is_empty(), "missing deployment image");
     healthy(installation, controller)?;

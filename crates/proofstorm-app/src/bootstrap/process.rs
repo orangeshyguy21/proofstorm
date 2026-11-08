@@ -32,6 +32,18 @@ pub(super) fn controller_build(home: &Path, args: &[&str]) -> Result<String> {
     )
 }
 
+/// Helm's install of the controller, its output kept in a private log.
+pub(super) fn controller_deploy(home: &Path, helm: &Path, args: &[&str]) -> Result<String> {
+    run_inner(
+        home,
+        helm,
+        args,
+        150,
+        Some(&home.join("controller-deploy.log")),
+        OUTPUT_LIMIT,
+    )
+}
+
 pub(super) fn image_preparation(
     home: &Path,
     command: &mut Command,
@@ -143,13 +155,10 @@ fn run_command(
     if !status.success()
         && let Some(path) = log
     {
-        let operation = if path
-            .file_name()
-            .is_some_and(|name| name == "image-preparation.log")
-        {
-            "image preparation"
-        } else {
-            "controller build"
+        let operation = match path.file_name().and_then(|name| name.to_str()) {
+            Some("image-preparation.log") => "image preparation",
+            Some("controller-deploy.log") => "controller deployment",
+            _ => "controller build",
         };
         anyhow::bail!(
             "{operation} failed; inspect private log {} and retry setup",
