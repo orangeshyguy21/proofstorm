@@ -178,10 +178,11 @@ impl State {
     fn changed(&mut self, kind: &'static str, change: CacheChange) {
         match change {
             CacheChange::Reset(ready) => {
-                if ready {
-                    self.ready.insert(kind);
-                } else {
-                    self.ready.remove(kind);
+                // Rare, and every cell's probes pause while any cache relists.
+                if ready && self.ready.insert(kind) {
+                    eprintln!("protocol {kind} cache ready ({} of 6)", self.ready.len());
+                } else if !ready && self.ready.remove(kind) {
+                    eprintln!("protocol {kind} cache relisting; probes pause until it is back");
                 }
                 self.dirty.extend(self.cells.keys().cloned());
             }
@@ -555,8 +556,15 @@ impl Manager {
                             super::watch_lean(Api::<$kind>::all(manager.client.clone()), $config)
                                 .boxed();
                         while let Some(event) = stream.next().await {
-                            let Ok(event) = event else {
-                                break;
+                            let event = match event {
+                                Ok(event) => event,
+                                Err(error) => {
+                                    eprintln!(
+                                        "protocol {} watch failed: {error}; relisting in {delay}s",
+                                        stringify!($field)
+                                    );
+                                    break;
+                                }
                             };
                             let mut state = manager.state.lock().expect("prober state lock");
                             let change = cache_event(&mut state.$field, event);
