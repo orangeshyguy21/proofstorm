@@ -643,7 +643,7 @@ fn mirror_with_progress(
                 "mirror changed the catalog digest"
             );
         }
-        for node in cluster::nodes(installation) {
+        for node in cluster::nodes(installation)? {
             cluster::owned(installation)?;
             registry.image_preparation(
                 &installation.home,

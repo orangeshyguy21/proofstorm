@@ -226,6 +226,35 @@ impl Installation {
         self.home.join("k3d.yaml")
     }
 
+    /// Whether setup has tried to create this installation's cluster: the
+    /// receipt is written right after any create attempt, even a failed one.
+    fn cluster_attempted(&self) -> Result<bool> {
+        Ok(self.home.join("runtime-resources.json").try_exists()?
+            || self.home.join("runtime-owner.json").try_exists()?)
+    }
+
+    /// The cluster's agent nodes: the count its saved k3d configuration
+    /// created, else the count `runtime.toml` would create.
+    ///
+    /// # Errors
+    ///
+    /// An unreadable saved configuration or `runtime.toml`.
+    pub fn cluster_agents(&self) -> Result<u16> {
+        let path = self.cluster_config_path();
+        if path.try_exists()? {
+            let saved: Value = serde_json::from_slice(&fs::read(&path)?)
+                .context("saved k3d configuration is not valid JSON")?;
+            return saved["agents"]
+                .as_u64()
+                .and_then(|agents| u16::try_from(agents).ok())
+                .context("saved k3d configuration has no agent count");
+        }
+        Ok(crate::runtime_settings::load(&self.home)?
+            .cluster
+            .agents
+            .unwrap_or(1))
+    }
+
     /// JSON is also valid YAML. Keep catalog digests unchanged and route pulls
     /// through the private Docker network's registry endpoint.
     /// The cluster this release creates with default settings.
@@ -313,6 +342,12 @@ impl Installation {
             if comparable(&saved, &config).map(|saved| without_sizing(&saved))
                 == Some(without_sizing(&config))
             {
+                // Sizing applies when the cluster is created, so until a create
+                // has been attempted it may still change.
+                if !self.cluster_attempted()? {
+                    fs::remove_file(&path)?;
+                    return write_new_private(&path, &bytes);
+                }
                 bail!(
                     "cluster.agents and cluster.max_pods_per_node apply when the cluster is created. Run storm setup --recreate to replace the runtime, which deletes all cells, or storm config unset them"
                 );

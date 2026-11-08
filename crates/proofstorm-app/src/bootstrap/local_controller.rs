@@ -298,7 +298,7 @@ pub(super) fn prepare(
         &image_id,
     )?;
     let image = format!("{CATALOG_REGISTRY}/proofstormd@{registry_sha}");
-    for node in cluster::nodes(installation) {
+    for node in cluster::nodes(installation)? {
         cluster::owned(installation)?;
         docker(
             &installation.home,

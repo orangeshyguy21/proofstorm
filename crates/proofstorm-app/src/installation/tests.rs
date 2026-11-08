@@ -419,6 +419,12 @@ fn cluster_settings_size_new_clusters_and_explain_why_existing_ones_need_a_recre
     assert!(modest.contains(&"--kubelet-arg=max-pods=200".to_owned()));
     assert!(!modest.iter().any(|arg| arg.contains("node-cidr-mask-size")));
 
+    // Before any cluster exists, a sizing change rewrites the configuration.
+    crate::runtime_settings::set(&installation.home, &["cluster.agents=2".into()]).unwrap();
+    Installation::initialize(root.path(), None, None).unwrap();
+    assert_eq!(installation.cluster_agents().unwrap(), 2);
+    // Once setup has tried to create the cluster, it needs a recreate.
+    fs::write(installation.home.join("runtime-resources.json"), "{}").unwrap();
     let saved = fs::read(installation.cluster_config_path()).unwrap();
     crate::runtime_settings::set(&installation.home, &["cluster.agents=3".into()]).unwrap();
     let error = Installation::initialize(root.path(), None, None)

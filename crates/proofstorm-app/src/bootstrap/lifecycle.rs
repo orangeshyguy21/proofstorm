@@ -318,14 +318,24 @@ async fn suspend(
     progress("Stopping runtime containers and registry");
     let containers = teardown::preserved_runtime(installation)?;
     // Kubernetes workloads are already shut down. Keep the server and registry last.
-    for suffix in ["tools", "serverlb", "agent-0", "server-0", "registry"] {
-        for (name, id) in &containers {
-            if name.ends_with(&format!("-{suffix}")) && running(&installation.home, id)? {
-                docker(&installation.home, &["stop", "--time", "60", id], 75)?;
-            }
+    for name in start_order(installation)?.iter().rev() {
+        if let Some(id) = containers.get(name)
+            && running(&installation.home, id)?
+        {
+            docker(&installation.home, &["stop", "--time", "60", id], 75)?;
         }
     }
     Ok(())
+}
+
+/// Runtime containers in start order: the registry, the server, every agent,
+/// the load balancer, then k3d's tools node. Stop goes in reverse.
+fn start_order(installation: &Installation) -> Result<Vec<String>> {
+    let context = installation.context();
+    let mut names = vec![installation.registry_name()];
+    names.extend(super::cluster::nodes(installation)?);
+    names.extend([format!("{context}-serverlb"), format!("{context}-tools")]);
+    Ok(names)
 }
 
 async fn resume(
@@ -336,14 +346,14 @@ async fn resume(
 ) -> Result<Vec<String>> {
     progress("Starting saved runtime containers");
     let containers = teardown::preserved_runtime(installation)?;
-    for suffix in ["registry", "server-0", "agent-0", "serverlb", "tools"] {
-        if suffix == "tools" && !journal.tools_running {
+    for name in start_order(installation)? {
+        if name.ends_with("-tools") && !journal.tools_running {
             continue;
         }
-        for (name, id) in &containers {
-            if name.ends_with(&format!("-{suffix}")) && !running(&installation.home, id)? {
-                docker(&installation.home, &["start", id], 30)?;
-            }
+        if let Some(id) = containers.get(&name)
+            && !running(&installation.home, id)?
+        {
+            docker(&installation.home, &["start", id], 30)?;
         }
     }
     progress("Waiting for Kubernetes");
