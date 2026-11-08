@@ -802,6 +802,7 @@ mod tests {
             native_starts_per_component: 3,
             native_polls: 24,
             start_deadline_seconds: 300,
+            ..proofstorm_core::ControllerLimits::default()
         };
         let gate = Gate::new(&limits);
         assert_eq!(gate.starts.available_permits(), 24);

@@ -283,6 +283,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "PROOFSTORM_PROBER_IMAGE must name the installed controller image")?;
     let (probes, triggers) = probes::Manager::new(client.clone(), image);
     let limits = proofstorm_core::ControllerLimits::from_env(|name| std::env::var(name).ok())?;
+    probes.set_verbose(limits.reconcile_log_ms == 0);
     let cell_watch = lean_controller(cells);
     let (components, component_writer) = reflector::store();
     let component_cache = reflector(
@@ -2876,11 +2877,45 @@ where
     result
 }
 
+/// Run one reconcile and log it when it took at least `log_ms` (0 logs every
+/// one). The line carries the object's age, so a reconcile that came late shows
+/// as clearly as one that ran long.
+async fn logged<K, F>(object: &K, log_ms: u32, work: F) -> Result<Action, Error>
+where
+    K: kube::Resource<DynamicType = ()>,
+    F: std::future::Future<Output = Result<Action, Error>>,
+{
+    let started = std::time::Instant::now();
+    let result = work.await;
+    let took = started.elapsed().as_millis();
+    if took >= u128::from(log_ms) {
+        let age = object.meta().creation_timestamp.as_ref().map_or_else(
+            || "?".into(),
+            |time| (now_unix() - time.0.as_second()).to_string(),
+        );
+        let outcome = match &result {
+            Ok(action) => format!("{action:?}"),
+            Err(error) => format!("error: {error}"),
+        };
+        eprintln!(
+            "reconcile {} {} age={age}s took={took}ms version={} -> {outcome}",
+            K::kind(&()),
+            kube::runtime::reflector::ObjectRef::from_obj(object),
+            object.meta().resource_version.as_deref().unwrap_or("?"),
+        );
+    }
+    result
+}
+
 async fn reconcile_cell(cell: Arc<ProofstormCell>, context: Arc<Context>) -> Result<Action, Error> {
-    with_backoff(
+    logged(
         cell.as_ref(),
-        &context.retries,
-        Box::pin(reconcile(cell.clone(), context.clone())),
+        context.limits.reconcile_log_ms,
+        with_backoff(
+            cell.as_ref(),
+            &context.retries,
+            Box::pin(reconcile(cell.clone(), context.clone())),
+        ),
     )
     .await
 }
@@ -2889,10 +2924,14 @@ async fn reconcile_action_with_backoff(
     action: Arc<ProofstormCellAction>,
     context: Arc<Context>,
 ) -> Result<Action, Error> {
-    with_backoff(
+    logged(
         action.as_ref(),
-        &context.retries,
-        Box::pin(reconcile_action(action.clone(), context.clone())),
+        context.limits.reconcile_log_ms,
+        with_backoff(
+            action.as_ref(),
+            &context.retries,
+            Box::pin(reconcile_action(action.clone(), context.clone())),
+        ),
     )
     .await
 }
@@ -2901,10 +2940,14 @@ async fn reconcile_candidate_build_with_backoff(
     build: Arc<ProofstormCandidateBuild>,
     context: Arc<Context>,
 ) -> Result<Action, Error> {
-    with_backoff(
+    logged(
         build.as_ref(),
-        &context.retries,
-        Box::pin(reconcile_candidate_build(build.clone(), context.clone())),
+        context.limits.reconcile_log_ms,
+        with_backoff(
+            build.as_ref(),
+            &context.retries,
+            Box::pin(reconcile_candidate_build(build.clone(), context.clone())),
+        ),
     )
     .await
 }

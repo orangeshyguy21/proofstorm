@@ -209,6 +209,7 @@ pub fn helm_args(settings: &RuntimeSettings) -> Vec<String> {
             "startDeadlineSeconds",
             limits.start_deadline_seconds.to_string(),
         ),
+        ("reconcileLogMs", limits.reconcile_log_ms.to_string()),
     ] {
         args.push("--set".to_owned());
         args.push(format!("controller.{name}={value}"));

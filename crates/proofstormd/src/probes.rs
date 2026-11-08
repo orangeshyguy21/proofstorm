@@ -114,6 +114,8 @@ struct State {
     notify: BTreeSet<String>,
     force_notify: BTreeSet<String>,
     scheduler: Scheduler,
+    /// Log every retarget and every batch that came back empty.
+    verbose: bool,
 }
 
 enum CacheChange {
@@ -250,6 +252,19 @@ impl State {
         }
     }
 
+    /// When verbose, say that a batch returned nothing: its pod was gone, the
+    /// port-forward failed, or it ran past the batch timeout.
+    fn log_empty_batch(&self, job: &Job, response: Option<&Response>, now: u64) {
+        if self.verbose && response.is_none() {
+            eprintln!(
+                "protocol batch for {} came back empty after {} ms ({} targets)",
+                job.identity.instance_key,
+                now.saturating_sub(job.started_at_millis),
+                job.request.targets.len()
+            );
+        }
+    }
+
     /// Whether all six resource watches have listed.
     fn caches_ready(&self) -> bool {
         self.ready.len() == 6
@@ -328,6 +343,18 @@ impl State {
             let targets = worker
                 .as_ref()
                 .map(|_| eligible_targets(&cell.plans, &self.resources(&key).observed()));
+            if self.verbose {
+                match (&worker, &targets) {
+                    (Some((_, pod)), Some(targets)) => eprintln!(
+                        "protocol targets for {key}: worker {pod}, {} targets",
+                        targets.len()
+                    ),
+                    _ => eprintln!(
+                        "protocol targets for {key}: none (caches ready: {}, ready worker: no)",
+                        self.caches_ready()
+                    ),
+                }
+            }
             let cell = self.cells.get_mut(&key).expect("cell found above");
             cell.worker = worker;
             cell.targeted_at = now;
@@ -381,6 +408,11 @@ impl Manager {
 
     fn now(&self) -> u64 {
         u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    /// Log every retarget and every batch that came back empty.
+    pub fn set_verbose(&self, verbose: bool) {
+        self.state.lock().expect("prober state lock").verbose = verbose;
     }
 
     pub fn register(
@@ -610,6 +642,7 @@ impl Manager {
                         Ok((job, response)) => {
                             active.remove(&job.request.batch_id);
                             let mut state = self.state.lock().expect("prober state lock");
+                            state.log_empty_batch(&job, response.as_ref(), self.now());
                             state.refresh(&self.image, self.now());
                             if state.scheduler.complete(&job, response, self.now()) { state.notify.insert(job.identity.instance_key); }
                         }

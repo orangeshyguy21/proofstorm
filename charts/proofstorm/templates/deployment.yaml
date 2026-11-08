@@ -49,6 +49,8 @@ spec:
               value: {{ .Values.controller.nativePolls | quote }}
             - name: PROOFSTORM_START_DEADLINE_SECONDS
               value: {{ .Values.controller.startDeadlineSeconds | quote }}
+            - name: PROOFSTORM_RECONCILE_LOG_MS
+              value: {{ .Values.controller.reconcileLogMs | quote }}
           volumeMounts:
             - name: private-custody
               mountPath: /var/lib/proofstorm

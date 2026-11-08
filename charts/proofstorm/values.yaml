@@ -30,3 +30,5 @@ controller:
   nativeStartsPerComponent: 2
   nativePolls: 6
   startDeadlineSeconds: 120
+  # Log each reconcile that takes at least this long; 0 logs every reconcile.
+  reconcileLogMs: 5000
