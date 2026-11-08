@@ -227,6 +227,37 @@ fn pod_belongs_to_instance(pod: &Pod, key: &str) -> bool {
         && pod.metadata.namespace.as_deref() == Some(instance_namespace(key).as_str())
 }
 
+/// Watch `api`, dropping each object's `managedFields` before anything caches
+/// it. The controller never reads them, and they were a third of every action
+/// on a 24-agent swarm; its caches grow with the work it holds.
+pub(crate) fn watch_lean<K>(
+    api: Api<K>,
+    config: watcher::Config,
+) -> impl futures::Stream<Item = watcher::Result<watcher::Event<K>>> + Send
+where
+    K: kube::Resource + Clone + serde::de::DeserializeOwned + std::fmt::Debug + Send + 'static,
+{
+    watcher(api, config).modify(|object| object.managed_fields_mut().clear())
+}
+
+/// A controller over `api` whose cache holds objects without `managedFields`.
+fn lean_controller<K>(api: Api<K>) -> Controller<K>
+where
+    K: kube::Resource<DynamicType = ()>
+        + Clone
+        + serde::de::DeserializeOwned
+        + std::fmt::Debug
+        + Send
+        + Sync
+        + 'static,
+{
+    let (store, writer) = reflector::store();
+    Controller::for_stream(
+        reflector(writer, watch_lean(api, watcher::Config::default())).applied_objects(),
+        store,
+    )
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(argument) = std::env::args().nth(1) {
@@ -252,11 +283,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "PROOFSTORM_PROBER_IMAGE must name the installed controller image")?;
     let (probes, triggers) = probes::Manager::new(client.clone(), image);
     let limits = proofstorm_core::ControllerLimits::from_env(|name| std::env::var(name).ok())?;
-    let cell_watch = Controller::new(cells, watcher::Config::default());
+    let cell_watch = lean_controller(cells);
     let (components, component_writer) = reflector::store();
     let component_cache = reflector(
         component_writer,
-        watcher(
+        watch_lean(
             Api::<ProofstormComponent>::all(client.clone()),
             watcher::Config::default(),
         ),
@@ -293,7 +324,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(error) => eprintln!("reconciliation failed: {error}"),
             }
         });
-    let action_controller = Controller::new(actions, watcher::Config::default())
+    let action_controller = lean_controller(actions)
         .with_config(kube::runtime::controller::Config::default().concurrency(limits.action_slots))
         .shutdown_on_signal()
         .run(
@@ -307,7 +338,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(error) => eprintln!("action reconciliation failed: {error}"),
             }
         });
-    let candidate_controller = Controller::new(candidate_builds, watcher::Config::default())
+    let candidate_controller = lean_controller(candidate_builds)
         .with_config(kube::runtime::controller::Config::default().concurrency(2))
         .shutdown_on_signal()
         .run(

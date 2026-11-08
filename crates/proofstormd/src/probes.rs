@@ -520,7 +520,7 @@ impl Manager {
                     let mut delay = 1;
                     loop {
                         let mut stream =
-                            watcher::watcher(Api::<$kind>::all(manager.client.clone()), $config)
+                            super::watch_lean(Api::<$kind>::all(manager.client.clone()), $config)
                                 .boxed();
                         while let Some(event) = stream.next().await {
                             let Ok(event) = event else {
