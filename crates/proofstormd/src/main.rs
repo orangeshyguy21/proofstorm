@@ -136,12 +136,30 @@ async fn stored_components(
         .collect())
 }
 
-/// The loaded cell with its component statuses filled from the cache.
+/// The loaded cell with its component statuses filled from the cache, except
+/// the components in `live`, read from the API. The cell and component watches
+/// deliver independently, so a cached object can be older than the cached
+/// cell's heartbeat, which would then vouch for evidence the controller has
+/// since withdrawn. Action admission reads its own components fresh.
 async fn with_component_statuses(
     context: &Context,
     mut cell: LoadedCell,
+    live: &BTreeSet<String>,
 ) -> Result<LoadedCell, Error> {
-    let stored = stored_components(context, &cell.spec.instance_key).await?;
+    let mut stored = stored_components(context, &cell.spec.instance_key).await?;
+    if !live.is_empty() {
+        let namespace = cell
+            .namespace()
+            .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
+        let api = Api::<ProofstormComponent>::namespaced(context.client.clone(), &namespace);
+        stored.retain(|object| !live.contains(&object.spec.component_id));
+        for id in live {
+            let name = proofstorm_kube::component_object_name(&cell.spec.instance_key, id);
+            if let Some(object) = api.get_opt(&name).await? {
+                stored.push(Arc::new(object));
+            }
+        }
+    }
     cell.assemble_components(stored.iter().map(AsRef::as_ref));
     Ok(cell)
 }

@@ -489,3 +489,82 @@ fn observation_wall_time_follows_the_current_wall_clock() {
         .is_fresh(now_unix)
     );
 }
+
+#[tokio::test]
+async fn admission_reads_its_components_live_so_a_newer_heartbeat_cannot_vouch_for_a_stale_cache() {
+    use proofstorm_core::{ComponentKind, ComponentStatus, ProtocolObservation};
+    let (mut cell, _) = fixture();
+    let status = |ready: bool, observed: Option<i64>| ComponentStatus {
+        id: "chain".into(),
+        kind: ComponentKind::Bitcoin,
+        observed_revision_digest: "revision".into(),
+        observed_rollout_digest: "rollout".into(),
+        conditions: Vec::new(),
+        ready,
+        protocol_observation: observed.map(|at| ProtocolObservation {
+            observed_at_unix: at,
+            expires_at_unix: at + 30,
+            elapsed_micros: 5,
+        }),
+        service: "chain.svc".into(),
+        ports: BTreeMap::new(),
+    };
+    // The cached object predates a failed check; the API already has its result,
+    // and the cached cell's newer heartbeat covers only components still fresh.
+    let cached = proofstorm_kube::component_object(KEY, "system", &status(true, Some(100)), None);
+    let live = proofstorm_kube::component_object(KEY, "system", &status(false, None), None);
+    cell.resource.status = Some(proofstorm_kube::ProofstormCellStatus {
+        protocol_freshness: Some(proofstorm_kube::ProtocolFreshness {
+            observed_at_unix: 1_000,
+            expires_at_unix: 1_030,
+        }),
+        ..Default::default()
+    });
+    let client = Client::new(
+        tower::service_fn(move |request: http::Request<kube::client::Body>| {
+            let live = live.clone();
+            async move {
+                assert_eq!(request.method(), http::Method::GET);
+                assert!(
+                    request
+                        .uri()
+                        .path()
+                        .ends_with(&format!("/proofstormcomponents/{KEY}-chain"))
+                );
+                Ok::<_, std::convert::Infallible>(
+                    http::Response::builder()
+                        .header("content-type", "application/json")
+                        .body(kube::client::Body::from(serde_json::to_vec(&live).unwrap()))
+                        .unwrap(),
+                )
+            }
+        }),
+        "system",
+    );
+    let (manager, _receive) = Manager::new(client.clone(), IMAGE.into());
+    let (store, mut writer) = kube::runtime::reflector::store();
+    writer.apply_watcher_event(&kube::runtime::watcher::Event::InitDone);
+    writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(cached));
+    let context = crate::Context {
+        components: store,
+        ..crate::Context::for_tests(client, manager)
+    };
+    let chain =
+        |cell: &proofstorm_kube::LoadedCell| cell.status.as_ref().unwrap().components[0].clone();
+    // From the cache alone the heartbeat would vouch for the withdrawn evidence.
+    let cached = crate::with_component_statuses(&context, cell.clone(), &BTreeSet::new())
+        .await
+        .unwrap();
+    assert!(chain(&cached).ready);
+    assert_eq!(
+        chain(&cached)
+            .protocol_observation
+            .map(|o| o.expires_at_unix),
+        Some(1_030)
+    );
+    let live = crate::with_component_statuses(&context, cell, &BTreeSet::from(["chain".into()]))
+        .await
+        .unwrap();
+    assert!(!chain(&live).ready);
+    assert!(chain(&live).protocol_observation.is_none());
+}

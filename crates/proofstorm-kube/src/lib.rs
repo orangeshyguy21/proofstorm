@@ -55,7 +55,8 @@ pub use candidate::{
     CandidateBuildRenderError, candidate_bundle_secret, render_candidate_build_job,
 };
 pub use components::{
-    assemble_component_statuses, component_object, protocol_freshness, same_material,
+    assemble_component_statuses, component_object, component_object_name, protocol_freshness,
+    same_material,
 };
 pub use identity::{
     CellIdentity, INSTANCE_ID_ANNOTATION, WORKSPACE_ID_ANNOTATION, cell_identity, identify_cell,
@@ -63,9 +64,9 @@ pub use identity::{
 pub use operation::{
     ActionAdmissionError, ActionRenderError, AuthenticationConformanceJobSpec,
     AuthenticationProtectedSpendJobSpec, AuthenticationReplayJobSpec, action_result_container,
-    evaluate_action_admission, evaluate_action_admission_at, render_authentication_conformance_job,
-    render_authentication_protected_spend_job, render_authentication_replay_job,
-    render_cell_action_job, require_open_cell,
+    admission_components, evaluate_action_admission, evaluate_action_admission_at,
+    render_authentication_conformance_job, render_authentication_protected_spend_job,
+    render_authentication_replay_job, render_cell_action_job, require_open_cell,
 };
 pub use render::{
     INSTANCE_LABEL, RenderedSecuritySpine, instance_namespace, render_security_spine,

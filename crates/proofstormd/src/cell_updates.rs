@@ -12,6 +12,7 @@ pub async fn action_cell(
     cell: ProofstormCell,
     context: &Context,
 ) -> Result<proofstorm_kube::LoadedCell, Error> {
+    let live = proofstorm_kube::admission_components(&action.spec.action);
     let Some(revision) = action
         .annotations()
         .get("proofstorm.dev/action-revision")
@@ -19,14 +20,14 @@ pub async fn action_cell(
         .cloned()
     else {
         let loaded = context.revisions.loaded(&context.client, cell).await?;
-        return super::with_component_statuses(context, loaded).await;
+        return super::with_component_statuses(context, loaded, &live).await;
     };
     let bound = context
         .revisions
         .load(&context.client, &cell, &revision)
         .await?;
     let loaded = proofstorm_kube::LoadedCell::at_revision(cell, bound)?;
-    let mut loaded = super::with_component_statuses(context, loaded).await?;
+    let mut loaded = super::with_component_statuses(context, loaded, &live).await?;
     if let Some(status) = loaded.resource.status.as_mut() {
         for component in &mut status.components {
             if loaded.revision.lock.entries.iter().any(|e| {

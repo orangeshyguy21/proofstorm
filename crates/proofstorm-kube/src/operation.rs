@@ -326,6 +326,19 @@ fn unsatisfied(
     }
 }
 
+/// The components whose status an action's admission reads.
+#[must_use]
+pub fn admission_components(action: &CellAction) -> std::collections::BTreeSet<String> {
+    let mut components: std::collections::BTreeSet<String> = action_participants(action)
+        .into_iter()
+        .map(|(component, _)| component.to_owned())
+        .collect();
+    if let Some((executor, target)) = action_execution_target(action) {
+        components.extend([executor.to_owned(), target.to_owned()]);
+    }
+    components
+}
+
 fn action_execution_target(action: &CellAction) -> Option<(&str, &str)> {
     match action {
         CellAction::ComponentForensics(request) => {
