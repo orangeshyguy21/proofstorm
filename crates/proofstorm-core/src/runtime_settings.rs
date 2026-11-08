@@ -9,7 +9,7 @@ use crate::{NO_LIMIT, ResourceAmount, quantity_value};
 /// The controller's CPU request. The chart's values must match these defaults.
 pub const CONTROLLER_CPU_REQUEST: &str = "250m";
 pub const CONTROLLER_MEMORY_REQUEST: &str = "64Mi";
-pub const CONTROLLER_MEMORY_LIMIT: &str = "256Mi";
+pub const CONTROLLER_MEMORY_LIMIT: &str = "1Gi";
 
 /// How much work the controller runs at once, and how long a one-off action
 /// may wait to start before it fails without running.
@@ -23,6 +23,10 @@ pub struct ControllerLimits {
     /// instead of starting. By then its caller has usually given up, and a late
     /// start would run, say, a payment hours after anyone expected it (PS-44).
     pub start_deadline_seconds: u32,
+    /// Log each reconcile that takes at least this many milliseconds, with the
+    /// object's age and the outcome; 0 logs every reconcile. A slow reconcile
+    /// holds back every later event for its object.
+    pub reconcile_log_ms: u32,
 }
 
 impl Default for ControllerLimits {
@@ -33,16 +37,18 @@ impl Default for ControllerLimits {
             native_starts_per_component: 2,
             native_polls: 6,
             start_deadline_seconds: 120,
+            reconcile_log_ms: 5000,
         }
     }
 }
 
-const ENV: [&str; 5] = [
+const ENV: [&str; 6] = [
     "PROOFSTORM_ACTION_SLOTS",
     "PROOFSTORM_NATIVE_STARTS",
     "PROOFSTORM_NATIVE_STARTS_PER_COMPONENT",
     "PROOFSTORM_NATIVE_POLLS",
     "PROOFSTORM_START_DEADLINE_SECONDS",
+    "PROOFSTORM_RECONCILE_LOG_MS",
 ];
 
 impl ControllerLimits {
@@ -79,13 +85,14 @@ impl ControllerLimits {
 
     /// Environment variables the controller reads at startup.
     #[must_use]
-    pub fn env(&self) -> [(&'static str, String); 5] {
+    pub fn env(&self) -> [(&'static str, String); 6] {
         [
             (ENV[0], self.action_slots.to_string()),
             (ENV[1], self.native_starts.to_string()),
             (ENV[2], self.native_starts_per_component.to_string()),
             (ENV[3], self.native_polls.to_string()),
             (ENV[4], self.start_deadline_seconds.to_string()),
+            (ENV[5], self.reconcile_log_ms.to_string()),
         ]
     }
 
@@ -104,7 +111,8 @@ impl ControllerLimits {
                 1 => limits.native_starts = value.parse().map_err(|_| invalid())?,
                 2 => limits.native_starts_per_component = value.parse().map_err(|_| invalid())?,
                 3 => limits.native_polls = value.parse().map_err(|_| invalid())?,
-                _ => limits.start_deadline_seconds = value.parse().map_err(|_| invalid())?,
+                4 => limits.start_deadline_seconds = value.parse().map_err(|_| invalid())?,
+                _ => limits.reconcile_log_ms = value.parse().map_err(|_| invalid())?,
             }
         }
         limits.validate()?;
@@ -154,6 +162,8 @@ pub struct ControllerSettings {
     pub native_polls: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_deadline_seconds: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconcile_log_ms: Option<u32>,
 }
 
 /// One settable key: its dotted name, whether it holds a quantity or a count,
@@ -169,7 +179,7 @@ const RESTART: &str = "restarts the controller once";
 const RECREATE: &str =
     "applies when the cluster is created: storm setup --recreate, which deletes all cells";
 
-pub const SETTING_KEYS: [SettingKey; 11] = [
+pub const SETTING_KEYS: [SettingKey; 12] = [
     SettingKey {
         name: "controller.cpu.request",
         quantity: true,
@@ -225,6 +235,12 @@ pub const SETTING_KEYS: [SettingKey; 11] = [
         effect: RESTART,
     },
     SettingKey {
+        name: "controller.reconcile_log_ms",
+        quantity: false,
+        default: "5000",
+        effect: RESTART,
+    },
+    SettingKey {
         name: "cluster.agents",
         quantity: false,
         default: "1",
@@ -254,6 +270,7 @@ impl RuntimeSettings {
             start_deadline_seconds: c
                 .start_deadline_seconds
                 .unwrap_or(defaults.start_deadline_seconds),
+            reconcile_log_ms: c.reconcile_log_ms.unwrap_or(defaults.reconcile_log_ms),
         }
     }
 
@@ -282,6 +299,7 @@ impl RuntimeSettings {
             }
             "controller.native_polls" => c.native_polls.map(|v| v.to_string()),
             "controller.start_deadline_seconds" => c.start_deadline_seconds.map(|v| v.to_string()),
+            "controller.reconcile_log_ms" => c.reconcile_log_ms.map(|v| v.to_string()),
             "cluster.agents" => self.cluster.agents.map(|v| v.to_string()),
             "cluster.max_pods_per_node" => self.cluster.max_pods_per_node.map(|v| v.to_string()),
             _ => None,
@@ -373,6 +391,12 @@ mod tests {
         });
         assert_eq!(read, Ok(limits));
         assert_eq!(ControllerLimits::from_env(|_| None), Ok(limits));
+        // 0 logs every reconcile; it isn't a pool size that must be at least 1.
+        let verbose = ControllerLimits::from_env(|name| {
+            (name == "PROOFSTORM_RECONCILE_LOG_MS").then(|| "0".into())
+        })
+        .unwrap();
+        assert_eq!(verbose.reconcile_log_ms, 0);
     }
 
     #[test]
@@ -413,15 +437,15 @@ mod tests {
         }}))
         .unwrap();
         assert!(bad.validate().unwrap_err().contains("must not exceed"));
-        // An unset value is its default: 250m CPU requested, a 256Mi memory limit.
+        // An unset value is its default: 250m CPU requested, a 1Gi memory limit.
         for (setting, message) in [
             (
                 serde_json::json!({"cpu": {"limit": "100m"}}),
                 "controller.cpu.request (250m by default) must not exceed controller.cpu.limit (100m)",
             ),
             (
-                serde_json::json!({"memory": {"request": "512Mi"}}),
-                "controller.memory.request (512Mi) must not exceed controller.memory.limit (256Mi by default)",
+                serde_json::json!({"memory": {"request": "2Gi"}}),
+                "controller.memory.request (2Gi) must not exceed controller.memory.limit (1Gi by default)",
             ),
             (
                 serde_json::json!({"memory": {"limit": "32Mi"}}),
@@ -454,7 +478,7 @@ mod tests {
         let settings: RuntimeSettings = serde_json::from_value(serde_json::json!({"controller": {
             "cpu": {"request": "1", "limit": "2"}, "memory": {"request": "1Gi", "limit": "2Gi"},
             "action_slots": 20, "native_starts": 5, "native_starts_per_component": 3,
-            "native_polls": 7, "start_deadline_seconds": 300
+            "native_polls": 7, "start_deadline_seconds": 300, "reconcile_log_ms": 0
         }, "cluster": {"agents": 3, "max_pods_per_node": 1000}}))
         .unwrap();
         for key in &SETTING_KEYS {

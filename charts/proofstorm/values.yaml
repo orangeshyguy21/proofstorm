@@ -9,13 +9,16 @@ image:
 # 24 agents on one cell, a 250m limit kept it throttled in every scheduling
 # period, so starts slowed until they missed their deadline. Unthrottled it used
 # about 0.28 cores. The request keeps its fair share on a busy node; memory
-# stays capped because running out takes the whole host down.
+# stays capped because running out takes the whole host down. The controller
+# caches every action, component and pod it watches, so its memory grows with
+# the work it holds: at 256Mi, a 24-agent swarm's 19,600 actions crash-looped it
+# out of memory, and a controller that can't start can't expire them either.
 resources:
   requests:
     cpu: 250m
     memory: 64Mi
   limits:
-    memory: 256Mi
+    memory: 1Gi
 
 # Work the controller runs at once and how long a one-off action may wait to
 # start. `storm config` sets these in runtime.toml and `storm setup` applies
@@ -27,3 +30,5 @@ controller:
   nativeStartsPerComponent: 2
   nativePolls: 6
   startDeadlineSeconds: 120
+  # Log each reconcile that takes at least this long; 0 logs every reconcile.
+  reconcileLogMs: 5000

@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
@@ -6,11 +8,28 @@ fn workflow(source: &str) -> Value {
     serde_saphyr::from_str(source).unwrap()
 }
 
-#[test]
-fn actual_merge_dependencies_reject_failure_cancellation_skip_and_missing_results() {
-    let checks = workflow(include_str!("../../../.github/workflows/check.yml"));
-    let job = &checks["jobs"]["merge-qualification"];
-    assert_eq!(job["name"], "Merge qualification");
+/// Run a gate step's own `jq -e '...' <<< "$NEEDS"` against job results.
+fn gate_passes(run: &str, needs: &Value) -> bool {
+    let program = run
+        .strip_prefix("jq -e '")
+        .and_then(|rest| rest.strip_suffix("' <<< \"$NEEDS\""))
+        .unwrap_or_else(|| panic!("unexpected gate step: {run}"));
+    let mut jq = Command::new("jq")
+        .args(["-e", program])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    jq.stdin
+        .take()
+        .unwrap()
+        .write_all(needs.to_string().as_bytes())
+        .unwrap();
+    jq.wait().unwrap().success()
+}
+
+/// A gate that requires every dependency, by exact name, to succeed.
+fn assert_gate_requires_every_dependency(job: &Value, run: &str) {
     assert_eq!(job["if"], "always()");
     let needs = job["needs"].as_array().unwrap();
     let good: Value = needs
@@ -23,18 +42,29 @@ fn actual_merge_dependencies_reject_failure_cancellation_skip_and_missing_result
         })
         .collect::<serde_json::Map<_, _>>()
         .into();
-    proofstorm_qualification::aggregate(&good).unwrap();
+    assert!(gate_passes(run, &good));
     for name in needs {
         let name = name.as_str().unwrap();
         for result in ["failure", "cancelled", "skipped", ""] {
             let mut broken = good.clone();
             broken[name]["result"] = result.into();
-            assert!(proofstorm_qualification::aggregate(&broken).is_err());
+            assert!(!gate_passes(run, &broken), "{name}: {result}");
         }
         let mut missing = good.clone();
         missing.as_object_mut().unwrap().remove(name);
-        assert!(proofstorm_qualification::aggregate(&missing).is_err());
+        assert!(!gate_passes(run, &missing), "{name} missing");
     }
+    let mut unknown = good;
+    unknown["unknown"] = json!({"result":"success"});
+    assert!(!gate_passes(run, &unknown));
+}
+
+#[test]
+fn actual_merge_dependencies_reject_failure_cancellation_skip_and_missing_results() {
+    let checks = workflow(include_str!("../../../.github/workflows/check.yml"));
+    let job = &checks["jobs"]["merge-qualification"];
+    assert_eq!(job["name"], "Merge qualification");
+    assert_gate_requires_every_dependency(job, job["steps"][0]["run"].as_str().unwrap());
     assert_eq!(
         checks["jobs"]["qualification"]["uses"],
         "./.github/workflows/qualification.yml"
@@ -42,7 +72,7 @@ fn actual_merge_dependencies_reject_failure_cancellation_skip_and_missing_result
     assert!(checks["jobs"]["qualification"]["if"].is_null());
     assert_eq!(checks["on"]["push"]["branches"], json!(["main"]));
     assert_eq!(checks["on"]["pull_request"]["branches"], json!(["main"]));
-    for event in ["pull_request", "push", "merge_group"] {
+    for event in ["pull_request", "push"] {
         assert!(checks["on"].get(event).is_some());
         assert!(checks["on"][event]["paths"].is_null());
         assert!(checks["on"][event]["paths-ignore"].is_null());
@@ -72,16 +102,16 @@ fn native_execution_and_evidence_cannot_be_optional_or_publish_packages() {
         }
     }
     assert_eq!(jobs["execute"]["strategy"]["fail-fast"], false);
-    assert_eq!(jobs["verify"]["if"], "always()");
     let needs: BTreeSet<_> = jobs["verify"]["needs"]
         .as_array()
         .unwrap()
         .iter()
         .map(|name| name.as_str().unwrap())
         .collect();
-    assert_eq!(
-        needs,
-        ["plan", "build", "images", "preflight", "execute"].into()
+    assert_eq!(needs, ["plan", "build", "images", "execute"].into());
+    assert_gate_requires_every_dependency(
+        &jobs["verify"],
+        jobs["verify"]["steps"][0]["run"].as_str().unwrap(),
     );
     let platforms: BTreeSet<_> = jobs["build"]["strategy"]["matrix"]["include"]
         .as_array()
@@ -90,42 +120,19 @@ fn native_execution_and_evidence_cannot_be_optional_or_publish_packages() {
         .map(|entry| entry["platform"].as_str().unwrap())
         .collect();
     assert_eq!(platforms, ["linux/amd64", "linux/arm64"].into());
-    assert_eq!(jobs["preflight"]["needs"], json!(["build", "images"]));
-    let preflight_arches: BTreeSet<_> = jobs["preflight"]["strategy"]["matrix"]["include"]
-        .as_array()
-        .unwrap()
+    // Steps may not continue on error, so the earlier-receipts download must
+    // use a pattern: a pattern that matches nothing succeeds and downloads nothing.
+    let steps = jobs["execute"]["steps"].as_array().unwrap();
+    let earlier = steps
         .iter()
-        .map(|entry| entry["arch"].as_str().unwrap())
-        .collect();
-    assert_eq!(preflight_arches, ["amd64", "arm64"].into());
-    let steps = jobs["preflight"]["steps"].as_array().unwrap();
-    let smoke = steps
-        .iter()
-        .position(|step| {
-            step["run"]
-                .as_str()
-                .is_some_and(|run| run.contains("native-runtime-smoke"))
-        })
+        .find(|step| step["with"]["path"] == "${{ runner.temp }}/earlier-receipts")
         .unwrap();
-    let restore = steps
-        .iter()
-        .position(|step| {
-            step["run"]
-                .as_str()
-                .is_some_and(|value| value.contains("tar -xf"))
-        })
-        .unwrap();
-    assert!(restore < smoke);
-    assert!(steps[smoke]["if"].is_null());
-    assert!(steps.iter().all(|step| {
-        !step["uses"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("actions/upload-artifact@"))
-    }));
+    assert!(earlier["with"]["name"].is_null());
     assert_eq!(
-        jobs["execute"]["needs"],
-        json!(["plan", "build", "images", "preflight"])
+        earlier["with"]["pattern"],
+        "qualification-receipts-${{ matrix.shard }}-${{ github.sha }}"
     );
+    assert_eq!(jobs["execute"]["needs"], json!(["plan", "build", "images"]));
 }
 
 #[test]
@@ -134,8 +141,8 @@ fn image_preparation_is_shared_and_required_before_native_execution() {
     let jobs = &workflow["jobs"];
     assert_eq!(jobs["images"]["needs"], "plan");
     assert!(jobs["images"]["strategy"].is_null());
-    for job in ["preflight", "execute"] {
-        let steps = jobs[job]["steps"].as_array().unwrap();
+    {
+        let steps = jobs["execute"]["steps"].as_array().unwrap();
         let download = steps
             .iter()
             .position(|step| step["with"]["name"] == "qualification-images-${{ github.sha }}")

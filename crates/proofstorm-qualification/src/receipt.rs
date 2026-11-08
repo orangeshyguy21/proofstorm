@@ -48,54 +48,11 @@ pub fn verify_receipts(plan: &Plan, receipts: &[Receipt]) -> Result<()> {
     let mut seen = BTreeSet::new();
     let digest = plan.digest();
     for receipt in receipts {
-        let case = plan.case(&receipt.case_id)?;
-        ensure!(
-            case.required,
-            "receipt for an unscheduled qualification case"
-        );
+        check(plan, &digest, receipt)?;
         ensure!(
             seen.insert(receipt.case_id.as_str()),
             "duplicate qualification receipt"
         );
-        ensure!(
-            receipt.format_version == 1
-                && receipt.identity == plan.identity
-                && receipt.plan_digest == digest,
-            "stale or foreign qualification receipt"
-        );
-        ensure!(
-            receipt.platform == case.platform
-                && receipt.components == case.components
-                && receipt.claims == case.claims,
-            "qualification receipt does not match its exact case"
-        );
-        ensure!(
-            receipt.passed
-                && receipt.cleanup_verified
-                && receipt.preservation_verified
-                && receipt.stage == "complete",
-            "failed qualification or unverified cleanup/preservation: {}",
-            receipt.case_id
-        );
-        let sources: BTreeSet<_> = case
-            .components
-            .iter()
-            .map(|component| component.source.as_str())
-            .collect();
-        ensure!(
-            sources == receipt.images.keys().map(String::as_str).collect(),
-            "image evidence is incomplete"
-        );
-        for image in receipt.images.values() {
-            for digest in [&image.manifest, &image.config] {
-                ensure!(
-                    digest.strip_prefix("sha256:").is_some_and(
-                        |hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())
-                    ),
-                    "invalid observed image identity"
-                );
-            }
-        }
     }
     let missing: Vec<_> = expected.difference(&seen).collect();
     ensure!(
@@ -105,28 +62,53 @@ pub fn verify_receipts(plan: &Plan, receipts: &[Receipt]) -> Result<()> {
     Ok(())
 }
 
-/// A stable merge check must explicitly require success from its dependencies.
-/// Unknown jobs are refused so renaming a lane cannot silently remove coverage.
-///
-/// # Errors
-/// Rejects any missing, unexpected or unsuccessful dependency.
-pub fn aggregate(needs: &serde_json::Value) -> Result<()> {
-    let jobs = needs
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("missing CI dependency results"))?;
-    let expected = BTreeSet::from(["quick", "rust", "macos-installer-contract", "qualification"]);
+/// One receipt's evidence for its exact case in an already validated plan.
+/// The shard runner uses this to keep passes from an earlier attempt.
+pub(crate) fn check(plan: &Plan, digest: &str, receipt: &Receipt) -> Result<()> {
+    let case = plan.case(&receipt.case_id)?;
     ensure!(
-        jobs.keys().map(String::as_str).collect::<BTreeSet<_>>() == expected,
-        "merge check dependency set changed"
+        case.required,
+        "receipt for an unscheduled qualification case"
     );
-    let statuses: BTreeMap<_, _> = jobs
+    ensure!(
+        receipt.format_version == 1
+            && receipt.identity == plan.identity
+            && receipt.plan_digest == digest,
+        "stale or foreign qualification receipt"
+    );
+    ensure!(
+        receipt.platform == case.platform
+            && receipt.components == case.components
+            && receipt.claims == case.claims,
+        "qualification receipt does not match its exact case"
+    );
+    ensure!(
+        receipt.passed
+            && receipt.cleanup_verified
+            && receipt.preservation_verified
+            && receipt.stage == "complete",
+        "failed qualification or unverified cleanup/preservation: {}",
+        receipt.case_id
+    );
+    let sources: BTreeSet<_> = case
+        .components
         .iter()
-        .map(|(name, value)| (name, value["result"].as_str()))
+        .map(|component| component.source.as_str())
         .collect();
     ensure!(
-        statuses.values().all(|status| *status == Some("success")),
-        "merge qualification requires every dependency to succeed: {statuses:?}"
+        sources == receipt.images.keys().map(String::as_str).collect(),
+        "image evidence is incomplete"
     );
+    for image in receipt.images.values() {
+        for digest in [&image.manifest, &image.config] {
+            ensure!(
+                digest.strip_prefix("sha256:").is_some_and(
+                    |hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())
+                ),
+                "invalid observed image identity"
+            );
+        }
+    }
     Ok(())
 }
 
@@ -217,29 +199,5 @@ mod tests {
         let cln = plan.cases.iter_mut().find(|case| matches!(&case.scenario, Scenario::Image { component } if component.implementation == "cln")).unwrap();
         cln.components[0].image = format!("example.invalid/cln@sha256:{}", "b".repeat(64));
         assert!(plan.validate().is_err());
-    }
-
-    #[test]
-    fn failed_cancelled_skipped_missing_and_unknown_jobs_block_merges() {
-        let names = ["quick", "rust", "macos-installer-contract", "qualification"];
-        let good: serde_json::Value = names
-            .into_iter()
-            .map(|name| (name.to_owned(), serde_json::json!({"result":"success"})))
-            .collect::<serde_json::Map<_, _>>()
-            .into();
-        aggregate(&good).unwrap();
-        for name in names {
-            for status in ["failure", "cancelled", "skipped", "neutral", ""] {
-                let mut changed = good.clone();
-                changed[name]["result"] = status.into();
-                assert!(aggregate(&changed).is_err());
-            }
-            let mut changed = good.clone();
-            changed.as_object_mut().unwrap().remove(name);
-            assert!(aggregate(&changed).is_err());
-        }
-        let mut changed = good;
-        changed["unknown"] = serde_json::json!({"result":"success"});
-        assert!(aggregate(&changed).is_err());
     }
 }

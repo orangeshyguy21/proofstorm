@@ -227,6 +227,37 @@ fn pod_belongs_to_instance(pod: &Pod, key: &str) -> bool {
         && pod.metadata.namespace.as_deref() == Some(instance_namespace(key).as_str())
 }
 
+/// Watch `api`, dropping each object's `managedFields` before anything caches
+/// it. The controller never reads them, and they were a third of every action
+/// on a 24-agent swarm; its caches grow with the work it holds.
+pub(crate) fn watch_lean<K>(
+    api: Api<K>,
+    config: watcher::Config,
+) -> impl futures::Stream<Item = watcher::Result<watcher::Event<K>>> + Send
+where
+    K: kube::Resource + Clone + serde::de::DeserializeOwned + std::fmt::Debug + Send + 'static,
+{
+    watcher(api, config).modify(|object| object.managed_fields_mut().clear())
+}
+
+/// A controller over `api` whose cache holds objects without `managedFields`.
+fn lean_controller<K>(api: Api<K>) -> Controller<K>
+where
+    K: kube::Resource<DynamicType = ()>
+        + Clone
+        + serde::de::DeserializeOwned
+        + std::fmt::Debug
+        + Send
+        + Sync
+        + 'static,
+{
+    let (store, writer) = reflector::store();
+    Controller::for_stream(
+        reflector(writer, watch_lean(api, watcher::Config::default())).applied_objects(),
+        store,
+    )
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(argument) = std::env::args().nth(1) {
@@ -252,11 +283,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "PROOFSTORM_PROBER_IMAGE must name the installed controller image")?;
     let (probes, triggers) = probes::Manager::new(client.clone(), image);
     let limits = proofstorm_core::ControllerLimits::from_env(|name| std::env::var(name).ok())?;
-    let cell_watch = Controller::new(cells, watcher::Config::default());
+    probes.set_verbose(limits.reconcile_log_ms == 0);
+    let cell_watch = lean_controller(cells);
     let (components, component_writer) = reflector::store();
     let component_cache = reflector(
         component_writer,
-        watcher(
+        watch_lean(
             Api::<ProofstormComponent>::all(client.clone()),
             watcher::Config::default(),
         ),
@@ -293,7 +325,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(error) => eprintln!("reconciliation failed: {error}"),
             }
         });
-    let action_controller = Controller::new(actions, watcher::Config::default())
+    let action_controller = lean_controller(actions)
         .with_config(kube::runtime::controller::Config::default().concurrency(limits.action_slots))
         .shutdown_on_signal()
         .run(
@@ -307,7 +339,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(error) => eprintln!("action reconciliation failed: {error}"),
             }
         });
-    let candidate_controller = Controller::new(candidate_builds, watcher::Config::default())
+    let candidate_controller = lean_controller(candidate_builds)
         .with_config(kube::runtime::controller::Config::default().concurrency(2))
         .shutdown_on_signal()
         .run(
@@ -2458,6 +2490,35 @@ async fn cleanup(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action,
     context.probes.remove(&cell.spec.instance_key);
     private_transfer::close(&cell)?;
     let instance_namespace = instance_namespace(&cell.spec.instance_key);
+    let control_namespace = cell
+        .namespace()
+        .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
+    let actions =
+        Api::<ProofstormCellAction>::namespaced(context.client.clone(), &control_namespace);
+    let runtime_actions = actions
+        .list(&ListParams::default().labels(&format!(
+            "proofstorm.dev/instance={}",
+            cell.spec.instance_key
+        )))
+        .await?
+        .items;
+    let namespaces = Api::<Namespace>::all(context.client.clone());
+    let namespace = if runtime_actions.is_empty() {
+        namespaces.get_opt(&instance_namespace).await?
+    } else {
+        None
+    };
+    // Say which wait this pass is in, so a close that takes too long shows why.
+    let message = if !runtime_actions.is_empty() {
+        format!(
+            "removing {} runtime actions before deleting the instance namespace",
+            runtime_actions.len()
+        )
+    } else if let Some(namespace) = &namespace {
+        namespace_wait(namespace)
+    } else {
+        "instance namespace is gone; writing the teardown receipt".to_owned()
+    };
     patch_status(
         cell.as_ref(),
         context,
@@ -2491,24 +2552,13 @@ async fn cleanup(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action,
                 .as_ref()
                 .and_then(|status| status.inventory_digest.clone()),
             teardown_receipt: None,
-            message: Some("deleting instance namespace and verifying absence".to_owned()),
+            message: Some(message),
         },
     )
     .await?;
 
-    let control_namespace = cell
-        .namespace()
-        .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
-    let actions =
-        Api::<ProofstormCellAction>::namespaced(context.client.clone(), &control_namespace);
-    let runtime_actions = actions
-        .list(&ListParams::default().labels(&format!(
-            "proofstorm.dev/instance={}",
-            cell.spec.instance_key
-        )))
-        .await?;
-    if !runtime_actions.items.is_empty() {
-        for action in runtime_actions.items {
+    if !runtime_actions.is_empty() {
+        for action in runtime_actions {
             gone(
                 actions
                     .delete(&action.name_any(), &DeleteParams::default())
@@ -2518,8 +2568,11 @@ async fn cleanup(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action,
         return Err(Error::ActionCleanupPending(cell.spec.instance_key.clone()));
     }
 
-    let namespaces = Api::<Namespace>::all(context.client.clone());
-    if namespaces.get_opt(&instance_namespace).await?.is_some() {
+    if let Some(namespace) = namespace {
+        // Deleting a namespace that is already terminating changes nothing.
+        if namespace.metadata.deletion_timestamp.is_some() {
+            return Err(Error::CleanupPending(instance_namespace));
+        }
         match namespaces
             .delete(&instance_namespace, &DeleteParams::default())
             .await
@@ -2533,6 +2586,42 @@ async fn cleanup(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action,
     private_transfer::remove_closed(&cell)?;
     write_teardown_receipt(cell.as_ref(), context, &instance_namespace).await?;
     Ok(Action::await_change())
+}
+
+/// What deleting the instance namespace waits on: Kubernetes' own reasons
+/// (content or finalizers remaining, an API it couldn't discover), so a slow
+/// close names its cause in the cell status.
+fn namespace_wait(namespace: &Namespace) -> String {
+    if namespace.metadata.deletion_timestamp.is_none() {
+        return "deleting the instance namespace".to_owned();
+    }
+    let reasons = namespace
+        .status
+        .as_ref()
+        .and_then(|status| status.conditions.as_ref())
+        .into_iter()
+        .flatten()
+        .filter(|condition| condition.status == "True")
+        .map(|condition| match condition.message.as_deref() {
+            Some(message) => format!("{}: {message}", condition.type_),
+            None => condition.type_.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut message = "waiting for Kubernetes to delete the instance namespace".to_owned();
+    if !reasons.is_empty() {
+        message.push_str("; ");
+        message.push_str(&reasons.join("; "));
+    }
+    // A status message, not a log: keep it short.
+    if message.len() > 600 {
+        let end = (0..=600)
+            .rev()
+            .find(|&index| message.is_char_boundary(index))
+            .unwrap_or(0);
+        message.truncate(end);
+        message.push('…');
+    }
+    message
 }
 
 /// Write the cell status: the full status when anything but the heartbeat
@@ -2845,11 +2934,45 @@ where
     result
 }
 
+/// Run one reconcile and log it when it took at least `log_ms` (0 logs every
+/// one). The line carries the object's age, so a reconcile that came late shows
+/// as clearly as one that ran long.
+async fn logged<K, F>(object: &K, log_ms: u32, work: F) -> Result<Action, Error>
+where
+    K: kube::Resource<DynamicType = ()>,
+    F: std::future::Future<Output = Result<Action, Error>>,
+{
+    let started = std::time::Instant::now();
+    let result = work.await;
+    let took = started.elapsed().as_millis();
+    if took >= u128::from(log_ms) {
+        let age = object.meta().creation_timestamp.as_ref().map_or_else(
+            || "?".into(),
+            |time| (now_unix() - time.0.as_second()).to_string(),
+        );
+        let outcome = match &result {
+            Ok(action) => format!("{action:?}"),
+            Err(error) => format!("error: {error}"),
+        };
+        eprintln!(
+            "reconcile {} {} age={age}s took={took}ms version={} -> {outcome}",
+            K::kind(&()),
+            kube::runtime::reflector::ObjectRef::from_obj(object),
+            object.meta().resource_version.as_deref().unwrap_or("?"),
+        );
+    }
+    result
+}
+
 async fn reconcile_cell(cell: Arc<ProofstormCell>, context: Arc<Context>) -> Result<Action, Error> {
-    with_backoff(
+    logged(
         cell.as_ref(),
-        &context.retries,
-        Box::pin(reconcile(cell.clone(), context.clone())),
+        context.limits.reconcile_log_ms,
+        with_backoff(
+            cell.as_ref(),
+            &context.retries,
+            Box::pin(reconcile(cell.clone(), context.clone())),
+        ),
     )
     .await
 }
@@ -2858,10 +2981,14 @@ async fn reconcile_action_with_backoff(
     action: Arc<ProofstormCellAction>,
     context: Arc<Context>,
 ) -> Result<Action, Error> {
-    with_backoff(
+    logged(
         action.as_ref(),
-        &context.retries,
-        Box::pin(reconcile_action(action.clone(), context.clone())),
+        context.limits.reconcile_log_ms,
+        with_backoff(
+            action.as_ref(),
+            &context.retries,
+            Box::pin(reconcile_action(action.clone(), context.clone())),
+        ),
     )
     .await
 }
@@ -2870,10 +2997,14 @@ async fn reconcile_candidate_build_with_backoff(
     build: Arc<ProofstormCandidateBuild>,
     context: Arc<Context>,
 ) -> Result<Action, Error> {
-    with_backoff(
+    logged(
         build.as_ref(),
-        &context.retries,
-        Box::pin(reconcile_candidate_build(build.clone(), context.clone())),
+        context.limits.reconcile_log_ms,
+        with_backoff(
+            build.as_ref(),
+            &context.retries,
+            Box::pin(reconcile_candidate_build(build.clone(), context.clone())),
+        ),
     )
     .await
 }
@@ -3457,6 +3588,34 @@ mod tests {
                 k8s_openapi::jiff::Timestamp::UNIX_EPOCH,
             ));
         assert_eq!(finalizer_patch(&cell), None, "a deleted cell gets none");
+    }
+
+    #[test]
+    fn a_slow_namespace_deletion_names_what_it_waits_on() {
+        let mut namespace: Namespace = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "proofstorm-i0123456789012345678"}
+        }))
+        .unwrap();
+        assert_eq!(
+            namespace_wait(&namespace),
+            "deleting the instance namespace"
+        );
+        namespace = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "proofstorm-i0123456789012345678",
+                "deletionTimestamp": "2026-11-08T18:00:00Z"},
+            "status": {"phase": "Terminating", "conditions": [
+                {"type": "NamespaceDeletionDiscoveryFailure", "status": "False"},
+                {"type": "NamespaceContentRemaining", "status": "True",
+                    "message": "Some resources are remaining: pods. has 2 resource instances"},
+                {"type": "NamespaceFinalizersRemaining", "status": "True"}
+            ]}
+        }))
+        .unwrap();
+        assert_eq!(
+            namespace_wait(&namespace),
+            "waiting for Kubernetes to delete the instance namespace; NamespaceContentRemaining: \
+             Some resources are remaining: pods. has 2 resource instances; NamespaceFinalizersRemaining"
+        );
     }
 
     #[tokio::test]

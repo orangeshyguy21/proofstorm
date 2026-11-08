@@ -13,7 +13,7 @@ retired=(
   scripts/test_managed_gui.py scripts/test_cli_progress.py scripts/test_smoke_cleanup.py
   scripts/test-installation-isolation.py scripts/agent-usability-cluster.py
   scripts/run-agent-usability-suite.sh scripts/run-private-handoff-campaign.py
-  crates/proofstorm-web/assets/proofstorm-logo-light.svg
+  crates/proofstorm-web/assets/proofstorm-logo-light.svg scripts/qualification-shard.sh
 )
 for path in "${retired[@]}"; do
   if [[ -e "$path" || -L "$path" ]]; then

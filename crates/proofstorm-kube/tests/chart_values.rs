@@ -60,6 +60,7 @@ fn chart_defaults_match_the_runtime_settings_defaults() {
             "startDeadlineSeconds",
             u64::from(limits.start_deadline_seconds),
         ),
+        ("reconcileLogMs", u64::from(limits.reconcile_log_ms)),
     ] {
         assert_eq!(controller[key].as_u64(), Some(expected), "{key}");
     }

@@ -1,7 +1,7 @@
 # Merge qualification
 
-`Checks` starts on every pull request, main push, manual run, merge-group
-event and weekly schedule (Mondays 07:17 UTC). Its stable `Merge qualification` result requires formatting, Rust tests,
+`Checks` starts on every pull request, main push, manual run and weekly
+schedule (Mondays 07:17 UTC). Its stable `Merge qualification` result requires formatting, Rust tests,
 the Mac installer isolation contract and native catalog compatibility to succeed.
 Every main SHA keeps its own run; only obsolete PR runs are cancelled. A failed
 qualification therefore also prevents the existing release-promotion validator
@@ -13,13 +13,11 @@ record exact image sources, component versions, storage/authentication choices,
 wallet pairings and coverage claims. The required compatibility suite exercises
 each supported pairing on native Linux AMD64 and ARM64. Main pushes, the weekly
 schedule and manual runs always select the complete compatibility matrix, and
-release promotion requires a successful main run. Pull requests select the small
-`pull` suite (smoke, runtime lifecycle, native exec and one CDK/LND/SQLite round
-trip per architecture) unless they change catalog definitions, component images
-or their Kubernetes rendering (`docker/`, `proofstorm-core` catalogs,
-`proofstorm-kube`, `scripts/catalog-image.sh`, `scripts/qualification-images.sh`);
-those, and a failed or empty
-diff, select the complete compatibility matrix. The fixed baseline includes
+release promotion requires a successful main run. Pull requests always select
+the small `pull` suite (smoke, runtime lifecycle, native exec and one
+CDK/LND/SQLite round trip per architecture), so each change runs the complete
+matrix once, after merge. To run it before merging, start `Checks` manually on
+the branch; that run builds no release bundles. The fixed baseline includes
 native image and Lightning contracts, preferred external mint/wallet payment paths
 with SQLite and PostgreSQL, Redis, Keycloak, workspace persistence and control-plane
 lifecycle checks.
@@ -57,7 +55,14 @@ promotion. Required BDK cases use four sequential quote requests and retain
 configuration, valid deposits, invalid-input/dust checks, restart persistence and
 cleanup. No `continue-on-error` hides failures. A failed case is retried once in a
 fresh work directory; a pass on retry is listed as "Passed only on retry" with the
-first attempt's public diagnostic, so flaky cases stay visible without blocking.
+first attempt's public diagnostic, in the job log and in the run's summary page.
+A retry pass does not block, but it can hide a real product bug, so read it.
+
+The planner splits each architecture's cases into nine shards. Runtime cases,
+which start their own cluster, are spread evenly, and the quick image and
+Lightning checks fill the lighter shards. With main's two bundle jobs that is
+GitHub's free plan's 20 concurrent jobs. The shard runner is
+`proofstorm-qualification shard`.
 
 Plans explicitly bind their suite (`pull`, `documentation`, `compatibility`, or
 `full`), so receipts cannot be reused between suites. The planner verifies every
@@ -92,10 +97,11 @@ Controller reuse verifies its source identity, platform and executable metadata.
 PR jobs have no package-write permissions and image preparation publishes no
 packages or custom upstream mirrors.
 
-Both native architectures must restore their build artifacts on fresh runners,
-start an owned runtime, pass the Bitcoin smoke scenario and verify cleanup before
-the selected matrix begins. Linux ARM64 checkout setup uses its own checksum-verified host-tool pins; this does not add a published
-Linux ARM64 installer or update channel.
+Every shard restores its architecture's build artifacts on a fresh runner. There
+is no separate smoke preflight: smoke runs in the fanout, and a broken runtime
+fails each shard's first case within minutes. Linux ARM64 checkout setup uses its
+own checksum-verified host-tool pins; this does not add a published Linux ARM64
+installer or update channel.
 
 Each live case owns a disposable installation. Its fixture must instantiate all
 planned component versions. The runner checks teardown and compares preexisting
@@ -185,8 +191,10 @@ attempt's `*.log` and `*.json` files are encrypted to it and uploaded as
 private key: `age -d -i KEY_FILE CASE-attempt-N.tar.gz.age | tar -xz`. Missing
 receipts indicate an interrupted or failed setup/execution. Local cleanup can be
 retried using `proofstorm-acceptance --cleanup WORK_DIRECTORY`; it only acts on
-that run's recorded resources. Re-run the entire hosted workflow after a failure:
-receipts from an earlier attempt intentionally cannot satisfy a newer attempt.
+that run's recorded resources. After a hosted failure, use "Re-run failed jobs":
+the plan keeps its attempt, and each re-run shard keeps the receipts of cases it
+already passed and runs only the rest. "Re-run all jobs" makes a new plan, which
+earlier receipts cannot satisfy.
 
 Console diagnostics include a fixed setup-stage/error category, the current mint
 test stage and operation elapsed time, available memory and disk, and Linux load,
@@ -228,7 +236,18 @@ error tail and wallet diagnostic reason that can accompany that code stay in the
 private log. Startup
 failures retain private pod status and current/previous logs from every component
 and initializer before runtime cleanup, including Lightning and identity-provider
-dependencies. Capture has a bounded time budget; these are not public CI artifacts.
+dependencies. Any failed gate also saves the controller's view under
+`controller-evidence/` before cleanup: the `proofstormd` log and previous log,
+cluster events, nodes, pods, namespaces with their deletion conditions, and the
+cells, actions, components and candidate builds as YAML. `kubelets.log` records
+whether the API server reached each node's kubelet, the connection that exec,
+logs and port-forward share. Each runtime container's own log (k3s on the
+nodes, the load balancer, the registry) is saved under its container name.
+Runs from a checkout,
+including every CI case, set `controller.reconcile_log_ms=0`, so that log has a
+line for every reconcile with its age, duration and outcome. CI includes these
+in the encrypted bundle. Capture has a bounded time budget; these are not
+public CI artifacts.
 All CDK payment backends and Keycloak wait for their linked PostgreSQL service
 before initializing the application. PostgreSQL readiness probes TCP loopback so
 its temporary socket-only bootstrap server cannot prematurely expose a ready

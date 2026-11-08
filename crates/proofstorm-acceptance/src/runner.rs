@@ -476,9 +476,20 @@ fn start_runtime(
             }
         }
     }
+    let mut settings = Vec::new();
     if let Some(agents) = cluster_agents {
+        settings.push(format!("cluster.agents={agents}"));
+    }
+    // A checkout run logs every controller reconcile, so a failed case's
+    // controller evidence shows what the controller was doing. Logs leave the
+    // runner only when a case fails. A released bundle may predate the
+    // setting, so bundle runs keep the default.
+    if artifacts.checkout.is_some() {
+        settings.push("controller.reconcile_log_ms=0".to_owned());
+    }
+    if !settings.is_empty() {
         let mut config = cli(artifacts, &home);
-        config.args(["config", "set", &format!("cluster.agents={agents}")]);
+        config.args(["config", "set"]).args(&settings);
         execute(config, &work.join("config.log"), 60, None)?;
     }
     let mut setup = cli(artifacts, &home);
@@ -866,6 +877,20 @@ pub fn run(
         report["error"] = json!(format!("{error:#}"));
     }
     save(&work, &report)?;
+    if operation.is_err()
+        && !cancelled.load(Ordering::SeqCst)
+        && home.join("runtime-resources.json").exists()
+    {
+        eprintln!("Saving controller evidence before cleanup...");
+        if let Err(error) = controller_evidence(&work) {
+            // The error can quote cluster output, so it stays in a private file.
+            eprintln!("Controller evidence is incomplete");
+            let _ = private_file(
+                &work.join("controller-evidence-error.log"),
+                format!("{error:#}\n").as_bytes(),
+            );
+        }
+    }
     let cleanup_result = if home.join("runtime-resources.json").exists() {
         eprintln!("Removing only this run's recorded runtime and storage...");
         cleanup(&work)
@@ -970,14 +995,157 @@ pub fn run(
     operation
 }
 
+/// Save the controller's record of a failed run before cleanup deletes the
+/// runtime: its log, cluster events, nodes, pods, namespaces and Proofstorm
+/// objects, whether each kubelet answers, and the runtime containers' own logs.
+/// The gate log shows what the test waited for; these show what the controller
+/// and the cluster under it were doing. They stay private: CI uploads them only
+/// encrypted, with the case's logs.
+fn controller_evidence(work: &Path) -> Result<()> {
+    let (installation, _) = read(work)?;
+    let kubectl = crate::kubectl::Kubectl::for_installation(&installation)?;
+    let directory = work.join("controller-evidence");
+    fs::DirBuilder::new().mode(0o700).create(&directory)?;
+    let logs = [
+        "logs",
+        "deployment/proofstormd",
+        "-n",
+        crate::kubectl::CONTROL_NAMESPACE,
+        "--all-containers",
+        "--timestamps",
+        "--tail=20000",
+    ];
+    let objects = "proofstormcells.proofstorm.dev,proofstormcellactions.proofstorm.dev,\
+        proofstormcomponents.proofstorm.dev,proofstormcandidatebuilds.proofstorm.dev";
+    let captures = [
+        ("proofstormd.log", logs.to_vec()),
+        (
+            "proofstormd-previous.log",
+            [&logs[..], &["--previous"]].concat(),
+        ),
+        (
+            "events.log",
+            vec![
+                "get",
+                "events",
+                "--all-namespaces",
+                "-o",
+                "wide",
+                "--sort-by=.metadata.creationTimestamp",
+            ],
+        ),
+        ("nodes.log", vec!["get", "nodes", "-o", "wide"]),
+        (
+            "pods.log",
+            vec!["get", "pods", "--all-namespaces", "-o", "wide"],
+        ),
+        // A namespace stuck in deletion records why in its status conditions:
+        // content or finalizers remaining, or an API it could not discover.
+        ("namespaces.log", vec!["get", "namespaces", "-o", "yaml"]),
+        (
+            "objects.log",
+            vec!["get", objects, "--all-namespaces", "-o", "yaml"],
+        ),
+    ];
+    for (name, mut args) in captures {
+        args.push("--request-timeout=30s");
+        // A stalled API server must not hold up cleanup for long.
+        let text = match crate::process::capture(kubectl.command(&args)?, 60) {
+            Ok(output) => [output.stdout, output.stderr].concat(),
+            Err(error) => format!("{error:#}\n").into_bytes(),
+        };
+        private_file(&directory.join(name), &text)?;
+    }
+    private_file(&directory.join("kubelets.log"), &kubelets(&kubectl)?)?;
+    container_logs(&installation.home, &directory)
+}
+
+/// Ask the API server for each node's kubelet health. This goes through the
+/// same API server to kubelet connection as exec, logs and port-forward, so a
+/// node it cannot reach fails all of them at once.
+fn kubelets(kubectl: &crate::kubectl::Kubectl) -> Result<Vec<u8>> {
+    use std::io::Write as _;
+    let listing = kubectl.command(&[
+        "get",
+        "nodes",
+        "-o",
+        "jsonpath={.items[*].metadata.name}",
+        "--request-timeout=30s",
+    ])?;
+    let names = match crate::process::capture(listing, 60) {
+        Ok(output) if output.status.success() => output.stdout,
+        Ok(output) => return Ok(output.stderr),
+        Err(error) => return Ok(format!("{error:#}\n").into_bytes()),
+    };
+    let mut text = Vec::new();
+    for node in String::from_utf8_lossy(&names).split_whitespace() {
+        if !node
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.')
+        {
+            continue;
+        }
+        let path = format!("/api/v1/nodes/{node}/proxy/healthz");
+        let started = Instant::now();
+        let check = kubectl.command(&["get", "--raw", &path, "--request-timeout=10s"])?;
+        let result = match crate::process::capture(check, 30) {
+            Ok(output) if output.status.success() => output.stdout,
+            Ok(output) => output.stderr,
+            Err(error) => format!("{error:#}").into_bytes(),
+        };
+        writeln!(
+            text,
+            "{node} after {} ms: {}",
+            started.elapsed().as_millis(),
+            String::from_utf8_lossy(&result).trim()
+        )?;
+    }
+    Ok(text)
+}
+
+/// Save each runtime container's own log: k3s with its containerd on every
+/// node, and the load balancer the agents reach the server through. These say
+/// why a node restarted or a kubelet connection failed.
+fn container_logs(home: &Path, directory: &Path) -> Result<()> {
+    let resources: Value = serde_json::from_slice(&fs::read(home.join("runtime-resources.json"))?)?;
+    let containers = resources["containers"]
+        .as_object()
+        .context("runtime containers missing")?;
+    let mut incomplete = Vec::new();
+    for (name, id) in containers {
+        let Some(id) = id.as_str() else { continue };
+        if !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            continue;
+        }
+        let mut command = Command::new("docker");
+        command.args(["logs", "--timestamps", "--tail=20000", id]);
+        if execute(command, &directory.join(format!("{name}.log")), 60, None).is_err() {
+            incomplete.push(name.as_str());
+        }
+    }
+    ensure!(
+        incomplete.is_empty(),
+        "container logs incomplete: {}",
+        incomplete.join(", ")
+    );
+    Ok(())
+}
+
 fn private_json(path: &Path, value: &Value) -> Result<()> {
+    private_file(path, &serde_json::to_vec_pretty(value)?)
+}
+
+fn private_file(path: &Path, contents: &[u8]) -> Result<()> {
     use std::{io::Write, os::unix::fs::OpenOptionsExt};
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(path)?;
-    file.write_all(&serde_json::to_vec_pretty(value)?)?;
+    file.write_all(contents)?;
     Ok(())
 }
 

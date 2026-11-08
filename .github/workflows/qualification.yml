@@ -24,8 +24,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0
-      - name: Plan the exact catalog and complete proposed change
+      - name: Plan the exact catalog
         id: plan
         env:
           CARGO_TARGET_DIR: target/check
@@ -34,8 +33,6 @@ jobs:
           ATTEMPT: ${{ github.run_attempt }}
           SUITE: ${{ inputs.suite }}
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           cargo build --locked -p proofstorm-qualification
           qualifier=target/check/debug/proofstorm-qualification
@@ -43,10 +40,10 @@ jobs:
             compatibility|full) mode=$SUITE ;;
             *) echo 'Unknown qualification suite' >&2; exit 1 ;;
           esac
-          if [[ "$SUITE" == compatibility && "$EVENT" == pull_request && "$BASE" =~ ^[a-f0-9]{40}$ && "$HEAD" =~ ^[a-f0-9]{40}$ ]]; then
-            if git diff --name-only "$BASE...$HEAD" > "$RUNNER_TEMP/changed-paths"; then
-              mode=$("$qualifier" policy "$RUNNER_TEMP/changed-paths")
-            fi
+          # Pull requests run the small pull suite; main, the weekly schedule and
+          # manual runs (including a manual run on a branch) cover every claim.
+          if [[ "$SUITE" == compatibility && "$EVENT" == pull_request ]]; then
+            mode=pull
           fi
           "$qualifier" plan "$REVISION" "$RUN_ID" "$ATTEMPT" "$mode" "$RUNNER_TEMP/plan.json"
           printf 'matrix=%s\n' "$("$qualifier" matrix "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
@@ -93,6 +90,7 @@ jobs:
           retention-days: 2
 
   build:
+    name: build (${{ matrix.arch }})
     needs: plan
     strategy:
       fail-fast: false
@@ -116,6 +114,17 @@ jobs:
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
         with:
           just-version: '1.42.4'
+      - name: Select repository Rust toolchain
+        run: rustup show active-toolchain
+      # Dependencies only; workspace crates always rebuild. The controller image
+      # builds inside Docker and is not cached here.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            . -> target/check
+            . -> target/maintainer
+            . -> dev-target
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build verified host and controller artifacts once
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -129,59 +138,15 @@ jobs:
           compression-level: 0
           retention-days: 2
 
-  preflight:
-    needs: [build, images]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Free runner disk for native clusters
-        run: bash scripts/qualification-runner-disk.sh
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: qualification-build-${{ matrix.arch }}-${{ github.sha }}
-          path: ${{ runner.temp }}/artifacts
-      - name: Restore matching immutable build artifacts on a fresh runner
-        run: |
-          (cd "$RUNNER_TEMP/artifacts" && sha256sum --check SHA256SUMS)
-          tar -xf "$RUNNER_TEMP/artifacts/host.tar"
-          docker image load --input "$RUNNER_TEMP/artifacts/controller.tar"
-          docker image load --input "$RUNNER_TEMP/artifacts/runtime-images.tar"
-          rm "$RUNNER_TEMP/artifacts/host.tar" "$RUNNER_TEMP/artifacts/controller.tar" "$RUNNER_TEMP/artifacts/runtime-images.tar"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: qualification-plan-${{ github.sha }}
-          path: ${{ runner.temp }}/plan
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: qualification-images-${{ github.sha }}
-          path: ${{ runner.temp }}/images
-      - name: Validate native runtime startup and owned cleanup before fanout
-        # Private runtime state and logs remain on this disposable runner.
-        run: |
-          bash scripts/qualification-cache.sh with "$RUNNER_TEMP/plan/plan.json" "$RUNNER_TEMP/images" "$RUNNER_TEMP/image-cache" bash -c '
-          target/check/debug/proofstorm-acceptance --root "$PWD" \
-            --qualification-image-cache "$QUALIFICATION_IMAGE_CACHE" \
-            --checkout-home "$PWD/.proofstorm-dev/state" \
-            --work-dir "$RUNNER_TEMP/native-runtime-smoke" --timeout 300 smoke'
-
+  # No separate smoke preflight: smoke runs in the fanout, and a broken runtime
+  # fails every shard within minutes anyway.
   execute:
-    needs: [plan, build, images, preflight]
+    name: execute (${{ matrix.shard }})
+    needs: [plan, build, images]
     strategy:
       fail-fast: false
-      # One wave: at 8, arm64 shards waited up to 79 min for a slot on main.
-      # GitHub's free plan runs about 20 jobs per account at once anyway.
-      max-parallel: 20
+      # The planner makes 9 shards per architecture: with main's two bundle
+      # jobs that fills, and never exceeds, GitHub's free plan's 20 job slots.
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
@@ -210,6 +175,15 @@ jobs:
         with:
           name: qualification-images-${{ github.sha }}
           path: ${{ runner.temp }}/images
+      # After "Re-run failed jobs", keep the cases this shard already passed.
+      # A pattern that matches nothing downloads nothing, so a first attempt
+      # simply runs every case.
+      - name: Fetch this shard's receipts from an earlier attempt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: qualification-receipts-${{ matrix.shard }}-${{ github.sha }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/earlier-receipts
       - name: Run every planned case and verify owned cleanup
         env:
           CASES: ${{ toJSON(matrix.cases) }}
@@ -226,7 +200,8 @@ jobs:
             fi
           fi
           bash scripts/qualification-cache.sh with "$RUNNER_TEMP/plan/plan.json" "$RUNNER_TEMP/images" "$RUNNER_TEMP/image-cache" \
-            bash scripts/qualification-shard.sh "$RUNNER_TEMP/plan/plan.json" "$RUNNER_TEMP/cases.json" "$RUNNER_TEMP/cases" "$RUNNER_TEMP/receipts"
+            target/check/debug/proofstorm-qualification shard "$RUNNER_TEMP/plan/plan.json" "$RUNNER_TEMP/cases.json" \
+            "$RUNNER_TEMP/cases" "$RUNNER_TEMP/receipts" "$RUNNER_TEMP/earlier-receipts"
       - name: Save redacted execution receipts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -249,14 +224,14 @@ jobs:
 
   verify:
     if: always()
-    needs: [plan, build, images, preflight, execute]
+    needs: [plan, build, images, execute]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Require every planned lane to succeed
         env:
           NEEDS: ${{ toJSON(needs) }}
-        run: jq -e 'keys==["build","execute","images","plan","preflight"] and all(.[]; .result=="success")' <<< "$NEEDS"
+        run: jq -e 'keys==["build","execute","images","plan"] and all(.[]; .result=="success")' <<< "$NEEDS"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
