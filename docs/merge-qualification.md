@@ -238,8 +238,12 @@ failures retain private pod status and current/previous logs from every componen
 and initializer before runtime cleanup, including Lightning and identity-provider
 dependencies. Any failed gate also saves the controller's view under
 `controller-evidence/` before cleanup: the `proofstormd` log and previous log,
-cluster events, pods, namespaces with their deletion conditions, and the cells,
-actions, components and candidate builds as YAML. Runs from a checkout,
+cluster events, nodes, pods, namespaces with their deletion conditions, and the
+cells, actions, components and candidate builds as YAML. `kubelets.log` records
+whether the API server reached each node's kubelet, the connection that exec,
+logs and port-forward share. Each runtime container's own log (k3s on the
+nodes, the load balancer, the registry) is saved under its container name.
+Runs from a checkout,
 including every CI case, set `controller.reconcile_log_ms=0`, so that log has a
 line for every reconcile with its age, duration and outcome. CI includes these
 in the encrypted bundle. Capture has a bounded time budget; these are not

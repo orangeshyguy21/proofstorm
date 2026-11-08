@@ -996,9 +996,11 @@ pub fn run(
 }
 
 /// Save the controller's record of a failed run before cleanup deletes the
-/// runtime: its log, cluster events, pods, namespaces and Proofstorm objects. The gate log
-/// shows what the test waited for; these show what the controller was doing.
-/// They stay private: CI uploads them only encrypted, with the case's logs.
+/// runtime: its log, cluster events, nodes, pods, namespaces and Proofstorm
+/// objects, whether each kubelet answers, and the runtime containers' own logs.
+/// The gate log shows what the test waited for; these show what the controller
+/// and the cluster under it were doing. They stay private: CI uploads them only
+/// encrypted, with the case's logs.
 fn controller_evidence(work: &Path) -> Result<()> {
     let (installation, _) = read(work)?;
     let kubectl = crate::kubectl::Kubectl::for_installation(&installation)?;
@@ -1032,6 +1034,7 @@ fn controller_evidence(work: &Path) -> Result<()> {
                 "--sort-by=.metadata.creationTimestamp",
             ],
         ),
+        ("nodes.log", vec!["get", "nodes", "-o", "wide"]),
         (
             "pods.log",
             vec!["get", "pods", "--all-namespaces", "-o", "wide"],
@@ -1053,6 +1056,81 @@ fn controller_evidence(work: &Path) -> Result<()> {
         };
         private_file(&directory.join(name), &text)?;
     }
+    private_file(&directory.join("kubelets.log"), &kubelets(&kubectl)?)?;
+    container_logs(&installation.home, &directory)
+}
+
+/// Ask the API server for each node's kubelet health. This goes through the
+/// same API server to kubelet connection as exec, logs and port-forward, so a
+/// node it cannot reach fails all of them at once.
+fn kubelets(kubectl: &crate::kubectl::Kubectl) -> Result<Vec<u8>> {
+    use std::io::Write as _;
+    let listing = kubectl.command(&[
+        "get",
+        "nodes",
+        "-o",
+        "jsonpath={.items[*].metadata.name}",
+        "--request-timeout=30s",
+    ])?;
+    let names = match crate::process::capture(listing, 60) {
+        Ok(output) if output.status.success() => output.stdout,
+        Ok(output) => return Ok(output.stderr),
+        Err(error) => return Ok(format!("{error:#}\n").into_bytes()),
+    };
+    let mut text = Vec::new();
+    for node in String::from_utf8_lossy(&names).split_whitespace() {
+        if !node
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.')
+        {
+            continue;
+        }
+        let path = format!("/api/v1/nodes/{node}/proxy/healthz");
+        let started = Instant::now();
+        let check = kubectl.command(&["get", "--raw", &path, "--request-timeout=10s"])?;
+        let result = match crate::process::capture(check, 30) {
+            Ok(output) if output.status.success() => output.stdout,
+            Ok(output) => output.stderr,
+            Err(error) => format!("{error:#}").into_bytes(),
+        };
+        writeln!(
+            text,
+            "{node} after {} ms: {}",
+            started.elapsed().as_millis(),
+            String::from_utf8_lossy(&result).trim()
+        )?;
+    }
+    Ok(text)
+}
+
+/// Save each runtime container's own log: k3s with its containerd on every
+/// node, and the load balancer the agents reach the server through. These say
+/// why a node restarted or a kubelet connection failed.
+fn container_logs(home: &Path, directory: &Path) -> Result<()> {
+    let resources: Value = serde_json::from_slice(&fs::read(home.join("runtime-resources.json"))?)?;
+    let containers = resources["containers"]
+        .as_object()
+        .context("runtime containers missing")?;
+    let mut incomplete = Vec::new();
+    for (name, id) in containers {
+        let Some(id) = id.as_str() else { continue };
+        if !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            continue;
+        }
+        let mut command = Command::new("docker");
+        command.args(["logs", "--timestamps", "--tail=20000", id]);
+        if execute(command, &directory.join(format!("{name}.log")), 60, None).is_err() {
+            incomplete.push(name.as_str());
+        }
+    }
+    ensure!(
+        incomplete.is_empty(),
+        "container logs incomplete: {}",
+        incomplete.join(", ")
+    );
     Ok(())
 }
 
