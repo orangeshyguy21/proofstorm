@@ -263,13 +263,62 @@ impl LoadedCell {
     }
 }
 
-/// Revisions kept in memory. A cell has a handful at most; evicted ones are
-/// simply read again.
+/// Revisions kept in memory. A cell has a handful in use at most; evicted ones
+/// are simply read again.
 const CACHED_REVISIONS: usize = 256;
+/// Components across the cached revisions, so a few revisions of very large
+/// cells can't fill the controller's memory: each weighs one more than its
+/// component count.
+const CACHED_COMPONENTS: usize = 8_192;
 
 /// Immutable revisions, each fetched, verified and validated once.
 #[derive(Default)]
-pub struct RevisionCache(std::sync::Mutex<BTreeMap<(String, String), Arc<CellRevision>>>);
+pub struct RevisionCache(std::sync::Mutex<Cached>);
+
+type RevisionKey = (String, String);
+
+/// Revisions with the tick each was last used at; the least recently used go first.
+#[derive(Default)]
+struct Cached {
+    entries: BTreeMap<RevisionKey, (Arc<CellRevision>, u64)>,
+    tick: u64,
+}
+
+impl Cached {
+    fn get(&mut self, key: &RevisionKey) -> Option<Arc<CellRevision>> {
+        self.tick += 1;
+        let tick = self.tick;
+        self.entries.get_mut(key).map(|(revision, used)| {
+            *used = tick;
+            revision.clone()
+        })
+    }
+
+    fn insert(&mut self, key: RevisionKey, revision: Arc<CellRevision>) {
+        self.tick += 1;
+        self.entries.insert(key, (revision, self.tick));
+        let weight = |entries: &BTreeMap<RevisionKey, (Arc<CellRevision>, u64)>| {
+            entries
+                .values()
+                .map(|(revision, _)| revision.cell.components.len() + 1)
+                .sum::<usize>()
+        };
+        // The newest entry is used last, so it stays even when it alone is over.
+        while self.entries.len() > 1
+            && (self.entries.len() > CACHED_REVISIONS || weight(&self.entries) > CACHED_COMPONENTS)
+        {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+}
 
 impl RevisionCache {
     /// Revision `digest` of `cell`, from the cell's namespace.
@@ -290,7 +339,7 @@ impl RevisionCache {
         use kube::ResourceExt;
         let key = (cell.spec.instance_key.clone(), digest.to_owned());
         if let Some(revision) = self.0.lock().expect("revision cache").get(&key) {
-            return Ok(revision.clone());
+            return Ok(revision);
         }
         let namespace = cell
             .namespace()
@@ -318,13 +367,10 @@ impl RevisionCache {
             ));
         }
         let revision = Arc::new(revision);
-        let mut cache = self.0.lock().expect("revision cache");
-        if cache.len() >= CACHED_REVISIONS
-            && let Some(first) = cache.keys().next().cloned()
-        {
-            cache.remove(&first);
-        }
-        cache.insert(key, revision.clone());
+        self.0
+            .lock()
+            .expect("revision cache")
+            .insert(key, revision.clone());
         Ok(revision)
     }
 
@@ -349,13 +395,14 @@ impl RevisionCache {
     ///
     /// If another thread panicked while holding the cache lock.
     pub fn insert(&self, revision: CellRevision) {
-        self.0.lock().expect("revision cache").insert(
-            (
-                revision.instance_key.clone(),
-                revision.revision_digest.clone(),
-            ),
-            Arc::new(revision),
+        let key = (
+            revision.instance_key.clone(),
+            revision.revision_digest.clone(),
         );
+        self.0
+            .lock()
+            .expect("revision cache")
+            .insert(key, Arc::new(revision));
     }
 }
 
@@ -363,6 +410,41 @@ impl RevisionCache {
 mod tests {
     use super::*;
     use proofstorm_core::{API_VERSION, CellPolicy};
+
+    #[test]
+    fn the_cache_drops_the_least_recently_used_and_weighs_large_cells() {
+        let component: proofstorm_core::ComponentSpec = serde_json::from_value(serde_json::json!({
+            "id":"c","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1",
+            "config_version":"bitcoin-core/31/v1","control":"cell","config":{}}))
+        .unwrap();
+        let sized = |components: usize| {
+            let mut revision = revision();
+            revision.cell.components = vec![component.clone(); components];
+            Arc::new(revision)
+        };
+        let key = |name: &str| ("cell".to_owned(), name.to_owned());
+        let mut cache = Cached::default();
+        cache.insert(key("first"), sized(0));
+        for index in 0..CACHED_REVISIONS {
+            cache.insert(key(&format!("r{index:03}")), sized(0));
+            if index == 0 {
+                assert!(cache.get(&key("first")).is_some());
+            }
+        }
+        assert_eq!(cache.entries.len(), CACHED_REVISIONS);
+        assert!(cache.get(&key("first")).is_some(), "recently used");
+        assert!(cache.get(&key("r000")).is_none(), "least recently used");
+
+        let mut cache = Cached::default();
+        cache.insert(key("a"), sized(5_000));
+        cache.insert(key("b"), sized(5_000));
+        assert!(cache.get(&key("a")).is_none());
+        assert!(cache.get(&key("b")).is_some());
+        // One revision over the weight on its own still stays cached.
+        cache.insert(key("huge"), sized(CACHED_COMPONENTS * 2));
+        assert_eq!(cache.entries.len(), 1);
+        assert!(cache.get(&key("huge")).is_some());
+    }
 
     fn revision() -> CellRevision {
         let cell = CellSpec {
