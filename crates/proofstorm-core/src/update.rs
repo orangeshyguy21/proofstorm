@@ -91,7 +91,12 @@ impl CellUpdatePlan {
                             .push(unsupported_config_change(&component.id, key));
                     }
                 }
-                if prior.rollout_digest == next.rollout_digest {
+                // CPU and memory aren't in the rollout digest, yet changing them
+                // replaces the pod. A default reaches every container that sets
+                // no value of its own, so count each component as restarted.
+                let resources_changed = previous.resources != component.resources
+                    || old.cell.policy.resources.defaults != new.cell.policy.resources.defaults;
+                if prior.rollout_digest == next.rollout_digest && !resources_changed {
                     changes.unchanged.push(component.id.clone());
                 } else {
                     changes.restarted.push(component.id.clone());

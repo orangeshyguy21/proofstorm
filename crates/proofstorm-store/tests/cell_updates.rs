@@ -227,6 +227,68 @@ fn operation_snapshots_and_removal_conflicts_are_component_scoped() {
 }
 
 #[test]
+fn cpu_and_memory_edits_count_as_restarts_and_hold_operations_back() {
+    let store = Store::memory().unwrap();
+    seed(&store);
+    let first = publish(&store, "first", &cell(&["chain", "other"]));
+    store
+        .materialize("w", "agent", "demo", &first.digest, "start")
+        .unwrap();
+    store
+        .create_experiment("w", "agent", "run", "demo", "run")
+        .unwrap();
+    let target = |generation| CellUpdateTarget {
+        delete_retained: vec![],
+        instance_id: "demo".into(),
+        expected_generation: generation,
+        delete_data: false,
+    };
+    let memory = |limit: &str| {
+        serde_json::from_value::<proofstorm_core::Resources>(json!({"memory":{"limit":limit}}))
+            .unwrap()
+    };
+    // A component's own resources replace only that component's pod.
+    let mut own = cell(&["chain", "other"]);
+    own.components[0].resources = Some(memory("1Gi"));
+    let own = publish(&store, "own", &own);
+    let plan = store.plan_update("w", "agent", target(1), &own).unwrap();
+    assert_eq!(plan.changes.restarted, vec!["chain"]);
+    assert_eq!(plan.changes.unchanged, vec!["other"]);
+    store.accept_update("w", "agent", &plan, "own").unwrap();
+    let exec = |id: &str, component: &str| {
+        store.create_operation_at_revision(
+            &own.digest,
+            "w",
+            "agent",
+            "demo",
+            "run",
+            "",
+            id,
+            OperationKind::ComponentExecLive,
+            &json!({"component":component,"argv":["bitcoin-cli","getblockcount"]}),
+            id,
+            Capability::ComponentExecLive,
+        )
+    };
+    assert!(
+        exec("during", "chain")
+            .unwrap_err()
+            .to_string()
+            .contains("component_updating")
+    );
+    exec("other", "other").unwrap();
+    // A cell default reaches every component.
+    let mut defaults = cell(&["chain", "other"]);
+    defaults.components[0].resources = Some(memory("1Gi"));
+    defaults.policy.resources.defaults = memory("512Mi");
+    let defaults = publish(&store, "defaults", &defaults);
+    let plan = store
+        .plan_update("w", "agent", target(2), &defaults)
+        .unwrap();
+    assert_eq!(plan.changes.restarted, vec!["chain", "other"]);
+}
+
+#[test]
 fn no_op_receipts_do_not_advance_and_cannot_roll_back_later_edits() {
     let store = Store::memory().unwrap();
     seed(&store);
