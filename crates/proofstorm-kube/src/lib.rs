@@ -8,6 +8,7 @@ mod observation;
 mod operation;
 mod pod;
 pub mod probes;
+mod quota;
 pub mod release;
 mod render;
 mod resources;
@@ -68,6 +69,7 @@ pub use operation::{
     render_authentication_conformance_job, render_authentication_protected_spend_job,
     render_authentication_replay_job, render_cell_action_job, require_open_cell,
 };
+pub use quota::quota_shortfall;
 pub use render::{
     INSTANCE_LABEL, RenderedSecuritySpine, instance_namespace, render_security_spine,
 };

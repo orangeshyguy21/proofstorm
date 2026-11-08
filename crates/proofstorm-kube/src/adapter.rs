@@ -896,6 +896,13 @@ pub(crate) fn workload_observation(
             {
                 return failure;
             }
+            if quota_refused(status) {
+                return (
+                    ComponentConditionState::False,
+                    ComponentConditionReason::PodUnschedulable,
+                    QUOTA_REFUSED,
+                );
+            }
             workload_replica_observation(
                 workload.metadata.generation,
                 status.and_then(|status| status.observed_generation),
@@ -944,6 +951,26 @@ pub(crate) fn workload_observation(
             )
         }
     }
+}
+
+const QUOTA_REFUSED: &str = "The cell's quota refused this pod. Raise policy.resources.quota: it counts every component's pod, the prober and running actions.";
+
+/// Whether the namespace quota refused the Deployment's pod. Kubernetes
+/// records that only on the `ReplicaSet`, and the Deployment copies it.
+fn quota_refused(status: Option<&k8s_openapi::api::apps::v1::DeploymentStatus>) -> bool {
+    status
+        .and_then(|status| status.conditions.as_ref())
+        .into_iter()
+        .flatten()
+        .any(|condition| {
+            condition.type_ == "ReplicaFailure"
+                && condition.status == "True"
+                && condition.reason.as_deref() == Some("FailedCreate")
+                && condition
+                    .message
+                    .as_deref()
+                    .is_some_and(|message| message.contains("exceeded quota"))
+        })
 }
 
 fn pod_scheduling_observation(
@@ -4008,6 +4035,27 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn a_deployment_whose_pod_the_quota_refused_is_reported_once_it_says_so() {
+        let status = |reason: &str, message: &str| {
+            serde_json::from_value::<k8s_openapi::api::apps::v1::DeploymentStatus>(json!({
+                "conditions":[{"type":"ReplicaFailure","status":"True","reason":reason,
+                    "message":message}]}))
+            .unwrap()
+        };
+        let refused = status(
+            "FailedCreate",
+            "pods \"mint-6d4\" is forbidden: exceeded quota: proofstorm-instance-quota",
+        );
+        assert!(quota_refused(Some(&refused)));
+        assert!(!quota_refused(Some(&status(
+            "FailedCreate",
+            "admission webhook denied"
+        ))));
+        assert!(!quota_refused(None));
+        assert!(QUOTA_REFUSED.len() <= 160);
+    }
 
     #[test]
     fn readiness_aggregation_requires_observations_and_false_overrides_unknown() {

@@ -37,6 +37,11 @@ pub fn prepare_plan(
         1,
         &format!("{draft_id}:publish"),
     )?;
+    // Kubernetes refuses pods over quota without a scheduling event, so the
+    // cell would just never get ready.
+    if let Some(shortfall) = proofstorm_kube::quota_shortfall(&revision.cell, &revision.lock) {
+        return Err(Error::problem("quota_too_small", shortfall));
+    }
     let update = target
         .map(|target| store.plan_update(workspace, principal, target, &revision))
         .transpose()?;

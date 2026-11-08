@@ -150,6 +150,11 @@ policy:
     quota: { cpu: "20", memory: 64Gi, pods: 500, volumes: 50 }
 ```
 
+The quota counts every pod and volume claim in the cell's namespace: one pod per
+component, Proofstorm's protocol prober, and each running action (exec, forensics,
+probes). Kubernetes refuses a pod over quota, so a plan whose quota can't hold its
+components, the prober and one action at the cell's default requests is refused.
+
 Each value comes from the first of these that sets it:
 1. the component's `resources`;
 2. the component's own defaults (Keycloak, Redis and Workspace have them);
