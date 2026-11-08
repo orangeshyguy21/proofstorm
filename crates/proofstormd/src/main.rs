@@ -10,6 +10,7 @@ use component_lifecycle::same_lifecycle_identity;
 mod cell_updates;
 mod component_logs;
 mod generated_secrets;
+mod storage_nodes;
 mod workspace_bridge;
 mod workspace_faults;
 use std::{
@@ -2098,9 +2099,24 @@ async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error
             )
             .await?;
     }
+    let mut held = BTreeSet::new();
     let stateful_sets = Api::<StatefulSet>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.stateful_sets {
         if unchanged(&mut documents, &previous, "StatefulSet", resource) {
+            continue;
+        }
+        let claims = storage_nodes::stateful_set_claims(resource);
+        if held_back(
+            &client,
+            &namespace_name,
+            "StatefulSet",
+            resource,
+            &claims,
+            &mut documents,
+            &mut held,
+        )
+        .await?
+        {
             continue;
         }
         let resource = component_lifecycle::preserve(&stateful_sets, resource).await?;
@@ -2115,6 +2131,25 @@ async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error
     let deployments = Api::<Deployment>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.deployments {
         if unchanged(&mut documents, &previous, "Deployment", resource) {
+            continue;
+        }
+        let claims = storage_nodes::pod_claims(
+            resource
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.template.spec.as_ref()),
+        );
+        if held_back(
+            &client,
+            &namespace_name,
+            "Deployment",
+            resource,
+            &claims,
+            &mut documents,
+            &mut held,
+        )
+        .await?
+        {
             continue;
         }
         let name = resource.metadata.name.as_deref().unwrap_or_default();
@@ -2195,6 +2230,7 @@ async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error
         retained_storage,
         pruned,
         documents: Arc::new(documents),
+        held: Arc::new(held),
     };
     context
         .probes
@@ -2209,6 +2245,30 @@ fn skippable(last: Option<probes::Applied>, signature: &str) -> Arc<BTreeMap<Str
     last.filter(|applied| applied.signature != signature || !applied.pruned)
         .map(|applied| applied.documents)
         .unwrap_or_default()
+}
+
+/// Whether to hold back a changed workload whose volumes no single node holds,
+/// leaving its running pod in place (see `storage_nodes`). A held document
+/// isn't recorded as sent, so a later pass checks it again.
+async fn held_back(
+    client: &Client,
+    namespace: &str,
+    kind: &str,
+    resource: &impl ResourceExt,
+    claims: &BTreeSet<String>,
+    documents: &mut BTreeMap<String, String>,
+    held: &mut BTreeSet<String>,
+) -> Result<bool, Error> {
+    let Some(nodes) = storage_nodes::split_nodes(client, namespace, claims).await? else {
+        return Ok(false);
+    };
+    let name = resource.name_any();
+    eprintln!("holding back {kind} {namespace}/{name}: its volumes are on nodes {nodes:?}");
+    documents.remove(&format!("{kind}/{name}"));
+    if let Some(component) = resource.labels().get(COMPONENT_LABEL) {
+        held.insert(component.clone());
+    }
+    Ok(true)
 }
 
 /// Record `resource`'s digest and report whether the previous apply sent the
@@ -2251,6 +2311,7 @@ async fn observe_cell(
         &stopped_components,
         now_unix(),
     );
+    let components = hold_components(components, &applied.held, now_unix());
     write_component_objects(&cell, context, &stored, &components).await?;
     let ready = applied.pruned
         && components
@@ -2308,6 +2369,31 @@ async fn observe_cell(
     } else {
         jittered_requeue(&cell.spec.instance_key, 3, 2)
     })
+}
+
+/// Report each held-back component as blocked: its workload can't be scheduled.
+fn hold_components(
+    mut components: Vec<proofstorm_core::ComponentStatus>,
+    held: &BTreeSet<String>,
+    now: i64,
+) -> Vec<proofstorm_core::ComponentStatus> {
+    for component in components
+        .iter_mut()
+        .filter(|component| held.contains(&component.id))
+    {
+        component.ready = false;
+        for condition in &mut component.conditions {
+            if condition.condition_type == proofstorm_core::ComponentConditionType::WorkloadReady
+                && condition.reason != proofstorm_core::ComponentConditionReason::PodUnschedulable
+            {
+                condition.state = proofstorm_core::ComponentConditionState::False;
+                condition.reason = proofstorm_core::ComponentConditionReason::PodUnschedulable;
+                storage_nodes::HELD_MESSAGE.clone_into(&mut condition.message);
+                condition.last_transition_unix = now;
+            }
+        }
+    }
+    components
 }
 
 /// Apply cannot delete a defaulted field owned by another field manager. Clear
@@ -3984,6 +4070,47 @@ mod tests {
     }
 
     #[test]
+    fn a_held_component_reports_its_workload_unschedulable() {
+        use proofstorm_core::{
+            ComponentCondition, ComponentConditionReason as Reason,
+            ComponentConditionState as State, ComponentConditionType as Type, ComponentKind,
+            ComponentStatus,
+        };
+        let status = |id: &str| ComponentStatus {
+            protocol_observation: None,
+            id: id.into(),
+            kind: ComponentKind::Mint,
+            observed_revision_digest: "revision".into(),
+            observed_rollout_digest: "rollout".into(),
+            conditions: vec![ComponentCondition {
+                condition_type: Type::WorkloadReady,
+                state: State::Unknown,
+                reason: Reason::StaleRevision,
+                message: "stale".into(),
+                last_transition_unix: 1,
+            }],
+            ready: true,
+            service: format!("{id}.svc"),
+            ports: BTreeMap::new(),
+        };
+        let held = BTreeSet::from(["mint".to_owned()]);
+        let components = hold_components(vec![status("mint"), status("ln")], &held, 50);
+        let workload = &components[0].conditions[0];
+        assert!(!components[0].ready);
+        assert_eq!(
+            (
+                workload.state,
+                workload.reason,
+                workload.last_transition_unix
+            ),
+            (State::False, Reason::PodUnschedulable, 50)
+        );
+        assert!(workload.reason.blocks_startup());
+        assert!(workload.message.len() <= 160);
+        assert_eq!(components[1], status("ln"));
+    }
+
+    #[test]
     fn applies_send_only_changed_documents_except_the_drift_pass() {
         let applied = |signature: &str, pruned: bool| probes::Applied {
             signature: signature.into(),
@@ -3993,6 +4120,7 @@ mod tests {
             retained_storage: BTreeMap::new(),
             pruned,
             documents: Arc::new(BTreeMap::from([("ConfigMap/a".into(), "d".into())])),
+            held: Arc::default(),
         };
         // A changed cell, or a prune still finishing, skips what didn't change.
         assert_eq!(skippable(Some(applied("old", true)), "new").len(), 1);

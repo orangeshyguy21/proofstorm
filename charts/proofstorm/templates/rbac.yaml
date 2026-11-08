@@ -36,6 +36,11 @@ rules:
     resources: ["configmaps", "secrets", "services", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "patch", "delete"]
   - apiGroups: [""]
+    # Read only: an edit whose pod would mount volumes bound to different nodes
+    # is held back.
+    resources: ["persistentvolumes"]
+    verbs: ["get"]
+  - apiGroups: [""]
     resources: ["resourcequotas"]
     verbs: ["get", "list", "watch", "create", "patch", "delete"]
   - apiGroups: [""]

@@ -50,6 +50,9 @@ pub(super) struct Applied {
     pub pruned: bool,
     /// Digest of each document this pass sent, keyed by `Kind/name`.
     pub documents: Arc<BTreeMap<String, String>>,
+    /// Components whose workload change was held back: their volumes are on
+    /// different nodes.
+    pub held: Arc<BTreeSet<String>>,
 }
 
 #[derive(Default, Clone)]

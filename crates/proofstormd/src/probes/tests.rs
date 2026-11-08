@@ -304,6 +304,7 @@ async fn readiness_reconciliation_uses_cached_resources_and_writes_only_changed_
             retained_storage: BTreeMap::new(),
             pruned: true,
             documents: Arc::default(),
+            held: Arc::default(),
         },
     );
     let (component_store, mut component_writer) = kube::runtime::reflector::store();
