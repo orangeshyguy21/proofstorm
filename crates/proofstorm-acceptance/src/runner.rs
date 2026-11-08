@@ -476,9 +476,20 @@ fn start_runtime(
             }
         }
     }
+    let mut settings = Vec::new();
     if let Some(agents) = cluster_agents {
+        settings.push(format!("cluster.agents={agents}"));
+    }
+    // A checkout run logs every controller reconcile, so a failed case's
+    // controller evidence shows what the controller was doing. Logs leave the
+    // runner only when a case fails. A released bundle may predate the
+    // setting, so bundle runs keep the default.
+    if artifacts.checkout.is_some() {
+        settings.push("controller.reconcile_log_ms=0".to_owned());
+    }
+    if !settings.is_empty() {
         let mut config = cli(artifacts, &home);
-        config.args(["config", "set", &format!("cluster.agents={agents}")]);
+        config.args(["config", "set"]).args(&settings);
         execute(config, &work.join("config.log"), 60, None)?;
     }
     let mut setup = cli(artifacts, &home);
@@ -985,7 +996,7 @@ pub fn run(
 }
 
 /// Save the controller's record of a failed run before cleanup deletes the
-/// runtime: its log, cluster events, pods and Proofstorm objects. The gate log
+/// runtime: its log, cluster events, pods, namespaces and Proofstorm objects. The gate log
 /// shows what the test waited for; these show what the controller was doing.
 /// They stay private: CI uploads them only encrypted, with the case's logs.
 fn controller_evidence(work: &Path) -> Result<()> {
@@ -1025,6 +1036,9 @@ fn controller_evidence(work: &Path) -> Result<()> {
             "pods.log",
             vec!["get", "pods", "--all-namespaces", "-o", "wide"],
         ),
+        // A namespace stuck in deletion records why in its status conditions:
+        // content or finalizers remaining, or an API it could not discover.
+        ("namespaces.log", vec!["get", "namespaces", "-o", "yaml"]),
         (
             "objects.log",
             vec!["get", objects, "--all-namespaces", "-o", "yaml"],

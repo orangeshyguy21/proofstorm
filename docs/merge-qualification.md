@@ -238,9 +238,12 @@ failures retain private pod status and current/previous logs from every componen
 and initializer before runtime cleanup, including Lightning and identity-provider
 dependencies. Any failed gate also saves the controller's view under
 `controller-evidence/` before cleanup: the `proofstormd` log and previous log,
-cluster events, pods, and the cells, actions, components and candidate builds as
-YAML. CI includes these in the encrypted bundle. Capture has a bounded time
-budget; these are not public CI artifacts.
+cluster events, pods, namespaces with their deletion conditions, and the cells,
+actions, components and candidate builds as YAML. Runs from a checkout,
+including every CI case, set `controller.reconcile_log_ms=0`, so that log has a
+line for every reconcile with its age, duration and outcome. CI includes these
+in the encrypted bundle. Capture has a bounded time budget; these are not
+public CI artifacts.
 All CDK payment backends and Keycloak wait for their linked PostgreSQL service
 before initializing the application. PostgreSQL readiness probes TCP loopback so
 its temporary socket-only bootstrap server cannot prematurely expose a ready
