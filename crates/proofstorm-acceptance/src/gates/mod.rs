@@ -45,6 +45,7 @@ pub mod prober;
 pub mod progress;
 pub mod quote_composition;
 pub mod reliable_exec;
+mod relink;
 pub mod runtime_lifecycle;
 pub mod scale;
 pub mod slice2;
@@ -129,6 +130,7 @@ pub const NAMES: &[&str] = &[
     "scale-2000",
     "prober-50",
     "prober-1000",
+    "relink",
 ];
 
 /// Managed payment-stack gates whose exact images can be cached before a runtime exists.
@@ -242,6 +244,7 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "scale-2000" => scale::run(context, 2000),
         "prober-50" => prober::run(context, 50),
         "prober-1000" => prober::run(context, 1000),
+        "relink" => relink::run(context),
         other => bail!(
             "unknown gate {other}; available gates: {}",
             NAMES.join(", ")

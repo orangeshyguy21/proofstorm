@@ -159,7 +159,7 @@ fn scenario(context: &GateContext, redis: usize, report: &mut Report) -> Result<
     Ok(())
 }
 
-fn preferred(client: &mut McpClient, implementation: &str) -> Result<Value> {
+pub(super) fn preferred(client: &mut McpClient, implementation: &str) -> Result<Value> {
     let catalog = client.call("catalog_list", json!({"implementations":[implementation]}))?;
     expect::array(&catalog, "/items")?
         .iter()
@@ -168,7 +168,7 @@ fn preferred(client: &mut McpClient, implementation: &str) -> Result<Value> {
         .with_context(|| format!("preferred {implementation} release missing"))
 }
 
-fn component(entry: &Value, implementation: &str, id: &str) -> Value {
+pub(super) fn component(entry: &Value, implementation: &str, id: &str) -> Value {
     json!({"id":id,"kind":entry["kind"],"implementation":implementation,"version":entry["version"],
         "config_version":entry["config_version"],"control":entry["recommended_control"],"config":{}})
 }

@@ -33,6 +33,8 @@ pub struct Selection {
     pub checkout_home: Option<PathBuf>,
     pub bundle: Option<PathBuf>,
     pub allow_development: bool,
+    /// Agent nodes for the isolated cluster; `None` keeps the default.
+    pub cluster_agents: Option<u16>,
 }
 
 impl Selection {
@@ -417,6 +419,7 @@ fn start_runtime(
     work: &Path,
     names: &[String],
     allow_development: bool,
+    cluster_agents: Option<u16>,
     cancelled: &AtomicBool,
     report: &mut Value,
 ) -> Result<()> {
@@ -472,6 +475,11 @@ fn start_runtime(
                 );
             }
         }
+    }
+    if let Some(agents) = cluster_agents {
+        let mut config = cli(artifacts, &home);
+        config.args(["config", "set", &format!("cluster.agents={agents}")]);
+        execute(config, &work.join("config.log"), 60, None)?;
     }
     let mut setup = cli(artifacts, &home);
     setup.arg("setup");
@@ -711,6 +719,7 @@ pub fn run(
             &work,
             names,
             selection.allow_development,
+            selection.cluster_agents,
             cancelled,
             &mut report,
         )?;
@@ -791,6 +800,7 @@ pub fn run(
                 &peer,
                 &[],
                 selection.allow_development,
+                None,
                 cancelled,
                 &mut peer_report,
             );
@@ -993,6 +1003,7 @@ mod tests {
             checkout_home: None,
             bundle: None,
             allow_development: false,
+            cluster_agents: None,
         };
         assert!(
             run(
