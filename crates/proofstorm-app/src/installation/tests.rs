@@ -243,6 +243,19 @@ fn selected_ports_cannot_collide_or_change_on_retry() {
 }
 
 #[test]
+fn a_waiting_lock_gets_the_installation_once_the_holder_finishes() {
+    let root = tempfile::tempdir().unwrap();
+    let guard = Installation::lock(root.path()).unwrap();
+    assert!(Installation::lock_within(root.path(), Duration::from_millis(50)).is_err());
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        drop(guard);
+    });
+    Installation::lock_within(root.path(), Duration::from_secs(10)).unwrap();
+    release.join().unwrap();
+}
+
+#[test]
 fn lock_serializes_independent_connections_and_releases_on_drop() {
     let root = tempfile::tempdir().unwrap();
     let guard = Installation::lock(root.path()).unwrap();
@@ -373,4 +386,50 @@ fn new_configuration_is_owner_only() {
             0o600
         );
     }
+}
+
+#[test]
+fn cluster_settings_size_new_clusters_and_explain_why_existing_ones_need_a_recreate() {
+    let root = tempfile::tempdir().unwrap();
+    let installation = Installation::initialize(root.path(), None, None).unwrap();
+    let sized = |agents, pods| {
+        installation.cluster_config_for(&proofstorm_core::ClusterSettings {
+            agents,
+            max_pods_per_node: pods,
+        })
+    };
+    // The defaults, stated or not, keep every existing cluster's configuration.
+    assert_eq!(sized(Some(1), Some(110)), installation.cluster_config());
+    let args = |config: &Value| {
+        config["options"]["k3s"]["extraArgs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|arg| arg["arg"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let wide = sized(Some(3), Some(1000));
+    assert_eq!(wide["agents"], 3);
+    assert!(args(&wide).contains(&"--kubelet-arg=max-pods=1000".to_owned()));
+    // 1,002 addresses need a /22 per node.
+    assert!(
+        args(&wide).contains(&"--kube-controller-manager-arg=node-cidr-mask-size=22".to_owned())
+    );
+    let modest = args(&sized(None, Some(200)));
+    assert!(modest.contains(&"--kubelet-arg=max-pods=200".to_owned()));
+    assert!(!modest.iter().any(|arg| arg.contains("node-cidr-mask-size")));
+
+    // Before any cluster exists, a sizing change rewrites the configuration.
+    crate::runtime_settings::set(&installation.home, &["cluster.agents=2".into()]).unwrap();
+    Installation::initialize(root.path(), None, None).unwrap();
+    assert_eq!(installation.cluster_agents().unwrap(), 2);
+    // Once setup has tried to create the cluster, it needs a recreate.
+    fs::write(installation.home.join("runtime-resources.json"), "{}").unwrap();
+    let saved = fs::read(installation.cluster_config_path()).unwrap();
+    crate::runtime_settings::set(&installation.home, &["cluster.agents=3".into()]).unwrap();
+    let error = Installation::initialize(root.path(), None, None)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("storm setup --recreate"), "{error}");
+    assert_eq!(fs::read(installation.cluster_config_path()).unwrap(), saved);
 }

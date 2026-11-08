@@ -31,17 +31,27 @@ mod upload;
 pub(super) type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const READ_BYTES: u64 = 1024;
 
+/// Copy this runner to `path`, read-only. A pod restarted after a node reboot
+/// keeps its emptyDir, and with it the read-only copy from its first start, so
+/// replace that copy rather than write through it.
+fn install(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    fs::copy(std::env::current_exe()?, path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o555))?;
+    Ok(())
+}
+
 pub(super) fn entry(mut args: impl Iterator<Item = String>) -> Result<()> {
     let mode = args.next().ok_or("workspace mode missing")?;
     #[cfg(target_os = "linux")]
     let root = std::env::var_os("PROOFSTORM_WORKSPACE_ROOT")
         .map_or_else(|| PathBuf::from("/workspace"), PathBuf::from);
     match mode.as_str() {
-        "install" => {
-            let path = Path::new("/opt/proofstorm/workspace");
-            fs::copy(std::env::current_exe()?, path)?;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o555))?;
-        }
+        "install" => install(Path::new("/opt/proofstorm/workspace"))?,
         "request" => {
             let request = args.next().ok_or("workspace request missing")?;
             if request.len() > wire::MAX_MESSAGE_BYTES {

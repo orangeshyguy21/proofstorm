@@ -88,6 +88,8 @@ fn replacement_preserves_caches_archives_old_state_and_can_resume_after_rename()
     let pending = fixture.source.join(".proofstorm-dev").join(JOURNAL);
     let mut journal = fixture.journal();
     save(&pending, &journal).unwrap();
+    crate::runtime_settings::set(&fixture.home, &["cluster.max_pods_per_node=1000".into()])
+        .unwrap();
     let history = fixture.source.join(".proofstorm-dev/reset-history");
     fs::create_dir(&history).unwrap();
     fs::rename(&fixture.home, history.join(&fixture.installation.id)).unwrap();
@@ -105,6 +107,19 @@ fn replacement_preserves_caches_archives_old_state_and_can_resume_after_rename()
     assert_eq!(
         fs::read_to_string(fixture.home.join("tools/helper")).unwrap(),
         "pinned tool"
+    );
+    // The replacement cluster is created with the carried runtime settings.
+    assert_eq!(
+        crate::runtime_settings::load(&fixture.home)
+            .unwrap()
+            .cluster
+            .max_pods_per_node,
+        Some(1000)
+    );
+    assert!(
+        fs::read_to_string(next.cluster_config_path())
+            .unwrap()
+            .contains("max-pods=1000")
     );
     assert_eq!(
         fs::read_to_string(fixture.source.join(".proofstorm-dev/target/cache")).unwrap(),

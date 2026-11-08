@@ -15,6 +15,6 @@ pub fn contract() -> Value {
             "request": schemars::schema_for!(proofstorm_prober::Request),
             "response": schemars::schema_for!(proofstorm_prober::Response)},
         "crds": [crate::ProofstormCell::crd(), crate::ProofstormCellAction::crd(),
-                 crate::ProofstormCandidateBuild::crd()]
+                 crate::ProofstormCandidateBuild::crd(), crate::ProofstormComponent::crd()]
     })
 }

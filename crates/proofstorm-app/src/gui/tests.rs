@@ -288,6 +288,7 @@ async fn transport_fixture() -> (
         .grant("test", "test", proofstorm_core::Capability::CellConnect)
         .unwrap();
     let runtime = crate::Runtime {
+        revisions: std::sync::Arc::default(),
         client: kube::Client::new(
             tower::service_fn(|_: http::Request<kube::client::Body>| async {
                 Ok::<_, std::io::Error>(

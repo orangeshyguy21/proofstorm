@@ -26,6 +26,8 @@ use std::{
 struct Cluster {
     objects: BTreeMap<String, Value>,
     requests: Vec<(String, String)>,
+    /// Each request's path, query and Accept header.
+    reads: Vec<(String, String, String)>,
     fail_materialize: bool,
     fail_reads: bool,
     conflict_lease: bool,
@@ -45,6 +47,20 @@ enum DeletionRace {
     FinishBeforeRepeatedDelete,
 }
 
+/// A request's path, query and Accept header.
+fn read_of(request: &Request<Body>) -> (String, String, String) {
+    (
+        request.uri().path().to_owned(),
+        request.uri().query().unwrap_or_default().to_owned(),
+        request
+            .headers()
+            .get(http::header::ACCEPT)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned(),
+    )
+}
+
 fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
     kube::Client::new(
         tower::service_fn(move |request: Request<Body>| {
@@ -52,9 +68,11 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
             async move {
                 let method = request.method().to_string();
                 let path = request.uri().path().to_string();
+                let read = read_of(&request);
                 let bytes = request.into_body().collect_bytes().await.unwrap();
                 let mut cluster = cluster.lock().unwrap();
                 cluster.requests.push((method.clone(), path.clone()));
+                cluster.reads.push(read);
                 let (status,body)=match method.as_str() {
                 "PATCH" | "POST" | "PUT" => {
                     let mut path=path.clone();
@@ -66,14 +84,14 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                         cluster.objects.get_mut(&path).unwrap()["metadata"]["resourceVersion"] = json!(revision.to_string());
                         if let Some(hook) = cluster.after_update_conflict.take() { hook(); }
                         (409,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Conflict","message":"controller status changed resourceVersion","code":409}))
-                    } else if value.get("spec").is_none() && value.get("data").is_none() && cluster.conflict_lease {
+                    } else if value.get("spec").is_none() && value.get("data").is_none() && value.get("binaryData").is_none() && cluster.conflict_lease {
                         cluster.conflict_lease = false;
                         (409, json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Conflict","message":"controller updated metadata","code":409}))
                     } else if value.get("spec").is_some() && path.contains("/proofstormcells/") && cluster.fail_materialize {
                         cluster.fail_materialize=false;
                         (503,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Unavailable","message":"injected interruption","code":503}))
                     } else {
-                        if value.get("spec").is_none() && value.get("data").is_none() {
+                        if value.get("spec").is_none() && value.get("data").is_none() && value.get("binaryData").is_none() {
                             let object=cluster.objects.get_mut(&path).unwrap();
                             for (key,v) in value["metadata"]["annotations"].as_object().unwrap() {if v.is_null() {object["metadata"]["annotations"].as_object_mut().unwrap().remove(key);} else {object["metadata"]["annotations"][key]=v.clone();}}
                             value=object.clone();
@@ -128,10 +146,8 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                 "GET" if path=="/api/v1/namespaces/kube-system" => (200,cluster.objects.get(&path).cloned().unwrap_or(json!({"apiVersion":"v1","kind":"Namespace","metadata":{"name":"kube-system","uid":"test-cluster"}}))),
                 "GET" if path.ends_with("/configmaps") => (200,json!({"apiVersion":"v1","kind":"ConfigMapList","metadata":{},"items":cluster.objects.iter().filter(|(p,_)|p.contains("/configmaps/")).map(|(_,v)|v.clone()).collect::<Vec<_>>()})),
                 "GET" if path.ends_with("/proofstormcellactions") => (200,json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellActionList","metadata":{},"items":[]})),
-                "GET" if path.ends_with("/proofstormcells")=> {
-                    let items=cluster.objects.iter().filter(|(p,_)|p.contains("/proofstormcells/")).map(|(_,v)|v.clone()).collect::<Vec<_>>();
-                    (200,json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellList","metadata":{},"items":items}))
-                },
+                "GET" if path.ends_with("/proofstormcomponents") => (200,component_list(&cluster.objects)),
+                "GET" if path.ends_with("/proofstormcells")=> (200,cell_list(&cluster.objects)),
                 "GET"=>cluster.objects.get(&path).cloned().map_or((404,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","message":"absent","code":404})),|v|(200,v)),
                 _=>panic!("unexpected request {method} {path}"),
             };
@@ -148,11 +164,45 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
     )
 }
 
+fn cell_list(objects: &BTreeMap<String, Value>) -> Value {
+    let items = objects
+        .iter()
+        .filter(|(path, _)| path.contains("/proofstormcells/"))
+        .map(|(_, cell)| cell.clone())
+        .collect::<Vec<_>>();
+    json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellList","metadata":{},"items":items})
+}
+
+/// The component objects the controller writes for the fake cells' statuses.
+fn component_list(objects: &BTreeMap<String, Value>) -> Value {
+    let items = objects
+        .iter()
+        .filter(|(path, _)| path.contains("/proofstormcells/"))
+        .flat_map(|(_, cell)| {
+            let key = cell["spec"]["instanceKey"].as_str().unwrap_or_default().to_owned();
+            cell["status"]["components"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(move |status| {
+                    let id = status["id"].as_str().unwrap_or_default().to_owned();
+                    json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormComponent",
+                        "metadata":{"name":format!("{key}-{id}"),"namespace":"system","resourceVersion":"1",
+                            "labels":{"proofstorm.dev/instance":key,"proofstorm.dev/component":id}},
+                        "spec":{"instanceKey":key,"componentId":id},"status":status})
+                })
+        })
+        .collect::<Vec<_>>();
+    json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormComponentList","metadata":{},"items":items})
+}
+
 fn spec() -> CellSpec {
     CellSpec {
         api_version: proofstorm_core::API_VERSION.into(),
         name: "demo".into(),
         components: vec![ComponentSpec {
+            resources: None,
             id: "chain".into(),
             kind: ComponentKind::Bitcoin,
             implementation: "bitcoin-core".into(),
@@ -222,6 +272,7 @@ async fn workspace_control_uses_bounded_recorded_exec_and_exact_retry_identity()
     let cells = service(store.clone(), cluster.clone());
     let mut cell = spec();
     cell.components.push(ComponentSpec {
+        resources: None,
         id: "scripts".into(),
         kind: ComponentKind::Workspace,
         implementation: "workspace".into(),
@@ -295,6 +346,7 @@ async fn workspace_file_write_limits_count_content_bytes_and_preserve_retries() 
     let cells = service(store, cluster.clone());
     let mut cell = spec();
     cell.components.push(ComponentSpec {
+        resources: None,
         id: "scripts".into(),
         kind: ComponentKind::Workspace,
         implementation: "workspace".into(),
@@ -746,7 +798,7 @@ async fn retained_data_edits_cannot_converge_using_the_previous_configuration_st
     let store = Store::memory().unwrap();
     seed(&store);
     let cluster = Arc::new(Mutex::new(Cluster::default()));
-    let cells = service(store, cluster.clone());
+    let cells = service(store.clone(), cluster.clone());
     let handle = cells.up("generation-check", &spec()).await.unwrap().cell;
     environment_tests::ready(&cluster);
     let mut instance = cells
@@ -769,7 +821,18 @@ async fn retained_data_edits_cannot_converge_using_the_previous_configuration_st
         .as_mut()
         .unwrap()
         .observed_desired_generation = 1;
-    let pending = proofstorm_app::runtime::status_from_resource(instance.clone(), &resource);
+    let published = store
+        .revision("local", "developer", &instance.revision_digest)
+        .unwrap();
+    let loaded = |resource: &proofstorm_kube::ProofstormCell| {
+        proofstorm_kube::LoadedCell::from_spec(
+            resource.clone(),
+            published.cell.clone(),
+            published.lock.clone(),
+        )
+    };
+    let pending =
+        proofstorm_app::runtime::status_from_resource(instance.clone(), &loaded(&resource));
     assert_eq!(pending.phase, proofstorm_core::InstancePhase::Pending);
     assert_eq!(pending.observed_generation, 1);
     resource
@@ -778,7 +841,7 @@ async fn retained_data_edits_cannot_converge_using_the_previous_configuration_st
         .unwrap()
         .observed_desired_generation = 2;
     assert_eq!(
-        proofstorm_app::runtime::status_from_resource(instance, &resource).phase,
+        proofstorm_app::runtime::status_from_resource(instance, &loaded(&resource)).phase,
         proofstorm_core::InstancePhase::Ready
     );
 }
@@ -834,10 +897,11 @@ async fn edit_conflict_retry_rereads_the_latest_durable_generation() {
         .find(|value| value["kind"] == "ProofstormCell")
         .unwrap();
     assert_eq!(cell["spec"]["revisionDigest"], next_revision);
-    assert_eq!(
-        cell["spec"]["cell"]["components"].as_array().unwrap().len(),
-        3
-    );
+    // The cell names its revision; the components live in the stored revision.
+    let revision = environment_tests::stored_revisions(&cluster.objects)
+        .remove(&next_revision)
+        .expect("the new revision is stored");
+    assert_eq!(revision.cell.components.len(), 3);
     assert_eq!(
         cluster
             .requests
@@ -1071,10 +1135,31 @@ async fn cleanup_retains_records_on_failed_reads_and_remaining_namespace() {
         .unwrap()
         .objects
         .retain(|path, _| !path.starts_with("/api/v1/namespaces/proofstorm-"));
+    cluster.lock().unwrap().reads.clear();
     proofstorm_app::lifecycle::sweep(&cells.runtime, &store, "local", "developer", "")
         .await
         .unwrap();
     assert!(store.instance("local", "developer", &old.id).is_err());
+    // Removal picks receipts from ConfigMap metadata, so revision payloads are
+    // never listed; the cell's own revision is still removed.
+    let cluster = cluster.lock().unwrap();
+    let lists = cluster
+        .reads
+        .iter()
+        .filter(|(path, _, _)| path.ends_with("/configmaps"))
+        .collect::<Vec<_>>();
+    assert!(!lists.is_empty());
+    assert!(
+        lists
+            .iter()
+            .all(|(_, _, accept)| accept.contains("as=PartialObjectMetadataList"))
+    );
+    assert!(
+        !cluster
+            .objects
+            .keys()
+            .any(|path| path.contains("/configmaps/revision-"))
+    );
 }
 
 #[tokio::test]
@@ -1247,6 +1332,7 @@ async fn workspace_lifecycle_and_fault_grants_check_capabilities_even_through_na
     let cells = service(store.clone(), cluster.clone());
     let mut cell = spec();
     cell.components.push(ComponentSpec {
+        resources: None,
         id: "scripts".into(),
         kind: ComponentKind::Workspace,
         implementation: "workspace".into(),

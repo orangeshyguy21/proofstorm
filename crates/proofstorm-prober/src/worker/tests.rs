@@ -295,7 +295,7 @@ async fn timeout_is_shared_by_a_batch_and_early_results_keep_their_age() {
     let result = observations(fixture.worker.evaluate(batch).await);
     assert!(
         started.elapsed() < Duration::from_secs(4),
-        "32 checks must not become 32 serial timeouts"
+        "a batch's checks must not become serial timeouts"
     );
     assert_eq!(result.len(), MAX_BATCH_TARGETS);
     assert_eq!(result[0].outcome, Outcome::Reachable);

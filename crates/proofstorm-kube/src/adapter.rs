@@ -27,7 +27,7 @@ use thiserror::Error;
 use crate::{
     BACKEND_ID_ANNOTATION, EXECUTION_STATE_CONTRACT_ANNOTATION, INSTANCE_LABEL,
     REVISION_DIGEST_ANNOTATION, ROLLOUT_DIGEST_ANNOTATION, instance_namespace,
-    pod::{container_security, instance_affinity, pod_security},
+    pod::{container_security, pod_security},
 };
 
 pub const COMPONENT_LABEL: &str = "proofstorm.dev/component";
@@ -124,6 +124,20 @@ pub struct RenderedComponent {
     pub stateful_sets: Vec<StatefulSet>,
     pub deployments: Vec<Deployment>,
     pub persistent_volume_claims: Vec<PersistentVolumeClaim>,
+}
+
+impl RenderedComponent {
+    /// The pod templates of every workload.
+    fn pod_specs_mut(&mut self) -> impl Iterator<Item = &mut k8s_openapi::api::core::v1::PodSpec> {
+        self.deployments
+            .iter_mut()
+            .filter_map(|workload| workload.spec.as_mut()?.template.spec.as_mut())
+            .chain(
+                self.stateful_sets
+                    .iter_mut()
+                    .filter_map(|workload| workload.spec.as_mut()?.template.spec.as_mut()),
+            )
+    }
 }
 
 /// Cluster observations supplied to the pure component status projector.
@@ -296,6 +310,7 @@ pub fn render_cell(
 ) -> Result<RenderedCell, AdapterError> {
     let namespace = instance_namespace(instance_key);
     let plans = compile_component_plans(instance_key, revision_digest, cell, lock)?;
+    let defaults = cell.policy.resources.container_defaults();
     let mut rendered = RenderedCell {
         plans: plans.clone(),
         ..RenderedCell::default()
@@ -303,21 +318,32 @@ pub fn render_cell(
     rendered
         .network_policies
         .push(resource(action_network_policy(instance_key, &namespace))?);
+    // Without partitions one shared policy covers every component; the
+    // controller adds per-component policies only while a partition is active.
+    rendered
+        .network_policies
+        .push(render_cell_network_policy(instance_key, &[])?);
 
+    let own_resources: BTreeMap<_, _> = cell
+        .components
+        .iter()
+        .map(|spec| (spec.id.as_str(), spec.resources.as_ref()))
+        .collect();
     for plan in &plans {
-        rendered
-            .network_policies
-            .push(render_component_network_policy(
-                instance_key,
-                &plan.component_id,
-                &[],
-            )?);
         let generator = COMPONENT_RENDERERS
             .get(plan.backend_id.as_str())
             .ok_or_else(|| AdapterError::UnsupportedAdapter {
                 adapter: plan.backend_id.clone(),
             })?;
-        rendered.append_component(generator(plan)?);
+        let mut component = generator(plan)?;
+        let own = own_resources
+            .get(plan.component_id.as_str())
+            .copied()
+            .flatten();
+        for pod in component.pod_specs_mut() {
+            crate::resources::apply(pod, &defaults, own);
+        }
+        rendered.append_component(component);
     }
     rendered.sort_resources();
     Ok(rendered)
@@ -390,10 +416,7 @@ pub fn protocol_prober_resources() -> k8s_openapi::api::core::v1::ResourceRequir
             ("cpu".into(), Quantity("50m".into())),
             ("memory".into(), Quantity("16Mi".into())),
         ])),
-        limits: Some(BTreeMap::from([
-            ("cpu".into(), Quantity("500m".into())),
-            ("memory".into(), Quantity("64Mi".into())),
-        ])),
+        limits: Some(BTreeMap::from([("memory".into(), Quantity("64Mi".into()))])),
         ..Default::default()
     }
 }
@@ -873,6 +896,13 @@ pub(crate) fn workload_observation(
             {
                 return failure;
             }
+            if quota_refused(status) {
+                return (
+                    ComponentConditionState::False,
+                    ComponentConditionReason::PodUnschedulable,
+                    QUOTA_REFUSED,
+                );
+            }
             workload_replica_observation(
                 workload.metadata.generation,
                 status.and_then(|status| status.observed_generation),
@@ -921,6 +951,26 @@ pub(crate) fn workload_observation(
             )
         }
     }
+}
+
+const QUOTA_REFUSED: &str = "The cell's quota refused this pod. Raise policy.resources.quota: it counts every component's pod, the prober and running actions.";
+
+/// Whether the namespace quota refused the Deployment's pod. Kubernetes
+/// records that only on the `ReplicaSet`, and the Deployment copies it.
+fn quota_refused(status: Option<&k8s_openapi::api::apps::v1::DeploymentStatus>) -> bool {
+    status
+        .and_then(|status| status.conditions.as_ref())
+        .into_iter()
+        .flatten()
+        .any(|condition| {
+            condition.type_ == "ReplicaFailure"
+                && condition.status == "True"
+                && condition.reason.as_deref() == Some("FailedCreate")
+                && condition
+                    .message
+                    .as_deref()
+                    .is_some_and(|message| message.contains("exceeded quota"))
+        })
 }
 
 fn pod_scheduling_observation(
@@ -1546,7 +1596,6 @@ pub fn render_postgres_component(
                     "automountServiceAccountToken": false,
                     "enableServiceLinks": false,
                     "securityContext": pod_security(70),
-                    "affinity": instance_affinity(&plan.instance_key),
                     "containers": [{
                         "name": "component",
                         "image": plan.execution_context.image,
@@ -1634,7 +1683,7 @@ pub fn render_keycloak_component(
         "spec": {"replicas": 1, "strategy": {"type": "Recreate"}, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key),
+                "securityContext": pod_security(1000),
                 "initContainers": [database.ensure_container("ensure-database")],
                 "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
@@ -1658,10 +1707,10 @@ pub fn render_keycloak_component(
                     ],
                     "ports": [{"name": "http", "containerPort": http_port}],
                     "securityContext": container_security(),
-                    // The namespace LimitRange defaults a container to 512Mi. The JVM
-                    // augments and imports the realm at startup, and its peak resident
-                    // set does not fit that default, so declare the limit here.
-                    "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "2", "memory": "2Gi"}},
+                    // Containers default to a 512Mi memory limit. The JVM augments and
+                    // imports the realm at startup, and its peak resident set does not
+                    // fit that default, so declare the limit here.
+                    "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"memory": "2Gi"}},
                     "startupProbe": {"exec": {"command": [crate::drivers::DRIVER_PATH, "keycloak", "configure"]}, "timeoutSeconds": 10, "periodSeconds": 3, "failureThreshold": 60},
                     "readinessProbe": {"httpGet": {"path": "/realms/proofstorm/.well-known/openid-configuration", "port": http_port}, "periodSeconds": 3, "failureThreshold": 60},
                     "volumeMounts": [{"name": "realm-import", "mountPath": "/opt/keycloak/data/import/realm.json", "subPath": "realm.json", "readOnly": true}]
@@ -1709,13 +1758,15 @@ pub fn render_redis_component(
         "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "command": ["sh", "-c"],
                     "args": [format!("exec redis-server --bind 0.0.0.0 --protected-mode yes --port {redis_port} --save '' --appendonly no --requirepass \"$REDIS_PASSWORD\" --maxmemory {maxmemory_mb}mb --maxmemory-policy allkeys-lru")],
                     "env": [{"name": "REDIS_PASSWORD", "valueFrom": {"secretKeyRef": {"name": secret_name, "key": "REDIS_PASSWORD"}}}],
                     "ports": [{"name": "redis", "containerPort": redis_port}],
                     "securityContext": container_security(),
+                    // Keep the container limit above the cache size, with room for Redis itself.
+                    "resources": {"limits": {"memory": format!("{}Mi", (maxmemory_mb + 64).max(512))}},
                     "readinessProbe": {
                         "exec": {"command": ["sh", "-c", "redis-cli --no-auth-warning -a \"$REDIS_PASSWORD\" ping | grep -qx PONG"]},
                         "periodSeconds": 3,
@@ -1967,7 +2018,7 @@ pub fn render_cdk_component(
     let labels = labels(&plan.instance_key, Some(&plan.component_id));
     let mut pod_spec = json!({
         "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+        "securityContext": pod_security(1000), "containers": [{
             "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
             "command": ["cdk-mintd"],
             "env": runtime.env,
@@ -2651,7 +2702,7 @@ pub fn render_nutshell_mint_component(
         "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "command": command,
                     "envFrom": [{"configMapRef": {"name": config_name}}],
@@ -2729,22 +2780,7 @@ pub fn render_nutshell_mint_component(
 }
 
 fn install_component_driver(rendered: &mut RenderedComponent) -> Result<(), AdapterError> {
-    let pods = rendered
-        .deployments
-        .iter_mut()
-        .filter_map(|workload| {
-            workload
-                .spec
-                .as_mut()
-                .and_then(|spec| spec.template.spec.as_mut())
-        })
-        .chain(rendered.stateful_sets.iter_mut().filter_map(|workload| {
-            workload
-                .spec
-                .as_mut()
-                .and_then(|spec| spec.template.spec.as_mut())
-        }));
-    for pod in pods {
+    for pod in rendered.pod_specs_mut() {
         crate::drivers::install(pod)?;
     }
     Ok(())
@@ -3195,13 +3231,13 @@ pub fn render_workspace_component(
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
                 "terminationGracePeriodSeconds":15,
-                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "command": [proofstorm_core::workspace::WORKSPACE_RUNNER,"workspace","serve"],
                     "workingDir":"/workspace",
                     "env":[{"name":"HOME","value":"/workspace"},{"name":"PROOFSTORM_WORKSPACE","value":"/workspace"},{"name":"PROOFSTORM_RUNTIME_IMAGE","value":plan.execution_context.image}],
                     "securityContext": container_security(),
-                    "resources":{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"cpu":"2","memory":"1Gi"}},
+                    "resources":{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"memory":"1Gi"}},
                     "readinessProbe":{"exec":{"command":[proofstorm_core::workspace::WORKSPACE_RUNNER,"workspace","request","{\"kind\":\"ping\"}"]},"timeoutSeconds":3,"periodSeconds":3},
                     "volumeMounts":[{"name":"workspace","mountPath":"/workspace"}]
                 }],"volumes":[{"name":"workspace","persistentVolumeClaim":{"claimName":data_name}}]
@@ -3324,7 +3360,7 @@ fn render_cli_wallet_workspace(
         "spec": {"replicas": 1, "selector": {"matchLabels": labels}, "template": {
             "metadata": plan_pod_metadata(plan, &labels), "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(1000), "affinity": instance_affinity(&plan.instance_key), "containers": [{
+                "securityContext": pod_security(1000), "containers": [{
                     "name": "component", "image": plan.execution_context.image, "imagePullPolicy": "IfNotPresent",
                     "command": ["/bin/sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 3600; done"],
                     "env": [{"name": "HOME", "value": "/wallet"}, {"name": "PROOFSTORM_WALLET", "value": plan.component_id}],
@@ -3379,7 +3415,7 @@ fn stateful_set(
         "spec": {"serviceName": component, "replicas": 1, "selector": {"matchLabels": labels},
             "template": {"metadata": template_metadata, "spec": {
                 "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-                "securityContext": pod_security(1000), "affinity": instance_affinity(instance_key), "containers": [container]
+                "securityContext": pod_security(1000), "containers": [container]
             }},
             "volumeClaimTemplates": [{"metadata": {"name": "data", "labels": labels},
                 "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}}}]
@@ -3461,6 +3497,50 @@ pub fn render_component_network_policy(
             "ingress": [{"from": [{"podSelector": peer_selector.clone()}]}],
             "egress": [
                 {"to": [{"podSelector": peer_selector}]},
+                {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}}],
+                    "ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}]}
+            ]}
+    }))
+}
+
+/// The name of the cell's shared component allow-list.
+pub const CELL_NETWORK_POLICY: &str = "allow-cell-components";
+
+/// One allow-list for every pod acting as a component that isn't in an active
+/// partition: the same rules as a component policy without exclusions. Pods
+/// are selected by network identity, not component label, so native exec and
+/// reachability pods that borrow a component's identity get its rules. A
+/// partitioned component instead gets its own policy, and this one stops
+/// selecting it, because policies only add permissions and a pod selected by
+/// both would be allowed everything. Action and prober pods carry the
+/// operation label and keep their own policy.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed Kubernetes resource contract is invalid.
+pub fn render_cell_network_policy(
+    instance_key: &str,
+    partitioned: &[String],
+) -> Result<NetworkPolicy, AdapterError> {
+    let namespace = instance_namespace(instance_key);
+    let peers = json!({"matchLabels": {INSTANCE_LABEL: instance_key}});
+    let mut selected = vec![
+        json!({"key": NETWORK_IDENTITY_LABEL, "operator": "Exists"}),
+        json!({"key": "proofstorm.dev/operation", "operator": "DoesNotExist"}),
+    ];
+    if !partitioned.is_empty() {
+        selected.push(
+            json!({"key": NETWORK_IDENTITY_LABEL, "operator": "NotIn", "values": partitioned}),
+        );
+    }
+    resource(json!({
+        "apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+        "metadata": metadata(CELL_NETWORK_POLICY, instance_key, &namespace, None),
+        "spec": {"podSelector": {"matchLabels": {INSTANCE_LABEL: instance_key}, "matchExpressions": selected},
+            "policyTypes": ["Ingress", "Egress"],
+            "ingress": [{"from": [{"podSelector": peers.clone()}]}],
+            "egress": [
+                {"to": [{"podSelector": peers}]},
                 {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}}],
                     "ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}]}
             ]}
@@ -3957,6 +4037,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_deployment_whose_pod_the_quota_refused_is_reported_once_it_says_so() {
+        let status = |reason: &str, message: &str| {
+            serde_json::from_value::<k8s_openapi::api::apps::v1::DeploymentStatus>(json!({
+                "conditions":[{"type":"ReplicaFailure","status":"True","reason":reason,
+                    "message":message}]}))
+            .unwrap()
+        };
+        let refused = status(
+            "FailedCreate",
+            "pods \"mint-6d4\" is forbidden: exceeded quota: proofstorm-instance-quota",
+        );
+        assert!(quota_refused(Some(&refused)));
+        assert!(!quota_refused(Some(&status(
+            "FailedCreate",
+            "admission webhook denied"
+        ))));
+        assert!(!quota_refused(None));
+        assert!(QUOTA_REFUSED.len() <= 160);
+    }
+
+    #[test]
     fn readiness_aggregation_requires_observations_and_false_overrides_unknown() {
         use ComponentConditionState::{False, True, Unknown};
         use ComponentConditionType::{ServiceReady, StorageReady, WorkloadReady};
@@ -4008,6 +4109,7 @@ mod tests {
         control: ControlClass,
     ) -> ComponentSpec {
         ComponentSpec {
+            resources: None,
             id: id.into(),
             kind,
             implementation: implementation.into(),
@@ -4590,12 +4692,15 @@ mod tests {
             deployment.metadata.name.as_deref() == Some("proofstorm-protocol-prober")
         }));
         assert_eq!(rendered.persistent_volume_claims.len(), 2);
-        assert_eq!(rendered.network_policies.len(), cell.components.len() + 1);
-        assert!(
-            rendered.network_policies.iter().any(|policy| {
-                policy.metadata.name.as_deref() == Some("allow-controller-actions")
-            })
-        );
+        // Actions plus one shared component policy, however many components.
+        let names = rendered
+            .network_policies
+            .iter()
+            .filter_map(|policy| policy.metadata.name.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"allow-controller-actions"));
+        assert!(names.contains(&CELL_NETWORK_POLICY));
         assert_eq!(rendered.inventory(), rendered.inventory());
         assert!(
             lock.entries

@@ -269,8 +269,10 @@ fn exercise(
         "targeted edit restarted original components"
     );
     let replay = apply(client, &expansion, "expand-apply")?;
+    // An exact replay returns its original acceptance; the newer desired
+    // generation shows that a later edit superseded it.
     ensure!(
-        replay["superseded"] == true && replay["current_generation"] == 3,
+        replay["accepted_generation"] == 2 && replay["desired_generation"] == 3,
         "old replay did not report supersession: {replay}"
     );
     let (base_components, base_connections) = topology();

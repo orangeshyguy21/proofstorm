@@ -48,20 +48,26 @@ impl Drop for InstallationGuard {
 impl Installation {
     /// Serialize all future setup/reset mutations using this same guard.
     pub fn lock(home: &Path) -> Result<InstallationGuard> {
-        let checkout = crate::dev_reset::checkout_guard(home)?;
+        Self::lock_within(home, Duration::ZERO)
+    }
+
+    /// As [`Self::lock`], waiting up to `wait` for another operation to finish.
+    pub fn lock_within(home: &Path, wait: Duration) -> Result<InstallationGuard> {
+        let checkout = crate::dev_reset::checkout_guard(home, wait)?;
         crate::dev_reset::check_pending(home)?;
-        Self::lock_state(home, checkout)
+        Self::lock_state(home, checkout, wait)
     }
 
     pub(crate) fn lock_state(
         home: &Path,
         checkout: Option<Connection>,
+        wait: Duration,
     ) -> Result<InstallationGuard> {
         private_directory(home)?;
         let path = home.join("installation-lock.sqlite3");
         create_private_file(&path)?;
         let db = Connection::open(&path)?;
-        db.busy_timeout(Duration::ZERO)?;
+        db.busy_timeout(wait)?;
         db.execute_batch("BEGIN IMMEDIATE")
             .context("another installation operation is running; retry when it finishes")?;
         Ok(InstallationGuard(db, checkout))
@@ -220,17 +226,59 @@ impl Installation {
         self.home.join("k3d.yaml")
     }
 
+    /// Whether setup has tried to create this installation's cluster: the
+    /// receipt is written right after any create attempt, even a failed one.
+    fn cluster_attempted(&self) -> Result<bool> {
+        Ok(self.home.join("runtime-resources.json").try_exists()?
+            || self.home.join("runtime-owner.json").try_exists()?)
+    }
+
+    /// The cluster's agent nodes: the count its saved k3d configuration
+    /// created, else the count `runtime.toml` would create.
+    ///
+    /// # Errors
+    ///
+    /// An unreadable saved configuration or `runtime.toml`.
+    pub fn cluster_agents(&self) -> Result<u16> {
+        let path = self.cluster_config_path();
+        if path.try_exists()? {
+            let saved: Value = serde_json::from_slice(&fs::read(&path)?)
+                .context("saved k3d configuration is not valid JSON")?;
+            return saved["agents"]
+                .as_u64()
+                .and_then(|agents| u16::try_from(agents).ok())
+                .context("saved k3d configuration has no agent count");
+        }
+        Ok(crate::runtime_settings::load(&self.home)?
+            .cluster
+            .agents
+            .unwrap_or(1))
+    }
+
     /// JSON is also valid YAML. Keep catalog digests unchanged and route pulls
     /// through the private Docker network's registry endpoint.
+    /// The cluster this release creates with default settings.
     #[must_use]
     pub fn cluster_config(&self) -> Value {
+        self.cluster_config_for(&proofstorm_core::ClusterSettings::default())
+    }
+
+    /// The cluster to create for the user's `cluster.*` runtime settings.
+    #[must_use]
+    pub fn cluster_config_for(&self, cluster: &proofstorm_core::ClusterSettings) -> Value {
+        let mut extra_args = vec![
+            json!({"arg": "--disable=traefik", "nodeFilters": ["server:*"]}),
+            json!({"arg": "--disable=servicelb", "nodeFilters": ["server:*"]}),
+            json!({"arg": "--disable-default-registry-endpoint", "nodeFilters": ["server:*", "agent:*"]}),
+        ];
+        extra_args.extend(max_pods_args(cluster.max_pods_per_node));
         let mirrors =
             json!({"mirrors": {CATALOG_REGISTRY: {"endpoint": [self.registry_endpoint()]}}});
         json!({
             "apiVersion": "k3d.io/v1alpha5", "kind": "Simple",
             "metadata": {"name": self.cluster_name()},
             "image": k3s_image(pinned_k3s()),
-            "servers": 1, "agents": 1,
+            "servers": 1, "agents": cluster.agents.unwrap_or(1),
             "kubeAPI": {"host": "127.0.0.1", "hostIP": "127.0.0.1", "hostPort": self.api_port.to_string()},
             "registries": {
                 "create": {"name": self.registry_name(), "host": "127.0.0.1", "hostPort": self.registry_port.to_string()},
@@ -247,11 +295,7 @@ impl Installation {
             "options": {
                 "kubeconfig": {"updateDefaultKubeconfig": false, "switchCurrentContext": false},
                 "k3d": {"wait": true, "timeout": "120s"},
-                "k3s": {"extraArgs": [
-                    {"arg": "--disable=traefik", "nodeFilters": ["server:*"]},
-                    {"arg": "--disable=servicelb", "nodeFilters": ["server:*"]},
-                    {"arg": "--disable-default-registry-endpoint", "nodeFilters": ["server:*", "agent:*"]}
-                ]},
+                "k3s": {"extraArgs": extra_args},
                 "runtime": {"labels": [{"label": format!("{OWNER_LABEL}={}", self.id), "nodeFilters": ["server:*", "agent:*", "loadbalancer"]}]}
             }
         })
@@ -280,7 +324,8 @@ impl Installation {
     }
 
     fn write_runtime_config(&self) -> Result<()> {
-        let config = self.cluster_config();
+        let cluster = crate::runtime_settings::load(&self.home)?.cluster;
+        let config = self.cluster_config_for(&cluster);
         let bytes = serde_json::to_vec_pretty(&config)?;
         let path = self.cluster_config_path();
         if path.try_exists()? {
@@ -294,12 +339,59 @@ impl Installation {
                     config["image"].as_str().unwrap_or_default()
                 );
             }
+            if comparable(&saved, &config).map(|saved| without_sizing(&saved))
+                == Some(without_sizing(&config))
+            {
+                // Sizing applies when the cluster is created, so until a create
+                // has been attempted it may still change.
+                if !self.cluster_attempted()? {
+                    fs::remove_file(&path)?;
+                    return write_new_private(&path, &bytes);
+                }
+                bail!(
+                    "cluster.agents and cluster.max_pods_per_node apply when the cluster is created. Run storm setup --recreate to replace the runtime, which deletes all cells, or storm config unset them"
+                );
+            }
             bail!(
                 "generated k3d configuration differs from saved installation; refusing to overwrite it"
             );
         }
         write_new_private(&path, &bytes)
     }
+}
+
+/// Kubelet and controller-manager arguments for a pod limit other than k3s's.
+/// Each node's pod range must hold that many addresses plus two, so a limit
+/// above what a /24 holds also narrows the per-node range's mask.
+fn max_pods_args(max_pods: Option<u32>) -> Vec<Value> {
+    let Some(max_pods) =
+        max_pods.filter(|pods| *pods != proofstorm_core::DEFAULT_MAX_PODS_PER_NODE)
+    else {
+        return Vec::new();
+    };
+    let mut args = vec![json!({"arg": format!("--kubelet-arg=max-pods={max_pods}"),
+        "nodeFilters": ["server:*", "agent:*"]})];
+    let host_bits = (max_pods + 2).next_power_of_two().trailing_zeros().max(8);
+    if host_bits > 8 {
+        args.push(json!({"arg": format!("--kube-controller-manager-arg=node-cidr-mask-size={}", 32 - host_bits),
+            "nodeFilters": ["server:*"]}));
+    }
+    args
+}
+
+/// A cluster configuration with its sizing settings removed, so a sizing-only
+/// change can be told apart from any other difference.
+fn without_sizing(config: &Value) -> Value {
+    let mut config = config.clone();
+    config["agents"] = Value::Null;
+    if let Some(args) = config["options"]["k3s"]["extraArgs"].as_array_mut() {
+        args.retain(|arg| {
+            let arg = arg["arg"].as_str().unwrap_or_default();
+            !arg.starts_with("--kubelet-arg=max-pods=")
+                && !arg.starts_with("--kube-controller-manager-arg=node-cidr-mask-size=")
+        });
+    }
+    config
 }
 
 pub(crate) fn k3s_image(version: &str) -> String {
@@ -347,7 +439,7 @@ fn pinned_k3s() -> &'static str {
         .expect("checked-in tools/versions.env must pin K3S_VERSION")
 }
 
-fn private_directory(path: &Path) -> Result<()> {
+pub(crate) fn private_directory(path: &Path) -> Result<()> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]

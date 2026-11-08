@@ -75,7 +75,7 @@ else
   destination=${!#}
   [[ "$destination" == "$PWD/charts/proofstorm/crds" ]]
   mkdir -p "$destination"
-  for name in proofstormcells proofstormcellactions proofstormcandidatebuilds; do
+  for name in proofstormcells proofstormcellactions proofstormcandidatebuilds proofstormcomponents; do
     printf 'fixture CRD\n' > "$destination/proofstorm.dev_$name.yaml"
   done
 fi

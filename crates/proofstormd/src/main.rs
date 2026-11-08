@@ -10,6 +10,7 @@ use component_lifecycle::same_lifecycle_identity;
 mod cell_updates;
 mod component_logs;
 mod generated_secrets;
+mod storage_nodes;
 mod workspace_bridge;
 mod workspace_faults;
 use std::{
@@ -35,10 +36,10 @@ use kube::{
         AttachParams, DeleteParams, ListParams, LogParams, Patch, PatchParams, PropagationPolicy,
     },
     runtime::{
-        Controller,
+        Controller, WatchStreamExt,
         controller::Action,
         finalizer::{Event, finalizer},
-        watcher,
+        reflector, watcher,
     },
 };
 use proofstorm_core::CandidateBuildPhase;
@@ -48,15 +49,15 @@ use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionAdmissionError, ActionPhase, ActionRenderError, AdapterError,
     AuthenticationConformanceResult, AuthenticationProtectedSpendResult,
     AuthenticationReplayResult, AuthenticationSessionFailureStage, BACKEND_ID_ANNOTATION,
-    CANDIDATE_CANCEL_ANNOTATION, COMPONENT_LABEL, CellAction, CellPhase,
+    CANDIDATE_CANCEL_ANNOTATION, CELL_NETWORK_POLICY, COMPONENT_LABEL, CellAction, CellPhase,
     ComponentObservationResources, EXECUTION_STATE_CONTRACT_ANNOTATION,
     FINISHED_ACTION_RETENTION_SECONDS, INSTANCE_LABEL, LIFECYCLE_RESTART_ANNOTATION,
-    LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, ProofstormCandidateBuild,
-    ProofstormCandidateBuildStatus, ProofstormCell, ProofstormCellAction,
-    ProofstormCellActionStatus, ProofstormCellStatus, action_result_container,
-    compile_component_plans, evaluate_action_admission, instance_namespace,
-    observe_component_statuses, render_candidate_build_job, render_cell, render_cell_action_job,
-    render_cell_security_spine, render_component_network_policy,
+    LIFECYCLE_SEQUENCE_ANNOTATION, LIFECYCLE_STATE_ANNOTATION, LoadedCell,
+    ProofstormCandidateBuild, ProofstormCandidateBuildStatus, ProofstormCell, ProofstormCellAction,
+    ProofstormCellActionStatus, ProofstormCellStatus, ProofstormComponent, action_result_container,
+    evaluate_action_admission, instance_namespace, observe_component_statuses,
+    render_candidate_build_job, render_cell, render_cell_action_job, render_cell_network_policy,
+    render_component_network_policy, render_security_spine,
 };
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -64,13 +65,12 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 const FINALIZER: &str = "proofstorm.dev/cell-cleanup";
 const FIELD_MANAGER: &str = "proofstormd";
 const CELL_CONTROLLER_CONCURRENCY: u16 = 8;
-const ACTION_CONTROLLER_CONCURRENCY: u16 = 16;
 const MAX_ACTION_STATUS_BYTES: usize = 64 * 1024;
-
-/// A one-off action that hasn't started this long after acceptance fails
-/// instead of starting. By then its caller has usually given up, and a late
-/// start would run, say, a payment hours after anyone expected it (PS-44).
-const ACTION_START_DEADLINE_SECONDS: i64 = 120;
+/// Owns only the cell's protocol freshness heartbeat, so the full status
+/// apply never carries it and a probe-only change is one small write.
+const HEARTBEAT_FIELD_MANAGER: &str = "proofstormd-heartbeat";
+/// Component object writes in flight per cell observation.
+const COMPONENT_WRITE_CONCURRENCY: usize = 16;
 
 #[derive(Clone)]
 struct Context {
@@ -80,6 +80,109 @@ struct Context {
     retries: Arc<retry::Backoff>,
     /// Caps native exec work so it can't take every action-controller slot.
     native: Arc<native_exec::Gate>,
+    /// Slot counts and the start deadline, from `runtime.toml` via the chart.
+    limits: proofstorm_core::ControllerLimits,
+    /// The cell controller's watch cache, so actions don't fetch whole cells.
+    cells: kube::runtime::reflector::Store<ProofstormCell>,
+    /// Immutable cell revisions, read once each.
+    revisions: Arc<proofstorm_kube::RevisionCache>,
+    /// Every cell's component status objects, from one watch.
+    components: reflector::Store<ProofstormComponent>,
+}
+
+#[cfg(test)]
+impl Context {
+    /// A context around a fake API, with default limits and empty caches.
+    fn for_tests(client: Client, probes: Arc<probes::Manager>) -> Self {
+        Self {
+            client,
+            probes,
+            retries: Arc::default(),
+            native: Arc::default(),
+            limits: proofstorm_core::ControllerLimits::default(),
+            cells: reflector::store().0,
+            revisions: Arc::default(),
+            components: reflector::store().0,
+        }
+    }
+}
+
+/// Ok when the object was deleted or was already gone.
+fn gone<T>(result: Result<T, kube::Error>) -> Result<(), Error> {
+    match result {
+        Ok(_) => Ok(()),
+        Err(kube::Error::Api(error)) if error.code == 404 => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// The cached component objects of one cell instance, once the cache's first
+/// list has landed. A cache with no writer (tests) is used as it is.
+async fn stored_components(
+    context: &Context,
+    instance_key: &str,
+) -> Result<Vec<Arc<ProofstormComponent>>, Error> {
+    // A dropped writer still counts as ready: the cache keeps what it has.
+    let _ = tokio::time::timeout(
+        Duration::from_secs(10),
+        context.components.wait_until_ready(),
+    )
+    .await
+    .map_err(|_| Error::ControllerInvariant("component status cache is not ready"))?;
+    Ok(context
+        .components
+        .state()
+        .into_iter()
+        .filter(|object| object.spec.instance_key == instance_key)
+        .collect())
+}
+
+/// The loaded cell with its component statuses filled from the cache, except
+/// the components in `live`, read from the API. The cell and component watches
+/// deliver independently, so a cached object can be older than the cached
+/// cell's heartbeat, which would then vouch for evidence the controller has
+/// since withdrawn. Action admission reads its own components fresh.
+async fn with_component_statuses(
+    context: &Context,
+    mut cell: LoadedCell,
+    live: &BTreeSet<String>,
+) -> Result<LoadedCell, Error> {
+    let mut stored = stored_components(context, &cell.spec.instance_key).await?;
+    if !live.is_empty() {
+        let namespace = cell
+            .namespace()
+            .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
+        let api = Api::<ProofstormComponent>::namespaced(context.client.clone(), &namespace);
+        stored.retain(|object| !live.contains(&object.spec.component_id));
+        for id in live {
+            let name = proofstorm_kube::component_object_name(&cell.spec.instance_key, id);
+            if let Some(object) = api.get_opt(&name).await? {
+                stored.push(Arc::new(object));
+            }
+        }
+    }
+    cell.assemble_components(stored.iter().map(AsRef::as_ref));
+    Ok(cell)
+}
+
+/// An action's cell from the watch cache, or from the API before the cache has
+/// it. Actions bind to their own revision through `cell_updates::action_cell`,
+/// so a cache entry that lags an edit is resolved there.
+async fn action_cell_source(
+    action: &ProofstormCellAction,
+    namespace: &str,
+    context: &Context,
+) -> Result<ProofstormCell, Error> {
+    let reference =
+        kube::runtime::reflector::ObjectRef::new(&action.spec.cell_name).within(namespace);
+    if let Some(cell) = context.cells.get(&reference) {
+        return Ok((*cell).clone());
+    }
+    Ok(
+        Api::<ProofstormCell>::namespaced(context.client.clone(), namespace)
+            .get(&action.spec.cell_name)
+            .await?,
+    )
 }
 
 #[derive(Debug, Error)]
@@ -112,6 +215,8 @@ enum Error {
     },
     #[error("live component execution failed: {0}")]
     LiveExec(String),
+    #[error("cell revision: {0}")]
+    Revision(#[from] proofstorm_kube::RevisionError),
 }
 
 #[cfg(test)]
@@ -146,16 +251,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let image = std::env::var("PROOFSTORM_PROBER_IMAGE")
         .map_err(|_| "PROOFSTORM_PROBER_IMAGE must name the installed controller image")?;
     let (probes, triggers) = probes::Manager::new(client.clone(), image);
+    let limits = proofstorm_core::ControllerLimits::from_env(|name| std::env::var(name).ok())?;
+    let cell_watch = Controller::new(cells, watcher::Config::default());
+    let (components, component_writer) = reflector::store();
+    let component_cache = reflector(
+        component_writer,
+        watcher(
+            Api::<ProofstormComponent>::all(client.clone()),
+            watcher::Config::default(),
+        ),
+    )
+    .default_backoff()
+    .for_each(|event| async move {
+        if let Err(error) = event {
+            eprintln!("component status watch failed: {error}");
+        }
+    });
     let context = Arc::new(Context {
         client,
         probes,
         retries: Arc::default(),
-        native: Arc::default(),
+        native: Arc::new(native_exec::Gate::new(&limits)),
+        limits,
+        cells: cell_watch.store(),
+        revisions: Arc::default(),
+        components,
     });
     let trigger_stream = futures::stream::unfold(triggers, |mut receive| async {
         receive.recv().await.map(|object| (object, receive))
     });
-    let cell_controller = Controller::new(cells, watcher::Config::default())
+    let cell_controller = cell_watch
         .reconcile_on(trigger_stream)
         .with_config(
             kube::runtime::controller::Config::default().concurrency(CELL_CONTROLLER_CONCURRENCY),
@@ -169,9 +294,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     let action_controller = Controller::new(actions, watcher::Config::default())
-        .with_config(
-            kube::runtime::controller::Config::default().concurrency(ACTION_CONTROLLER_CONCURRENCY),
-        )
+        .with_config(kube::runtime::controller::Config::default().concurrency(limits.action_slots))
         .shutdown_on_signal()
         .run(
             reconcile_action_with_backoff,
@@ -202,6 +325,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::select! {
         result = probe_scheduler => result.map_err(Into::into),
         () = async { tokio::join!(cell_controller, action_controller, candidate_controller); } => Ok(()),
+        () = component_cache => Ok(()),
     }
 }
 
@@ -587,20 +711,21 @@ async fn reconcile_action(
                 .as_ref()
                 .is_some_and(|status| status.native_execution.is_some())
         {
-            let cells =
-                Api::<ProofstormCell>::namespaced(context.client.clone(), &control_namespace);
-            let cell = cells.get(&action.spec.cell_name).await?;
-            return native_exec::reconcile(action.as_ref(), &cell, &context).await;
+            let cell = action_cell_source(&action, &control_namespace, &context).await?;
+            let cell = cell_updates::action_cell(&action, cell, &context).await?;
+            return Box::pin(native_exec::reconcile(action.as_ref(), &cell, &context)).await;
         }
         return reconcile_action_cancellation(action.as_ref(), &context).await;
     }
-    if start_deadline_passed(action.as_ref(), now_unix())
-        && let Some(next) = expire_unstarted_action(action.as_ref(), &context).await?
+    if start_deadline_passed(
+        action.as_ref(),
+        now_unix(),
+        i64::from(context.limits.start_deadline_seconds),
+    ) && let Some(next) = expire_unstarted_action(action.as_ref(), &context).await?
     {
         return Ok(next);
     }
-    let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &control_namespace);
-    let cell = cells.get(&action.spec.cell_name).await?;
+    let cell = action_cell_source(&action, &control_namespace, &context).await?;
     if action
         .annotations()
         .contains_key(workspace_bridge::PARENT_ANNOTATION)
@@ -608,7 +733,15 @@ async fn reconcile_action(
             .status
             .as_ref()
             .is_none_or(|status| status.native_execution.is_none())
-        && !workspace_bridge::admit_child(&action, &cell, &context).await?
+        && !workspace_bridge::admit_child(
+            &action,
+            &context
+                .revisions
+                .loaded(&context.client, cell.clone())
+                .await?,
+            &context,
+        )
+        .await?
     {
         return patch_action_failure(
             &action,
@@ -638,7 +771,7 @@ async fn reconcile_action(
             .as_ref()
             .is_some_and(|status| status.native_execution.is_some())
     {
-        return native_exec::reconcile(action.as_ref(), &cell, &context).await;
+        return Box::pin(native_exec::reconcile(action.as_ref(), &cell, &context)).await;
     }
     if !action
         .status
@@ -866,7 +999,7 @@ async fn reconcile_action(
 /// component is unready or stopped.
 async fn reconcile_component_logs(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &LoadedCell,
     context: &Context,
 ) -> Result<Action, Error> {
     if action.spec.capability != proofstorm_core::Capability::ComponentLogs {
@@ -876,12 +1009,7 @@ async fn reconcile_component_logs(
     let CellAction::ComponentLogs(request) = &action.spec.action else {
         return Err(Error::ControllerInvariant("expected component logs action"));
     };
-    let plans = compile_component_plans(
-        &cell.spec.instance_key,
-        &cell.spec.revision_digest,
-        &cell.spec.cell,
-        &cell.spec.lock,
-    )?;
+    let plans = cell.plans()?;
     if !plans
         .iter()
         .any(|plan| plan.component_id == request.component)
@@ -932,10 +1060,10 @@ const LIVE_EXEC_OUTPUT_LIMIT: usize = 256 * 1024;
 
 async fn reconcile_component_exec_live(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &LoadedCell,
     context: &Context,
 ) -> Result<Action, Error> {
-    native_exec::reconcile(action, cell, context).await
+    Box::pin(native_exec::reconcile(action, cell, context)).await
 }
 
 async fn read_bounded_output(reader: impl AsyncRead + Unpin) -> Result<(Vec<u8>, bool), Error> {
@@ -969,7 +1097,7 @@ fn exec_exit_code(status: Option<&k8s_openapi::apimachinery::pkg::apis::meta::v1
 )]
 async fn reconcile_network_fault(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &LoadedCell,
     context: &Context,
 ) -> Result<Action, Error> {
     let expected_capability = match action.spec.action {
@@ -993,13 +1121,13 @@ async fn reconcile_network_fault(
         CellAction::NetworkPartition(request) => {
             if request.from_component == request.to_component
                 || !cell
-                    .spec
+                    .revision
                     .cell
                     .components
                     .iter()
                     .any(|component| component.id == request.from_component)
                 || !cell
-                    .spec
+                    .revision
                     .cell
                     .components
                     .iter()
@@ -1159,31 +1287,46 @@ fn active_network_partitions(
     active
 }
 
+/// One policy writer per cell; cells never wait on each other's partitions.
+fn cell_policy_lock(instance_key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static WRITERS: std::sync::Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>> =
+        std::sync::Mutex::new(BTreeMap::new());
+    WRITERS
+        .lock()
+        .expect("policy writer registry")
+        .entry(instance_key.to_owned())
+        .or_default()
+        .clone()
+}
+
+/// Bring a cell's network policies in line with its active partitions: one
+/// shared policy for every component outside a partition, and a policy of its
+/// own for each partitioned component. Returns the active partitions.
 async fn apply_network_fault_policies(
-    cell: &ProofstormCell,
+    cell: &LoadedCell,
     maximum_sequence: Option<u64>,
     context: &Context,
 ) -> Result<BTreeMap<String, (String, String)>, Error> {
-    // All policy writers read the journal under this lock. An older queued write
-    // cannot resurrect a lease after cleanup has reconciled its release marker.
-    static WRITER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    let _writer = WRITER.lock().await;
+    // All of a cell's policy writers read the journal under this lock. An older
+    // queued write cannot resurrect a lease after cleanup has reconciled its
+    // release marker.
+    let lock = cell_policy_lock(&cell.spec.instance_key);
+    let _writer = lock.lock().await;
     let policies = Api::<NetworkPolicy>::namespaced(
         context.client.clone(),
         &instance_namespace(&cell.spec.instance_key),
     );
-    let mut versions = BTreeMap::new();
     // Read policy versions BEFORE the action journal. Across controller restarts,
     // a delayed old write must conflict with any subsequently completed cleanup.
-    for component in &cell.spec.cell.components {
-        versions.insert(
-            component.id.clone(),
-            policies
-                .get_opt(&component.id)
-                .await?
-                .and_then(|policy| policy.metadata.resource_version),
-        );
-    }
+    let existing = policies
+        .list(
+            &ListParams::default().labels(&format!("{INSTANCE_LABEL}={}", cell.spec.instance_key)),
+        )
+        .await?
+        .items
+        .into_iter()
+        .map(|policy| (policy.name_any(), policy))
+        .collect::<BTreeMap<_, _>>();
     let namespace = cell
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
@@ -1195,42 +1338,90 @@ async fn apply_network_fault_policies(
         .await?
         .items;
     let active = active_network_partitions(&actions, maximum_sequence);
-    let mut exclusions = cell
-        .spec
+    let components = cell
+        .revision
         .cell
         .components
         .iter()
-        .map(|component| (component.id.clone(), BTreeSet::new()))
-        .collect::<BTreeMap<_, _>>();
+        .map(|component| component.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut exclusions = BTreeMap::<String, BTreeSet<String>>::new();
     for (from, to) in active.values() {
-        if let Some(peers) = exclusions.get_mut(from) {
-            peers.insert(to.clone());
-        }
-        if let Some(peers) = exclusions.get_mut(to) {
-            peers.insert(from.clone());
+        for (component, peer) in [(from, to), (to, from)] {
+            if components.contains(component.as_str()) {
+                exclusions
+                    .entry(component.clone())
+                    .or_default()
+                    .insert(peer.clone());
+            }
         }
     }
-    for (component, peers) in exclusions {
-        let peers = peers.into_iter().collect::<Vec<_>>();
-        let mut policy =
-            render_component_network_policy(&cell.spec.instance_key, &component, &peers)
-                .map_err(|_| Error::ControllerInvariant("network policy did not serialize"))?;
-        if let Some(version) = versions.remove(&component).flatten() {
-            policy.metadata.resource_version = Some(version);
-            policies
-                .patch(
-                    &component,
-                    &PatchParams::apply(FIELD_MANAGER).force(),
-                    &Patch::Apply(&policy),
-                )
-                .await?;
-        } else {
-            policies
-                .create(&kube::api::PostParams::default(), &policy)
-                .await?;
+    let invalid = |_| Error::ControllerInvariant("network policy did not serialize");
+    // A pod no allow-policy selects is cut off from everything, so a component
+    // gets its own policy before the shared one stops selecting it, and keeps it
+    // until the shared one selects it again.
+    for (component, peers) in &exclusions {
+        let peers = peers.iter().cloned().collect::<Vec<_>>();
+        let policy = render_component_network_policy(&cell.spec.instance_key, component, &peers)
+            .map_err(invalid)?;
+        write_policy(&policies, existing.get(component), policy).await?;
+    }
+    let partitioned = exclusions.keys().cloned().collect::<Vec<_>>();
+    let shared =
+        render_cell_network_policy(&cell.spec.instance_key, &partitioned).map_err(invalid)?;
+    write_policy(&policies, existing.get(CELL_NETWORK_POLICY), shared).await?;
+    // Healed components, removed components and the per-component policies of
+    // earlier releases: a component policy is named after its component.
+    for (name, policy) in &existing {
+        let own = policy.labels().get(COMPONENT_LABEL) == Some(name);
+        if own && !exclusions.contains_key(name) {
+            gone(
+                policies
+                    .delete(
+                        name,
+                        &DeleteParams {
+                            preconditions: Some(kube::api::Preconditions {
+                                uid: policy.metadata.uid.clone(),
+                                resource_version: policy.metadata.resource_version.clone(),
+                            }),
+                            ..DeleteParams::default()
+                        },
+                    )
+                    .await,
+            )?;
         }
     }
     Ok(active)
+}
+
+/// Create `desired`, or update `current` fenced by the version read before the
+/// journal. An unchanged policy is left alone.
+async fn write_policy(
+    policies: &Api<NetworkPolicy>,
+    current: Option<&NetworkPolicy>,
+    mut desired: NetworkPolicy,
+) -> Result<(), Error> {
+    let Some(current) = current else {
+        policies
+            .create(&kube::api::PostParams::default(), &desired)
+            .await?;
+        return Ok(());
+    };
+    if current.spec == desired.spec && current.labels() == desired.labels() {
+        return Ok(());
+    }
+    desired
+        .metadata
+        .resource_version
+        .clone_from(&current.metadata.resource_version);
+    policies
+        .patch(
+            &desired.name_any(),
+            &PatchParams::apply(FIELD_MANAGER).force(),
+            &Patch::Apply(&desired),
+        )
+        .await?;
+    Ok(())
 }
 
 async fn patch_invalid_action(
@@ -1339,7 +1530,11 @@ async fn expire_finished_action(
 /// creation time. An upload, or an idempotent retry of an old request, can
 /// create the action well after acceptance. The creation time is also on the
 /// controller's own clock.
-fn start_deadline_passed(action: &ProofstormCellAction, now_unix: i64) -> bool {
+fn start_deadline_passed(
+    action: &ProofstormCellAction,
+    now_unix: i64,
+    deadline_seconds: i64,
+) -> bool {
     let one_off = matches!(
         action.spec.action,
         CellAction::ComponentExecLive(_)
@@ -1357,7 +1552,7 @@ fn start_deadline_passed(action: &ProofstormCellAction, now_unix: i64) -> bool {
         .map_or(i64::MIN, |time| time.0.as_second());
     one_off
         && !action_execution_started(action.status.as_ref())
-        && now_unix > action.spec.accepted_at_unix.max(created) + ACTION_START_DEADLINE_SECONDS
+        && now_unix > action.spec.accepted_at_unix.max(created) + deadline_seconds
 }
 
 /// Fail an action whose start deadline passed, unless it may in fact have
@@ -1391,7 +1586,7 @@ async fn expire_unstarted_action(
         completed_at_unix: Some(now_unix()),
         error: Some(status_object(serde_json::json!({
             "code": "action_not_started",
-            "message": format!("the runtime could not start this operation within {ACTION_START_DEADLINE_SECONDS} seconds of acceptance; nothing was run; submit a new operation if it is still wanted"),
+            "message": format!("the runtime could not start this operation within {} seconds of acceptance; nothing was run; submit a new operation if it is still wanted", context.limits.start_deadline_seconds),
         }))),
         ..ProofstormCellActionStatus::default()
     };
@@ -1597,13 +1792,26 @@ async fn reconcile(cell: Arc<ProofstormCell>, context: Arc<Context>) -> Result<A
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
     let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &namespace);
+    let Some(cell) = with_finalizer(&cells, cell).await? else {
+        return Ok(Action::await_change());
+    };
     finalizer(&cells, FINALIZER, cell, |event| async {
         match event {
             Event::Apply(cell) => {
-                let result = if let Some(applied) = context.probes.applied(&cell) {
-                    observe_cell(cell.clone(), &context, &applied).await
-                } else {
-                    apply(cell.clone(), &context).await
+                let result = match context
+                    .revisions
+                    .loaded(&context.client, (*cell).clone())
+                    .await
+                {
+                    Ok(loaded) => {
+                        let loaded = Arc::new(loaded);
+                        if let Some(applied) = context.probes.applied(&loaded) {
+                            observe_cell(loaded, &context, &applied).await
+                        } else {
+                            apply(loaded, &context).await
+                        }
+                    }
+                    Err(error) => Err(error.into()),
                 };
                 if let Err(error) = &result
                     && let Some(status) = reconciliation_failure_status(&cell, error)
@@ -1629,6 +1837,50 @@ async fn reconcile(cell: Arc<ProofstormCell>, context: Arc<Context>) -> Result<A
             Error::ControllerInvariant("invalid finalizer JSON patch")
         }
     })
+}
+
+/// The cell with the cleanup finalizer, so its first apply happens in this
+/// reconcile. kube's helper adds the finalizer and waits for the watch to
+/// report it, and a late watch event held new cells back for about five
+/// minutes, until the watch relisted. The cached copy may be behind too, so
+/// read the live cell before adding it. `None` once the cell is gone.
+async fn with_finalizer(
+    cells: &Api<ProofstormCell>,
+    cell: Arc<ProofstormCell>,
+) -> Result<Option<Arc<ProofstormCell>>, Error> {
+    if finalizer_patch(&cell).is_none() {
+        return Ok(Some(cell));
+    }
+    let Some(live) = cells.get_opt(&cell.name_any()).await? else {
+        return Ok(None);
+    };
+    let Some(patch) = finalizer_patch(&live) else {
+        return Ok(Some(Arc::new(live)));
+    };
+    let patched = cells
+        .patch(
+            &live.name_any(),
+            &PatchParams::default(),
+            &Patch::Merge(patch),
+        )
+        .await?;
+    Ok(Some(Arc::new(patched)))
+}
+
+/// The merge patch that adds the cleanup finalizer to a live cell, fenced on
+/// its resource version; `None` when it has the finalizer or is being deleted.
+fn finalizer_patch(cell: &ProofstormCell) -> Option<serde_json::Value> {
+    if cell.metadata.deletion_timestamp.is_some()
+        || cell.finalizers().iter().any(|name| name == FINALIZER)
+    {
+        return None;
+    }
+    let mut finalizers = cell.finalizers().to_vec();
+    finalizers.push(FINALIZER.to_owned());
+    Some(serde_json::json!({"metadata": {
+        "resourceVersion": cell.resource_version(),
+        "finalizers": finalizers,
+    }}))
 }
 
 fn reconciliation_failure_status(
@@ -1664,6 +1916,7 @@ fn reconciliation_failure_status(
     // These observations may belong to an older revision. Preserve inventory
     // for cleanup, but never present old readiness as evidence for this failure.
     status.components.clear();
+    status.protocol_freshness = None;
     Some(status)
 }
 
@@ -1671,14 +1924,19 @@ fn reconciliation_failure_status(
     clippy::too_many_lines,
     reason = "one reconciliation pass visibly applies the complete bounded instance inventory"
 )]
-async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, Error> {
+async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error> {
     validate_instance_key(&cell.spec.instance_key)?;
     private_transfer::expire(&cell)?;
+    let previous = skippable(
+        context.probes.last_applied(&cell),
+        &probes::signature(&cell),
+    );
+    let mut documents = BTreeMap::new();
     let mut workloads = render_cell(
         &cell.spec.instance_key,
         &cell.spec.revision_digest,
-        &cell.spec.cell,
-        &cell.spec.lock,
+        &cell.revision.cell,
+        &cell.revision.lock,
     )?;
     for deployment in &mut workloads.deployments {
         if let Some(pod) = deployment
@@ -1726,13 +1984,12 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
         }
         status.phase = CellPhase::Pending;
         patch_status(&cell, context, status.clone()).await?;
-        cell.status = Some(status);
+        cell.resource.status = Some(status);
     }
     let cell = Arc::new(cell);
-    let rendered = render_cell_security_spine(
+    let rendered = render_security_spine(
         &cell.spec.instance_key,
-        cell.spec.cell.components.len(),
-        cell.status.as_ref().map_or(0, |s| s.retained_storage.len()),
+        &cell.revision.cell.policy.resources,
     );
     let client = context.client.clone();
     let namespace_name = instance_namespace(&cell.spec.instance_key);
@@ -1741,13 +1998,19 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     Api::<Namespace>::all(client.clone())
         .patch(&namespace_name, &patch, &Patch::Apply(&rendered.namespace))
         .await?;
-    Api::<ResourceQuota>::namespaced(client.clone(), &namespace_name)
-        .patch(
-            "proofstorm-instance-quota",
-            &patch,
-            &Patch::Apply(&rendered.quota),
-        )
-        .await?;
+    let quotas = Api::<ResourceQuota>::namespaced(client.clone(), &namespace_name);
+    if let Some(quota) = &rendered.quota {
+        quotas
+            .patch("proofstorm-instance-quota", &patch, &Patch::Apply(quota))
+            .await?;
+    } else {
+        // A quota is the user's choice; remove one an earlier revision or version set.
+        gone(
+            quotas
+                .delete("proofstorm-instance-quota", &DeleteParams::default())
+                .await,
+        )?;
+    }
     Api::<LimitRange>::namespaced(client.clone(), &namespace_name)
         .patch(
             "proofstorm-container-limits",
@@ -1777,6 +2040,9 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
             .as_ref()
             .and_then(|data| data.get("PROOFSTORM_SECRET_KIND"))
             .map(String::as_str);
+        if unchanged(&mut documents, &previous, "Secret", resource) {
+            continue;
+        }
         match secret_kind {
             Some("bark-processor" | "open-ssp" | "spark-processor") => {
                 let claims =
@@ -1796,6 +2062,9 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     }
     let configs = Api::<ConfigMap>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.config_maps {
+        if unchanged(&mut documents, &previous, "ConfigMap", resource) {
+            continue;
+        }
         configs
             .patch(
                 resource.metadata.name.as_deref().unwrap_or_default(),
@@ -1806,6 +2075,9 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     }
     let services = Api::<Service>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.services {
+        if unchanged(&mut documents, &previous, "Service", resource) {
+            continue;
+        }
         services
             .patch(
                 resource.metadata.name.as_deref().unwrap_or_default(),
@@ -1816,6 +2088,9 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     }
     let claims = Api::<PersistentVolumeClaim>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.persistent_volume_claims {
+        if unchanged(&mut documents, &previous, "PersistentVolumeClaim", resource) {
+            continue;
+        }
         claims
             .patch(
                 resource.metadata.name.as_deref().unwrap_or_default(),
@@ -1824,8 +2099,26 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
             )
             .await?;
     }
+    let mut held = BTreeSet::new();
     let stateful_sets = Api::<StatefulSet>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.stateful_sets {
+        if unchanged(&mut documents, &previous, "StatefulSet", resource) {
+            continue;
+        }
+        let claims = storage_nodes::stateful_set_claims(resource);
+        if held_back(
+            &client,
+            &namespace_name,
+            "StatefulSet",
+            resource,
+            &claims,
+            &mut documents,
+            &mut held,
+        )
+        .await?
+        {
+            continue;
+        }
         let resource = component_lifecycle::preserve(&stateful_sets, resource).await?;
         stateful_sets
             .patch(
@@ -1837,6 +2130,28 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     }
     let deployments = Api::<Deployment>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.deployments {
+        if unchanged(&mut documents, &previous, "Deployment", resource) {
+            continue;
+        }
+        let claims = storage_nodes::pod_claims(
+            resource
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.template.spec.as_ref()),
+        );
+        if held_back(
+            &client,
+            &namespace_name,
+            "Deployment",
+            resource,
+            &claims,
+            &mut documents,
+            &mut held,
+        )
+        .await?
+        {
+            continue;
+        }
         let name = resource.metadata.name.as_deref().unwrap_or_default();
         clear_rolling_update_strategy(&deployments, resource).await?;
         let resource = component_lifecycle::preserve(&deployments, resource).await?;
@@ -1850,13 +2165,11 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     }
     let policies = Api::<NetworkPolicy>::namespaced(client.clone(), &namespace_name);
     for resource in &workloads.network_policies {
-        if cell
-            .spec
-            .cell
-            .components
-            .iter()
-            .any(|component| resource.metadata.name.as_deref() == Some(&component.id))
-        {
+        // The partition writer owns the shared component policy.
+        if resource.metadata.name.as_deref() == Some(CELL_NETWORK_POLICY) {
+            continue;
+        }
+        if unchanged(&mut documents, &previous, "NetworkPolicy", resource) {
             continue;
         }
         policies
@@ -1881,7 +2194,12 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
         "data": {"inventory.json": serde_json::to_string(&inventory).expect("inventory serializes"),
             "inventoryDigest": inventory_digest}
     });
-    if let Some(old) = configs.get_opt(&inventory_name).await?
+    let inventory_key = format!("Inventory/{inventory_name}");
+    let inventory_document = proofstorm_core::digest_json(&inventory_resource);
+    let inventory_unchanged = previous.get(&inventory_key) == Some(&inventory_document);
+    documents.insert(inventory_key, inventory_document);
+    if !inventory_unchanged
+        && let Some(old) = configs.get_opt(&inventory_name).await?
         && old.immutable == Some(true)
         && old.labels().get("proofstorm.dev/instance") == Some(&cell.spec.instance_key)
     {
@@ -1898,9 +2216,11 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
             )
             .await?;
     }
-    configs
-        .patch(&inventory_name, &patch, &Patch::Apply(inventory_resource))
-        .await?;
+    if !inventory_unchanged {
+        configs
+            .patch(&inventory_name, &patch, &Patch::Apply(inventory_resource))
+            .await?;
+    }
 
     let applied = probes::Applied {
         signature: probes::signature(&cell),
@@ -1909,6 +2229,8 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
         inventory,
         retained_storage,
         pruned,
+        documents: Arc::new(documents),
+        held: Arc::new(held),
     };
     context
         .probes
@@ -1916,29 +2238,81 @@ async fn apply(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action, E
     observe_cell(cell, context, &applied).await
 }
 
+/// The documents this apply may skip when unchanged. After a change, or while
+/// a prune is still finishing, only changed documents are sent. The periodic
+/// pass for an unchanged, fully pruned cell repairs drift, so it sends them all.
+fn skippable(last: Option<probes::Applied>, signature: &str) -> Arc<BTreeMap<String, String>> {
+    last.filter(|applied| applied.signature != signature || !applied.pruned)
+        .map(|applied| applied.documents)
+        .unwrap_or_default()
+}
+
+/// Whether to hold back a changed workload whose volumes no single node holds,
+/// leaving its running pod in place (see `storage_nodes`). A held document
+/// isn't recorded as sent, so a later pass checks it again.
+async fn held_back(
+    client: &Client,
+    namespace: &str,
+    kind: &str,
+    resource: &impl ResourceExt,
+    claims: &BTreeSet<String>,
+    documents: &mut BTreeMap<String, String>,
+    held: &mut BTreeSet<String>,
+) -> Result<bool, Error> {
+    let Some(nodes) = storage_nodes::split_nodes(client, namespace, claims).await? else {
+        return Ok(false);
+    };
+    let name = resource.name_any();
+    eprintln!("holding back {kind} {namespace}/{name}: its volumes are on nodes {nodes:?}");
+    documents.remove(&format!("{kind}/{name}"));
+    if let Some(component) = resource.labels().get(COMPONENT_LABEL) {
+        held.insert(component.clone());
+    }
+    Ok(true)
+}
+
+/// Record `resource`'s digest and report whether the previous apply sent the
+/// same document, so this pass can skip it.
+fn unchanged(
+    documents: &mut BTreeMap<String, String>,
+    previous: &BTreeMap<String, String>,
+    kind: &str,
+    resource: &(impl serde::Serialize + ResourceExt),
+) -> bool {
+    let key = format!("{kind}/{}", resource.name_any());
+    let digest = proofstorm_core::digest_json(resource);
+    let same = previous.get(&key) == Some(&digest);
+    documents.insert(key, digest);
+    same
+}
+
 async fn observe_cell(
-    cell: Arc<ProofstormCell>,
+    cell: Arc<LoadedCell>,
     context: &Context,
     applied: &probes::Applied,
 ) -> Result<Action, Error> {
     let namespace_name = instance_namespace(&cell.spec.instance_key);
     let snapshot = context.probes.snapshot(&cell.spec.instance_key);
     let observed_resources = snapshot.observed();
-    let previous_components = cell
-        .status
-        .as_ref()
-        .filter(|status| status.observed_revision_digest == cell.spec.revision_digest)
-        .map_or(&[][..], |status| status.components.as_slice());
+    let stored = stored_components(context, &cell.spec.instance_key).await?;
+    // Statuses of an older revision or rollout never carry their condition
+    // transitions over: the observation matches on both digests.
+    let previous_components = stored
+        .iter()
+        .filter_map(|object| object.status.clone())
+        .collect::<Vec<_>>();
     let stopped_components =
         component_lifecycle::observed_stops(&applied.plans, &observed_resources);
     let components = observe_component_statuses(
         &namespace_name,
         &applied.plans,
         &observed_resources,
-        previous_components,
+        &previous_components,
         &stopped_components,
         now_unix(),
     );
+    let components = hold_components(components, &applied.held, now_unix());
+    write_component_objects(&cell, context, &stored, &components).await?;
     let ready = applied.pruned
         && components
             .iter()
@@ -1981,7 +2355,8 @@ async fn observe_cell(
             observed_generation: cell.metadata.generation,
             observed_revision_digest: cell.spec.revision_digest.clone(),
             observed_protocol_probe_lease: None,
-            components,
+            protocol_freshness: proofstorm_kube::protocol_freshness(&components),
+            components: Vec::new(),
             inventory: applied.inventory.clone(),
             inventory_digest: Some(proofstorm_core::digest_json(&applied.inventory)),
             teardown_receipt: None,
@@ -1994,6 +2369,31 @@ async fn observe_cell(
     } else {
         jittered_requeue(&cell.spec.instance_key, 3, 2)
     })
+}
+
+/// Report each held-back component as blocked: its workload can't be scheduled.
+fn hold_components(
+    mut components: Vec<proofstorm_core::ComponentStatus>,
+    held: &BTreeSet<String>,
+    now: i64,
+) -> Vec<proofstorm_core::ComponentStatus> {
+    for component in components
+        .iter_mut()
+        .filter(|component| held.contains(&component.id))
+    {
+        component.ready = false;
+        for condition in &mut component.conditions {
+            if condition.condition_type == proofstorm_core::ComponentConditionType::WorkloadReady
+                && condition.reason != proofstorm_core::ComponentConditionReason::PodUnschedulable
+            {
+                condition.state = proofstorm_core::ComponentConditionState::False;
+                condition.reason = proofstorm_core::ComponentConditionReason::PodUnschedulable;
+                storage_nodes::HELD_MESSAGE.clone_into(&mut condition.message);
+                condition.last_transition_unix = now;
+            }
+        }
+    }
+    components
 }
 
 /// Apply cannot delete a defaulted field owned by another field manager. Clear
@@ -2079,10 +2479,9 @@ async fn cleanup(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action,
                 .status
                 .as_ref()
                 .and_then(|status| status.observed_protocol_probe_lease.clone()),
-            components: cell
-                .status
-                .as_ref()
-                .map_or_else(Vec::new, |status| status.components.clone()),
+            // A closing cell vouches for no protocol evidence.
+            protocol_freshness: None,
+            components: Vec::new(),
             inventory: cell
                 .status
                 .as_ref()
@@ -2110,14 +2509,11 @@ async fn cleanup(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action,
         .await?;
     if !runtime_actions.items.is_empty() {
         for action in runtime_actions.items {
-            match actions
-                .delete(&action.name_any(), &DeleteParams::default())
-                .await
-            {
-                Ok(_) => {}
-                Err(kube::Error::Api(error)) if error.code == 404 => {}
-                Err(error) => return Err(error.into()),
-            }
+            gone(
+                actions
+                    .delete(&action.name_any(), &DeleteParams::default())
+                    .await,
+            )?;
         }
         return Err(Error::ActionCleanupPending(cell.spec.instance_key.clone()));
     }
@@ -2139,12 +2535,25 @@ async fn cleanup(cell: Arc<ProofstormCell>, context: &Context) -> Result<Action,
     Ok(Action::await_change())
 }
 
+/// Write the cell status: the full status when anything but the heartbeat
+/// changed, and the protocol freshness heartbeat on its own. Component
+/// statuses live in their own objects and are never written here.
 async fn patch_status(
     cell: &ProofstormCell,
     context: &Context,
-    status: ProofstormCellStatus,
+    mut status: ProofstormCellStatus,
 ) -> Result<(), Error> {
-    if !cell_status_update_required(cell.status.as_ref(), &status) {
+    let heartbeat = status.protocol_freshness.take();
+    status.components.clear();
+    let mut current = cell.status.clone();
+    let current_heartbeat = current
+        .as_mut()
+        .and_then(|current| current.protocol_freshness.take());
+    if let Some(current) = current.as_mut() {
+        current.components.clear();
+    }
+    let update = cell_status_update_required(current.as_ref(), &status);
+    if !update && current_heartbeat == heartbeat {
         return Ok(());
     }
     // Component count must not silently disable observations. The Kubernetes
@@ -2153,14 +2562,107 @@ async fn patch_status(
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
     let cells = Api::<ProofstormCell>::namespaced(context.client.clone(), &namespace);
-    let patch = serde_json::json!({"apiVersion": "proofstorm.dev/v1alpha1", "kind": "ProofstormCell", "status": status});
-    cells
-        .patch_status(
-            &cell.name_any(),
-            &PatchParams::apply(FIELD_MANAGER).force(),
-            &Patch::Apply(patch),
-        )
-        .await?;
+    if update {
+        let patch = serde_json::json!({"apiVersion": "proofstorm.dev/v1alpha1", "kind": "ProofstormCell", "status": status});
+        cells
+            .patch_status(
+                &cell.name_any(),
+                &PatchParams::apply(FIELD_MANAGER).force(),
+                &Patch::Apply(patch),
+            )
+            .await?;
+    }
+    if current_heartbeat != heartbeat {
+        // An empty status removes the heartbeat this manager owns.
+        let status = heartbeat.map_or_else(
+            || serde_json::json!({}),
+            |heartbeat| serde_json::json!({"protocolFreshness": heartbeat}),
+        );
+        cells
+            .patch_status(
+                &cell.name_any(),
+                &PatchParams::apply(HEARTBEAT_FIELD_MANAGER).force(),
+                &Patch::Apply(serde_json::json!({"apiVersion": "proofstorm.dev/v1alpha1", "kind": "ProofstormCell", "status": status})),
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+/// Write each component object whose state changed, then delete the objects
+/// of components the revision no longer has. A new probe alone never writes:
+/// the cell's heartbeat carries probe times.
+async fn write_component_objects(
+    cell: &LoadedCell,
+    context: &Context,
+    stored: &[Arc<ProofstormComponent>],
+    components: &[proofstorm_core::ComponentStatus],
+) -> Result<(), Error> {
+    let namespace = cell
+        .namespace()
+        .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
+    let api = Api::<ProofstormComponent>::namespaced(context.client.clone(), &namespace);
+    let by_id = stored
+        .iter()
+        .map(|object| (object.spec.component_id.as_str(), object.as_ref()))
+        .collect::<BTreeMap<_, _>>();
+    let owner = kube::Resource::controller_owner_ref(&cell.resource, &());
+    let writes = components
+        .iter()
+        .filter(|status| {
+            !by_id
+                .get(status.id.as_str())
+                .and_then(|object| object.status.as_ref())
+                .is_some_and(|stored| proofstorm_kube::same_material(stored, status))
+        })
+        .map(|status| {
+            let mut object = proofstorm_kube::component_object(
+                &cell.spec.instance_key,
+                &namespace,
+                status,
+                owner.clone(),
+            );
+            object.status = None;
+            let exists = by_id.contains_key(status.id.as_str());
+            let status_patch = serde_json::json!({"apiVersion": "proofstorm.dev/v1alpha1", "kind": "ProofstormComponent", "status": status});
+            let api = api.clone();
+            // Owned values only: the write futures run concurrently.
+            async move {
+                let name = object.name_any();
+                let params = PatchParams::apply(FIELD_MANAGER).force();
+                if !exists {
+                    api.patch(&name, &params, &Patch::Apply(&object)).await?;
+                }
+                api.patch_status(&name, &params, &Patch::Apply(status_patch))
+                    .await?;
+                Ok::<_, Error>(())
+            }
+        })
+        .collect::<Vec<_>>();
+    futures::stream::iter(writes)
+        .buffer_unordered(COMPONENT_WRITE_CONCURRENCY)
+        .collect::<Vec<Result<(), Error>>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<()>, Error>>()?;
+    let desired = components
+        .iter()
+        .map(|status| status.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let deletes = stored
+        .iter()
+        .filter(|object| !desired.contains(object.spec.component_id.as_str()))
+        .map(|object| {
+            let (api, name) = (api.clone(), object.name_any());
+            async move { gone(api.delete(&name, &DeleteParams::default()).await) }
+        })
+        .collect::<Vec<_>>();
+    futures::stream::iter(deletes)
+        .buffer_unordered(COMPONENT_WRITE_CONCURRENCY)
+        .collect::<Vec<Result<(), Error>>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<()>, Error>>()?;
     Ok(())
 }
 
@@ -2199,6 +2701,13 @@ async fn write_teardown_receipt(
         .namespace()
         .ok_or_else(|| Error::MissingNamespace(cell.name_any()))?;
     let receipts = Api::<ConfigMap>::namespaced(context.client.clone(), &namespace);
+    // Cleanup never waits on the revision: record its lock digest when it is still there.
+    let lock_digest = context
+        .revisions
+        .load(&context.client, cell, &cell.spec.revision_digest)
+        .await
+        .map(|revision| revision.lock.digest.clone())
+        .unwrap_or_default();
     let name = format!("proofstorm-teardown-{}", cell.spec.instance_key);
     let receipt = serde_json::json!({
         "apiVersion": "v1",
@@ -2215,7 +2724,7 @@ async fn write_teardown_receipt(
             "instanceId": cell.spec.instance_id,
             "cellName": cell.name_any(),
             "revisionDigest": cell.spec.revision_digest,
-            "lockDigest": cell.spec.lock.digest,
+            "lockDigest": lock_digest,
             "inventoryDigest": cell.status.as_ref().and_then(|status| status.inventory_digest.clone()).unwrap_or_default(),
             "instanceNamespace": instance_namespace,
             "verifiedAbsent": "true"
@@ -2398,7 +2907,7 @@ fn termination_message(pod: &Pod, target: &str) -> Option<String> {
 
 fn authentication_conformance_artifact(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &LoadedCell,
     pods: &[Pod],
 ) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
     let CellAction::AuthenticationConformance(request) = &action.spec.action else {
@@ -2408,7 +2917,7 @@ fn authentication_conformance_artifact(
         .iter()
         .find_map(|pod| termination_message(pod, "authentication"))?;
     let implementation = &cell
-        .spec
+        .revision
         .cell
         .components
         .iter()
@@ -2609,7 +3118,7 @@ async fn persist_authentication_session(
 
 fn authentication_replay_artifact(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &LoadedCell,
     pods: &[Pod],
 ) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
     let CellAction::AuthenticationReplay(request) = &action.spec.action else {
@@ -2619,7 +3128,7 @@ fn authentication_replay_artifact(
         .iter()
         .find_map(|pod| termination_message(pod, "authentication"))?;
     let implementation = &cell
-        .spec
+        .revision
         .cell
         .components
         .iter()
@@ -2917,6 +3426,39 @@ fn status_object(
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_new_cell_gets_its_finalizer_fenced_and_keeps_others() {
+        let mut cell = ProofstormCell::new(
+            "cell",
+            proofstorm_kube::ProofstormCellSpec {
+                workspace_id: "test".into(),
+                instance_id: "test".into(),
+                instance_key: "i0123456789012345678".into(),
+                revision_digest: "sha256:current".into(),
+            },
+        );
+        cell.metadata.resource_version = Some("612".into());
+        assert_eq!(
+            finalizer_patch(&cell),
+            Some(
+                serde_json::json!({"metadata": {"resourceVersion": "612", "finalizers": [FINALIZER]}})
+            )
+        );
+        cell.metadata.finalizers = Some(vec!["example.com/other".into()]);
+        assert_eq!(
+            finalizer_patch(&cell).unwrap()["metadata"]["finalizers"],
+            serde_json::json!(["example.com/other", FINALIZER])
+        );
+        cell.metadata.finalizers = Some(vec![FINALIZER.into()]);
+        assert_eq!(finalizer_patch(&cell), None, "already has it");
+        cell.metadata.finalizers = None;
+        cell.metadata.deletion_timestamp =
+            Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                k8s_openapi::jiff::Timestamp::UNIX_EPOCH,
+            ));
+        assert_eq!(finalizer_patch(&cell), None, "a deleted cell gets none");
+    }
+
     #[tokio::test]
     async fn failing_cells_are_held_back_whatever_triggers_the_next_reconcile() {
         let spec = proofstorm_core::CellSpec {
@@ -2928,16 +3470,18 @@ mod tests {
         };
         let lock =
             proofstorm_core::resolve_lock(&spec, proofstorm_core::default_catalog()).expect("lock");
-        let mut cell = ProofstormCell::new(
-            "backoff",
-            proofstorm_kube::ProofstormCellSpec {
-                workspace_id: "test".into(),
-                instance_id: "test".into(),
-                instance_key: "i0123456789012345678".into(),
-                revision_digest: "sha256:current".into(),
-                cell: spec,
-                lock,
-            },
+        let mut cell = proofstorm_kube::LoadedCell::from_spec(
+            ProofstormCell::new(
+                "backoff",
+                proofstorm_kube::ProofstormCellSpec {
+                    workspace_id: "test".into(),
+                    instance_id: "test".into(),
+                    instance_key: "i0123456789012345678".into(),
+                    revision_digest: "sha256:current".into(),
+                },
+            ),
+            spec,
+            lock,
         );
         cell.metadata.namespace = Some("proofstorm-system".into());
         cell.metadata.generation = Some(1);
@@ -2948,13 +3492,15 @@ mod tests {
             Err::<Action, _>(Error::SecretContract("missing key".into()))
         };
 
-        let error = with_backoff(&cell, &retries, failing()).await.unwrap_err();
+        let error = with_backoff(&cell.resource, &retries, failing())
+            .await
+            .unwrap_err();
         assert_eq!(
-            retry_action(&cell, &error, &retries, "cell"),
+            retry_action(&cell.resource, &error, &retries, "cell"),
             Action::requeue(Duration::from_secs(1))
         );
         // An immediate prober trigger or watch event does no work.
-        let held = with_backoff(&cell, &retries, failing())
+        let held = with_backoff(&cell.resource, &retries, failing())
             .await
             .expect("held");
         assert_ne!(
@@ -2966,12 +3512,16 @@ mod tests {
 
         // An edit is reconciled at once.
         cell.metadata.generation = Some(2);
-        assert!(with_backoff(&cell, &retries, failing()).await.is_err());
+        assert!(
+            with_backoff(&cell.resource, &retries, failing())
+                .await
+                .is_err()
+        );
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
 
         // Cleanup progress keeps its short requeue and records no backoff.
         let pending = retry_action(
-            &cell,
+            &cell.resource,
             &Error::CleanupPending("namespace".into()),
             &retries,
             "cell",
@@ -3520,9 +4070,96 @@ mod tests {
     }
 
     #[test]
+    fn a_held_component_reports_its_workload_unschedulable() {
+        use proofstorm_core::{
+            ComponentCondition, ComponentConditionReason as Reason,
+            ComponentConditionState as State, ComponentConditionType as Type, ComponentKind,
+            ComponentStatus,
+        };
+        let status = |id: &str| ComponentStatus {
+            protocol_observation: None,
+            id: id.into(),
+            kind: ComponentKind::Mint,
+            observed_revision_digest: "revision".into(),
+            observed_rollout_digest: "rollout".into(),
+            conditions: vec![ComponentCondition {
+                condition_type: Type::WorkloadReady,
+                state: State::Unknown,
+                reason: Reason::StaleRevision,
+                message: "stale".into(),
+                last_transition_unix: 1,
+            }],
+            ready: true,
+            service: format!("{id}.svc"),
+            ports: BTreeMap::new(),
+        };
+        let held = BTreeSet::from(["mint".to_owned()]);
+        let components = hold_components(vec![status("mint"), status("ln")], &held, 50);
+        let workload = &components[0].conditions[0];
+        assert!(!components[0].ready);
+        assert_eq!(
+            (
+                workload.state,
+                workload.reason,
+                workload.last_transition_unix
+            ),
+            (State::False, Reason::PodUnschedulable, 50)
+        );
+        assert!(workload.reason.blocks_startup());
+        assert!(workload.message.len() <= 160);
+        assert_eq!(components[1], status("ln"));
+    }
+
+    #[test]
+    fn applies_send_only_changed_documents_except_the_drift_pass() {
+        let applied = |signature: &str, pruned: bool| probes::Applied {
+            signature: signature.into(),
+            at: std::time::Instant::now(),
+            plans: Arc::default(),
+            inventory: Vec::new(),
+            retained_storage: BTreeMap::new(),
+            pruned,
+            documents: Arc::new(BTreeMap::from([("ConfigMap/a".into(), "d".into())])),
+            held: Arc::default(),
+        };
+        // A changed cell, or a prune still finishing, skips what didn't change.
+        assert_eq!(skippable(Some(applied("old", true)), "new").len(), 1);
+        assert_eq!(skippable(Some(applied("same", false)), "same").len(), 1);
+        // The periodic pass over an unchanged cell, and a first apply, send everything.
+        assert!(skippable(Some(applied("same", true)), "same").is_empty());
+        assert!(skippable(None, "same").is_empty());
+
+        let mut config: ConfigMap = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "a"}, "data": {"k": "v"}
+        }))
+        .unwrap();
+        let mut sent = BTreeMap::new();
+        assert!(!unchanged(
+            &mut sent,
+            &BTreeMap::new(),
+            "ConfigMap",
+            &config
+        ));
+        let mut next = BTreeMap::new();
+        assert!(unchanged(&mut next, &sent, "ConfigMap", &config));
+        config.data = Some(BTreeMap::from([("k".into(), "changed".into())]));
+        assert!(!unchanged(
+            &mut BTreeMap::new(),
+            &sent,
+            "ConfigMap",
+            &config
+        ));
+        // The same name under another kind is a different document.
+        assert!(!unchanged(&mut BTreeMap::new(), &sent, "Service", &config));
+    }
+
+    #[test]
     fn controller_policy_is_bounded_deterministic_and_desynchronized() {
         assert_eq!(CELL_CONTROLLER_CONCURRENCY, 8);
-        assert_eq!(ACTION_CONTROLLER_CONCURRENCY, 16);
+        assert_eq!(
+            proofstorm_core::ControllerLimits::default().action_slots,
+            16
+        );
         let first = deterministic_jitter_seconds("instance-one", 10);
         assert_eq!(first, deterministic_jitter_seconds("instance-one", 10));
         assert!(first <= 10);
@@ -3543,16 +4180,18 @@ mod tests {
         };
         let lock =
             proofstorm_core::resolve_lock(&spec, proofstorm_core::default_catalog()).expect("lock");
-        let mut cell = ProofstormCell::new(
-            "failure",
-            proofstorm_kube::ProofstormCellSpec {
-                workspace_id: "test".into(),
-                instance_id: "test".into(),
-                instance_key: "i0123456789012345678".into(),
-                revision_digest: "sha256:current".into(),
-                cell: spec,
-                lock,
-            },
+        let mut cell = proofstorm_kube::LoadedCell::from_spec(
+            ProofstormCell::new(
+                "failure",
+                proofstorm_kube::ProofstormCellSpec {
+                    workspace_id: "test".into(),
+                    instance_id: "test".into(),
+                    instance_key: "i0123456789012345678".into(),
+                    revision_digest: "sha256:current".into(),
+                },
+            ),
+            spec,
+            lock,
         );
         cell.metadata.generation = Some(4);
         cell.metadata.annotations = Some(BTreeMap::from([(
@@ -3668,6 +4307,94 @@ mod tests {
             enforce_status_budget("ProofstormCellAction", &oversized, MAX_ACTION_STATUS_BYTES),
             Err(Error::StatusBudgetExceeded { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn a_probe_only_change_writes_just_the_heartbeat() {
+        let requests = Arc::new(std::sync::Mutex::new(
+            Vec::<(String, serde_json::Value)>::new(),
+        ));
+        let client = Client::new(
+            tower::service_fn({
+                let requests = requests.clone();
+                move |request: http::Request<kube::client::Body>| {
+                    let requests = requests.clone();
+                    async move {
+                        let uri = request.uri().to_string();
+                        let body = request.into_body().collect_bytes().await.unwrap();
+                        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                        requests.lock().unwrap().push((uri, body));
+                        Ok::<_, std::convert::Infallible>(
+                            http::Response::builder()
+                                .header("content-type", "application/json")
+                                .body(kube::client::Body::from(
+                                    serde_json::to_vec(&ProofstormCell::new(
+                                        "cell",
+                                        proofstorm_kube::ProofstormCellSpec {
+                                            workspace_id: "w".into(),
+                                            instance_id: "i".into(),
+                                            instance_key: "ikey".into(),
+                                            revision_digest: "r".into(),
+                                        },
+                                    ))
+                                    .unwrap(),
+                                ))
+                                .unwrap(),
+                        )
+                    }
+                }
+            }),
+            "system",
+        );
+        let (probes, _receive) = probes::Manager::new(client.clone(), "prober".into());
+        let context = Context::for_tests(client, probes);
+        let heartbeat = |at| proofstorm_kube::ProtocolFreshness {
+            observed_at_unix: at,
+            expires_at_unix: at + 30,
+        };
+        let mut cell = ProofstormCell::new(
+            "cell",
+            proofstorm_kube::ProofstormCellSpec {
+                workspace_id: "w".into(),
+                instance_id: "i".into(),
+                instance_key: "ikey".into(),
+                revision_digest: "r".into(),
+            },
+        );
+        cell.metadata.namespace = Some("system".into());
+        cell.status = Some(ProofstormCellStatus {
+            phase: CellPhase::Ready,
+            protocol_freshness: Some(heartbeat(100)),
+            ..ProofstormCellStatus::default()
+        });
+        let mut next = cell.status.clone().unwrap();
+        next.protocol_freshness = Some(heartbeat(130));
+        patch_status(&cell, &context, next.clone()).await.unwrap();
+        {
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(requests[0].0.contains("fieldManager=proofstormd-heartbeat"));
+            assert_eq!(
+                requests[0].1["status"],
+                serde_json::json!({"protocolFreshness": {"observedAtUnix": 130, "expiresAtUnix": 160}})
+            );
+        }
+        // A real change writes the status without the heartbeat, which keeps
+        // its own manager; an unchanged status writes nothing.
+        next.phase = CellPhase::Pending;
+        next.protocol_freshness = Some(heartbeat(100));
+        patch_status(&cell, &context, next).await.unwrap();
+        patch_status(&cell, &context, cell.status.clone().unwrap())
+            .await
+            .unwrap();
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[1].0.contains("fieldManager=proofstormd")
+                && !requests[1].0.contains("proofstormd-heartbeat")
+        );
+        assert!(requests[1].1["status"].get("protocolFreshness").is_none());
+        assert_eq!(requests[1].1["status"]["phase"], "Pending");
     }
 
     #[test]

@@ -17,6 +17,7 @@ fn component_reference_revision() -> PublishedRevision {
             .find(|entry| entry.id == implementation)
             .expect("fixture implementation");
         ComponentSpec {
+            resources: None,
             id: id.into(),
             kind: entry.kind,
             implementation: entry.id.clone(),

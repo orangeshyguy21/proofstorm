@@ -174,7 +174,15 @@ async fn expired_protocol_evidence_is_unknown_in_status_and_environment_without_
         };
         let resource: proofstorm_kube::ProofstormCell =
             serde_json::from_value(original.clone()).unwrap();
-        let status = proofstorm_app::runtime::status_from_resource(instance.clone(), &resource);
+        let published = store
+            .revision("local", "developer", &instance.revision_digest)
+            .unwrap();
+        let loaded = proofstorm_kube::LoadedCell::from_spec(
+            resource.clone(),
+            published.cell,
+            published.lock,
+        );
+        let status = proofstorm_app::runtime::status_from_resource(instance.clone(), &loaded);
         assert_eq!(status.phase, proofstorm_core::InstancePhase::Pending);
         assert!(!status.components[0].ready);
         let view = reader

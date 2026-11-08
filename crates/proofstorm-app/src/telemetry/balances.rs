@@ -2,7 +2,7 @@
 use futures::{StreamExt, stream};
 use k8s_openapi::api::core::v1::Pod;
 use kube::{Api, ResourceExt, api::AttachParams};
-use proofstorm_kube::{COMPONENT_LABEL, ProofstormCell, ROLLOUT_DIGEST_ANNOTATION};
+use proofstorm_kube::{COMPONENT_LABEL, ROLLOUT_DIGEST_ANNOTATION};
 use proofstorm_view::{
     BalanceAmount, BitcoinObservation, ComponentBalance, HoldingsObservation, LightningObservation,
 };
@@ -11,12 +11,12 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
 pub(super) async fn sample(
-    cell: &ProofstormCell,
+    revision: &proofstorm_kube::CellRevision,
     pods: &Api<Pod>,
     inventory: &[Pod],
 ) -> Vec<ComponentBalance> {
     stream::iter(
-        cell.spec
+        revision
             .cell
             .components
             .iter()
@@ -37,8 +37,7 @@ pub(super) async fn sample(
             .collect::<Vec<_>>(),
     )
     .map(|component| async move {
-        let entry = cell
-            .spec
+        let entry = revision
             .lock
             .entries
             .iter()
@@ -90,7 +89,7 @@ pub(super) async fn sample(
         };
         if let Some(pod) = pod {
             observe(
-                cell,
+                revision,
                 pods,
                 &pod.name_any(),
                 inventory,
@@ -130,7 +129,7 @@ fn matches_adapter(implementation: &str, version: Option<&str>) -> bool {
     }
 }
 async fn observe(
-    cell: &ProofstormCell,
+    revision: &proofstorm_kube::CellRevision,
     pods: &Api<Pod>,
     pod: &str,
     inventory: &[Pod],
@@ -138,7 +137,7 @@ async fn observe(
     result: &mut ComponentBalance,
 ) {
     match implementation {
-        "bitcoin-core" => observe_bitcoin(cell, pods, pod, inventory, result).await,
+        "bitcoin-core" => observe_bitcoin(revision, pods, pod, inventory, result).await,
         "ldk-server" => super::ldk_server::observe(pods, pod, result).await,
         "cdk-ldk" => {
             let (dashboard, channels) = tokio::join!(
@@ -218,7 +217,7 @@ async fn observe(
             )
             .await;
             if let Some((amounts, holdings)) =
-                data.and_then(|v| super::holdings::project(cell, implementation, &v))
+                data.and_then(|v| super::holdings::project(revision, implementation, &v))
             {
                 result.amounts = amounts;
                 result.holdings = Some(holdings);
@@ -229,7 +228,7 @@ async fn observe(
 }
 
 async fn observe_bitcoin(
-    cell: &ProofstormCell,
+    revision: &proofstorm_kube::CellRevision,
     pods: &Api<Pod>,
     pod: &str,
     inventory: &[Pod],
@@ -249,7 +248,8 @@ async fn observe_bitcoin(
         read(pods, pod, command("getpeerinfo")),
     );
     result.block_height = info.and_then(|v| v["blocks"].as_u64());
-    if let Some(observation) = peers.and_then(|v| super::bitcoin::project(cell, inventory, &v)) {
+    if let Some(observation) = peers.and_then(|v| super::bitcoin::project(revision, inventory, &v))
+    {
         result.bitcoin = Some(observation);
     }
     if result.block_height.is_some() {

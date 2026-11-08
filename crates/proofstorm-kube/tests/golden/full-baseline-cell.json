@@ -25,20 +25,6 @@
           }
         },
         "spec": {
-          "affinity": {
-            "podAffinity": {
-              "requiredDuringSchedulingIgnoredDuringExecution": [
-                {
-                  "labelSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  },
-                  "topologyKey": "kubernetes.io/hostname"
-                }
-              ]
-            }
-          },
           "automountServiceAccountToken": false,
           "containers": [
             {
@@ -124,6 +110,15 @@
               "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
               "imagePullPolicy": "IfNotPresent",
               "name": "exec",
+              "resources": {
+                "limits": {
+                  "memory": "512Mi"
+                },
+                "requests": {
+                  "cpu": "100m",
+                  "memory": "128Mi"
+                }
+              },
               "securityContext": {
                 "allowPrivilegeEscalation": false,
                 "capabilities": {
@@ -213,49 +208,13 @@
     {
       "api_version": "networking.k8s.io/v1",
       "kind": "NetworkPolicy",
+      "name": "allow-cell-components",
+      "namespace": "proofstorm-i-golden-b2"
+    },
+    {
+      "api_version": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
       "name": "allow-controller-actions",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "chain-a",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "chain-b",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "cln",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "lnd",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "mint",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "wallet",
-      "namespace": "proofstorm-i-golden-b2"
-    },
-    {
-      "api_version": "networking.k8s.io/v1",
-      "kind": "NetworkPolicy",
-      "name": "workspace",
       "namespace": "proofstorm-i-golden-b2"
     },
     {
@@ -1681,20 +1640,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -1731,6 +1676,15 @@
                     "failureThreshold": 40,
                     "periodSeconds": 3,
                     "timeoutSeconds": 3
+                  },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
@@ -1787,6 +1741,15 @@
                   "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "wait-for-lightning",
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -1815,6 +1778,15 @@
                   "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "initialize-config",
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -1970,20 +1942,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -2005,6 +1963,15 @@
                   "image": "proofstorm-registry.localhost:5000/nutshell-mint@sha256:f0c0e8a710e519774b0880841aac6c128471260cbc51da6306cfe60e9b08deda",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
+                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -2038,7 +2005,6 @@
                   "name": "proofstorm-driver",
                   "resources": {
                     "limits": {
-                      "cpu": "200m",
                       "memory": "128Mi"
                     },
                     "requests": {
@@ -2134,20 +2100,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -2187,7 +2139,6 @@
                   },
                   "resources": {
                     "limits": {
-                      "cpu": "2",
                       "memory": "1Gi"
                     },
                     "requests": {
@@ -2230,7 +2181,6 @@
                   "name": "proofstorm-workspace",
                   "resources": {
                     "limits": {
-                      "cpu": "200m",
                       "memory": "128Mi"
                     },
                     "requests": {
@@ -2285,6 +2235,86 @@
       }
     ],
     "networkPolicies": [
+      {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/managed-by": "proofstormd",
+            "proofstorm.dev/instance": "i-golden-b2"
+          },
+          "name": "allow-cell-components",
+          "namespace": "proofstorm-i-golden-b2"
+        },
+        "spec": {
+          "egress": [
+            {
+              "to": [
+                {
+                  "podSelector": {
+                    "matchLabels": {
+                      "proofstorm.dev/instance": "i-golden-b2"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "ports": [
+                {
+                  "port": 53,
+                  "protocol": "UDP"
+                },
+                {
+                  "port": 53,
+                  "protocol": "TCP"
+                }
+              ],
+              "to": [
+                {
+                  "namespaceSelector": {
+                    "matchLabels": {
+                      "kubernetes.io/metadata.name": "kube-system"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "ingress": [
+            {
+              "from": [
+                {
+                  "podSelector": {
+                    "matchLabels": {
+                      "proofstorm.dev/instance": "i-golden-b2"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "podSelector": {
+            "matchExpressions": [
+              {
+                "key": "proofstorm.dev/network-identity",
+                "operator": "Exists"
+              },
+              {
+                "key": "proofstorm.dev/operation",
+                "operator": "DoesNotExist"
+              }
+            ],
+            "matchLabels": {
+              "proofstorm.dev/instance": "i-golden-b2"
+            }
+          },
+          "policyTypes": [
+            "Ingress",
+            "Egress"
+          ]
+        }
+      },
       {
         "apiVersion": "networking.k8s.io/v1",
         "kind": "NetworkPolicy",
@@ -2351,510 +2381,6 @@
                 "operator": "Exists"
               }
             ]
-          },
-          "policyTypes": [
-            "Ingress",
-            "Egress"
-          ]
-        }
-      },
-      {
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "NetworkPolicy",
-        "metadata": {
-          "labels": {
-            "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "chain-a",
-            "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "chain-a"
-          },
-          "name": "chain-a",
-          "namespace": "proofstorm-i-golden-b2"
-        },
-        "spec": {
-          "egress": [
-            {
-              "to": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            },
-            {
-              "ports": [
-                {
-                  "port": 53,
-                  "protocol": "UDP"
-                },
-                {
-                  "port": 53,
-                  "protocol": "TCP"
-                }
-              ],
-              "to": [
-                {
-                  "namespaceSelector": {
-                    "matchLabels": {
-                      "kubernetes.io/metadata.name": "kube-system"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "ingress": [
-            {
-              "from": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "podSelector": {
-            "matchLabels": {
-              "proofstorm.dev/network-identity": "chain-a"
-            }
-          },
-          "policyTypes": [
-            "Ingress",
-            "Egress"
-          ]
-        }
-      },
-      {
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "NetworkPolicy",
-        "metadata": {
-          "labels": {
-            "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "chain-b",
-            "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "chain-b"
-          },
-          "name": "chain-b",
-          "namespace": "proofstorm-i-golden-b2"
-        },
-        "spec": {
-          "egress": [
-            {
-              "to": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            },
-            {
-              "ports": [
-                {
-                  "port": 53,
-                  "protocol": "UDP"
-                },
-                {
-                  "port": 53,
-                  "protocol": "TCP"
-                }
-              ],
-              "to": [
-                {
-                  "namespaceSelector": {
-                    "matchLabels": {
-                      "kubernetes.io/metadata.name": "kube-system"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "ingress": [
-            {
-              "from": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "podSelector": {
-            "matchLabels": {
-              "proofstorm.dev/network-identity": "chain-b"
-            }
-          },
-          "policyTypes": [
-            "Ingress",
-            "Egress"
-          ]
-        }
-      },
-      {
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "NetworkPolicy",
-        "metadata": {
-          "labels": {
-            "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "cln",
-            "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "cln"
-          },
-          "name": "cln",
-          "namespace": "proofstorm-i-golden-b2"
-        },
-        "spec": {
-          "egress": [
-            {
-              "to": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            },
-            {
-              "ports": [
-                {
-                  "port": 53,
-                  "protocol": "UDP"
-                },
-                {
-                  "port": 53,
-                  "protocol": "TCP"
-                }
-              ],
-              "to": [
-                {
-                  "namespaceSelector": {
-                    "matchLabels": {
-                      "kubernetes.io/metadata.name": "kube-system"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "ingress": [
-            {
-              "from": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "podSelector": {
-            "matchLabels": {
-              "proofstorm.dev/network-identity": "cln"
-            }
-          },
-          "policyTypes": [
-            "Ingress",
-            "Egress"
-          ]
-        }
-      },
-      {
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "NetworkPolicy",
-        "metadata": {
-          "labels": {
-            "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "lnd",
-            "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "lnd"
-          },
-          "name": "lnd",
-          "namespace": "proofstorm-i-golden-b2"
-        },
-        "spec": {
-          "egress": [
-            {
-              "to": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            },
-            {
-              "ports": [
-                {
-                  "port": 53,
-                  "protocol": "UDP"
-                },
-                {
-                  "port": 53,
-                  "protocol": "TCP"
-                }
-              ],
-              "to": [
-                {
-                  "namespaceSelector": {
-                    "matchLabels": {
-                      "kubernetes.io/metadata.name": "kube-system"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "ingress": [
-            {
-              "from": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "podSelector": {
-            "matchLabels": {
-              "proofstorm.dev/network-identity": "lnd"
-            }
-          },
-          "policyTypes": [
-            "Ingress",
-            "Egress"
-          ]
-        }
-      },
-      {
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "NetworkPolicy",
-        "metadata": {
-          "labels": {
-            "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "mint",
-            "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "mint"
-          },
-          "name": "mint",
-          "namespace": "proofstorm-i-golden-b2"
-        },
-        "spec": {
-          "egress": [
-            {
-              "to": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            },
-            {
-              "ports": [
-                {
-                  "port": 53,
-                  "protocol": "UDP"
-                },
-                {
-                  "port": 53,
-                  "protocol": "TCP"
-                }
-              ],
-              "to": [
-                {
-                  "namespaceSelector": {
-                    "matchLabels": {
-                      "kubernetes.io/metadata.name": "kube-system"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "ingress": [
-            {
-              "from": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "podSelector": {
-            "matchLabels": {
-              "proofstorm.dev/network-identity": "mint"
-            }
-          },
-          "policyTypes": [
-            "Ingress",
-            "Egress"
-          ]
-        }
-      },
-      {
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "NetworkPolicy",
-        "metadata": {
-          "labels": {
-            "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "wallet",
-            "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "wallet"
-          },
-          "name": "wallet",
-          "namespace": "proofstorm-i-golden-b2"
-        },
-        "spec": {
-          "egress": [
-            {
-              "to": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            },
-            {
-              "ports": [
-                {
-                  "port": 53,
-                  "protocol": "UDP"
-                },
-                {
-                  "port": 53,
-                  "protocol": "TCP"
-                }
-              ],
-              "to": [
-                {
-                  "namespaceSelector": {
-                    "matchLabels": {
-                      "kubernetes.io/metadata.name": "kube-system"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "ingress": [
-            {
-              "from": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "podSelector": {
-            "matchLabels": {
-              "proofstorm.dev/network-identity": "wallet"
-            }
-          },
-          "policyTypes": [
-            "Ingress",
-            "Egress"
-          ]
-        }
-      },
-      {
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "NetworkPolicy",
-        "metadata": {
-          "labels": {
-            "app.kubernetes.io/managed-by": "proofstormd",
-            "proofstorm.dev/component": "workspace",
-            "proofstorm.dev/instance": "i-golden-b2",
-            "proofstorm.dev/network-identity": "workspace"
-          },
-          "name": "workspace",
-          "namespace": "proofstorm-i-golden-b2"
-        },
-        "spec": {
-          "egress": [
-            {
-              "to": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            },
-            {
-              "ports": [
-                {
-                  "port": 53,
-                  "protocol": "UDP"
-                },
-                {
-                  "port": 53,
-                  "protocol": "TCP"
-                }
-              ],
-              "to": [
-                {
-                  "namespaceSelector": {
-                    "matchLabels": {
-                      "kubernetes.io/metadata.name": "kube-system"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "ingress": [
-            {
-              "from": [
-                {
-                  "podSelector": {
-                    "matchLabels": {
-                      "proofstorm.dev/instance": "i-golden-b2"
-                    }
-                  }
-                }
-              ]
-            }
-          ],
-          "podSelector": {
-            "matchLabels": {
-              "proofstorm.dev/network-identity": "workspace"
-            }
           },
           "policyTypes": [
             "Ingress",
@@ -3172,20 +2698,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -3222,6 +2734,15 @@
                     },
                     "failureThreshold": 40,
                     "periodSeconds": 3
+                  },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
@@ -3321,20 +2842,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -3371,6 +2878,15 @@
                     },
                     "failureThreshold": 40,
                     "periodSeconds": 3
+                  },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
@@ -3470,20 +2986,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -3523,6 +3025,15 @@
                     },
                     "failureThreshold": 40,
                     "periodSeconds": 3
+                  },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
@@ -3622,20 +3133,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -3676,6 +3173,15 @@
                     },
                     "failureThreshold": 40,
                     "periodSeconds": 3
+                  },
+                  "resources": {
+                    "limits": {
+                      "memory": "512Mi"
+                    },
+                    "requests": {
+                      "cpu": "100m",
+                      "memory": "128Mi"
+                    }
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
@@ -3770,10 +3276,6 @@
       "spec": {
         "limits": [
           {
-            "default": {
-              "cpu": "500m",
-              "memory": "512Mi"
-            },
             "defaultRequest": {
               "cpu": "100m",
               "memory": "128Mi"
@@ -3798,26 +3300,7 @@
         "name": "proofstorm-i-golden-b2"
       }
     },
-    "quota": {
-      "apiVersion": "v1",
-      "kind": "ResourceQuota",
-      "metadata": {
-        "labels": {
-          "app.kubernetes.io/managed-by": "proofstormd",
-          "proofstorm.dev/instance": "i-golden-b2"
-        },
-        "name": "proofstorm-instance-quota",
-        "namespace": "proofstorm-i-golden-b2"
-      },
-      "spec": {
-        "hard": {
-          "persistentvolumeclaims": "12",
-          "pods": "40",
-          "requests.cpu": "2",
-          "requests.memory": "4Gi"
-        }
-      }
-    },
+    "quota": null,
     "serviceAccount": {
       "apiVersion": "v1",
       "automountServiceAccountToken": false,

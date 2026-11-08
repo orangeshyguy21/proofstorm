@@ -22,15 +22,20 @@ pub struct ProbeObservation {
 }
 
 /// Expire success on reads even when the controller has stopped.
-pub fn expire_cell_status(cell: &mut crate::ProofstormCell, now_unix: i64) {
+pub fn expire_cell_status(
+    cell: &mut crate::ProofstormCell,
+    spec: &proofstorm_core::CellSpec,
+    lock: &proofstorm_core::ResolvedLock,
+    now_unix: i64,
+) {
     let Some(status) = cell.status.as_mut() else {
         return;
     };
     if let Ok(plans) = crate::compile_component_plans(
         &cell.spec.instance_key,
         &cell.spec.revision_digest,
-        &cell.spec.cell,
-        &cell.spec.lock,
+        spec,
+        lock,
     ) {
         crate::expire_protocol_status(&plans, &mut status.components, now_unix);
         let by_id: BTreeMap<_, _> = status

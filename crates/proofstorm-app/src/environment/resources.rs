@@ -56,7 +56,7 @@ pub(super) fn project(
             "desired resource projection unavailable",
         )
     })?;
-    let spine = render_security_spine(&instance.instance_key);
+    let spine = render_security_spine(&instance.instance_key, &revision.cell.policy.resources);
     let defaults = spine.limits.spec.as_ref().and_then(|s| s.limits.first());
     let request_defaults = quantities(defaults.and_then(|d| d.default_request.as_ref()));
     let limit_defaults = quantities(defaults.and_then(|d| d.default.as_ref()));
@@ -239,5 +239,60 @@ fn workload(
         observation: None,
         omitted_container_count: 0,
         containers,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proofstorm_core::{API_VERSION, CellSpec, PublishedRevision, default_catalog, digest_json};
+
+    #[test]
+    fn the_projection_shows_a_components_own_caps() {
+        let catalog = default_catalog();
+        let authored: CellSpec = serde_json::from_value(serde_json::json!({
+            "api_version": API_VERSION, "name": "caps",
+            "components": [{"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core",
+                "config_version": catalog.entries.iter()
+                    .find(|e| e.id == "bitcoin-core").unwrap().config_version,
+                "control": "cell", "config": {},
+                "resources": {"cpu": {"limit": "none"}, "memory": {"request": "256Mi", "limit": "2Gi"}}}],
+            "links": []
+        }))
+        .unwrap();
+        let cell = proofstorm_core::resolve_effective_cell(&authored, catalog).unwrap();
+        let lock = proofstorm_core::resolve_lock(&cell, catalog).unwrap();
+        let revision = PublishedRevision {
+            workspace_id: "alpha".into(),
+            digest: digest_json(&(&cell, &lock)),
+            cell,
+            lock,
+        };
+        let instance = CellInstance {
+            generation: 1,
+            id: "caps".into(),
+            workspace_id: "alpha".into(),
+            revision_digest: revision.digest.clone(),
+            lock_digest: revision.lock.digest.clone(),
+            instance_key: "ikey".into(),
+            resource_name: "caps".into(),
+        };
+        let (demand, _) = project(&instance, &revision).unwrap();
+        let chain = demand
+            .workloads
+            .iter()
+            .find(|w| w.component.as_deref() == Some("chain"))
+            .unwrap();
+        let main = chain
+            .containers
+            .iter()
+            .find(|c| c.name == "component")
+            .unwrap_or(&chain.containers[0]);
+        assert_eq!(
+            main.requests.get("memory").map(String::as_str),
+            Some("256Mi")
+        );
+        assert_eq!(main.limits.get("memory").map(String::as_str), Some("2Gi"));
+        assert_eq!(main.limits.get("cpu"), None);
     }
 }

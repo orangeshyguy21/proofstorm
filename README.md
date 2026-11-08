@@ -125,6 +125,60 @@ PostgreSQL independently of primary storage. Its issuance settings are
 `auth_max_blind_tokens` (default 100) and `auth_rate_limit_per_minute` (default
 5). Nutshell 0.20.3 authentication remains unsupported.
 
+## Resource caps
+
+Proofstorm doesn't size your cells. It sets generous ceilings, and you can move or remove
+each one. Caps use one shape, `{cpu, memory}: {request, limit}`, wherever they appear.
+
+A component's `resources` apply to its main container:
+
+```yaml
+components:
+  - id: wallet-nut
+    resources: { cpu: { limit: none }, memory: { limit: 2Gi } }
+```
+
+A cell's `policy.resources.defaults` covers what its components don't set. An optional
+`quota` caps the cell's totals; without one there's no quota.
+
+```yaml
+policy:
+  resources:
+    defaults:
+      cpu: { request: 100m }
+      memory: { request: 128Mi, limit: 512Mi }
+    quota: { cpu: "20", memory: 64Gi, pods: 500, volumes: 50 }
+```
+
+The quota counts every pod and volume claim in the cell's namespace: one pod per
+component, Proofstorm's protocol prober, and each running action (exec, forensics,
+probes). Kubernetes refuses a pod over quota, so a plan whose quota can't hold its
+components, the prober and one action at the cell's default requests is refused.
+
+Each value comes from the first of these that sets it:
+1. the component's `resources`;
+2. the component's own defaults (Keycloak, Redis and Workspace have them);
+3. the cell's `policy.resources.defaults`;
+4. Proofstorm's defaults: 100m CPU and 128Mi memory requested, a 512Mi memory limit, and
+   no CPU limit.
+
+`none` removes a limit. The environment's `resources` section (`environment_read` over MCP)
+shows each container's effective values.
+
+The controller and cluster settings live in `runtime.toml` in the installation home. Only
+the CLI changes them, never an agent:
+
+```sh
+storm config                                  # each setting: value, default and source
+storm config set controller.cpu.limit=4 cluster.agents=3
+storm config unset controller.cpu.limit       # back to the default
+storm setup                                   # applies the file
+```
+
+A controller setting restarts the controller once. `cluster.agents` and
+`cluster.max_pods_per_node` apply when the cluster is created, so changing them needs
+`storm setup --recreate`, which deletes all cells.
+
 ## Updates
 
 ```sh

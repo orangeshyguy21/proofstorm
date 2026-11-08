@@ -12,7 +12,7 @@ use crate::{
     AuthenticationConformanceAction, AuthenticationProtectedSpendAction,
     AuthenticationReplayAction, CellAction, ComponentForensicsAction, ProofstormCell,
     ProofstormCellAction, ReachabilityOracleAction, component_ports, instance_namespace,
-    pod::{container_security, instance_affinity, pod_security},
+    pod::{container_security, pod_security},
 };
 
 use crate::images::PROBE_IMAGE as REACHABILITY_PROBE_IMAGE;
@@ -126,7 +126,7 @@ impl ActionAdmissionError {
 /// applicable runtime readiness prerequisite is unavailable.
 pub fn evaluate_action_admission(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
 ) -> Result<(), ActionAdmissionError> {
     evaluate_action_admission_at(
         action,
@@ -144,7 +144,7 @@ pub fn evaluate_action_admission(
 /// Returns an error when a required identity or fresh readiness prerequisite is unavailable.
 pub fn evaluate_action_admission_at(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
     now_unix: i64,
 ) -> Result<(), ActionAdmissionError> {
     require_open_cell(cell)?;
@@ -152,13 +152,9 @@ pub fn evaluate_action_admission_at(
         ActionRenderError::Identity(field) => ActionAdmissionError::Identity(field),
         _ => ActionAdmissionError::InvalidPlan(error.to_string()),
     })?;
-    let plans = crate::compile_component_plans(
-        &cell.spec.instance_key,
-        &cell.spec.revision_digest,
-        &cell.spec.cell,
-        &cell.spec.lock,
-    )
-    .map_err(|error| ActionAdmissionError::InvalidPlan(error.to_string()))?;
+    let plans = cell
+        .plans()
+        .map_err(|error| ActionAdmissionError::InvalidPlan(error.to_string()))?;
     let mut statuses = cell
         .status
         .as_ref()
@@ -330,6 +326,19 @@ fn unsatisfied(
     }
 }
 
+/// The components whose status an action's admission reads.
+#[must_use]
+pub fn admission_components(action: &CellAction) -> std::collections::BTreeSet<String> {
+    let mut components: std::collections::BTreeSet<String> = action_participants(action)
+        .into_iter()
+        .map(|(component, _)| component.to_owned())
+        .collect();
+    if let Some((executor, target)) = action_execution_target(action) {
+        components.extend([executor.to_owned(), target.to_owned()]);
+    }
+    components
+}
+
 fn action_execution_target(action: &CellAction) -> Option<(&str, &str)> {
     match action {
         CellAction::ComponentForensics(request) => {
@@ -422,7 +431,7 @@ pub const fn action_result_container(action: &CellAction) -> &'static str {
 /// policy bounds, or an invalid internal Kubernetes resource.
 pub fn render_cell_action_job(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
 ) -> Result<Job, ActionRenderError> {
     validate_action_identity(action, cell)?;
     let mut job = match &action.spec.action {
@@ -461,13 +470,21 @@ pub fn render_cell_action_job(
             ));
         }
     };
+    if let Some(pod) = job
+        .spec
+        .as_mut()
+        .and_then(|spec| spec.template.spec.as_mut())
+    {
+        let defaults = cell.revision.cell.policy.resources.container_defaults();
+        crate::resources::apply(pod, &defaults, None);
+    }
     mark_controller_owned(&mut job, &action.name_any());
     Ok(job)
 }
 
 fn render_authentication_conformance_action(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
     request: &AuthenticationConformanceAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::AuthenticationTest {
@@ -488,7 +505,7 @@ fn render_authentication_conformance_action(
 
 fn render_authentication_protected_spend_action(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
     request: &AuthenticationProtectedSpendAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::AuthenticationTest {
@@ -509,7 +526,7 @@ fn render_authentication_protected_spend_action(
 
 fn render_authentication_replay_action(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
     request: &AuthenticationReplayAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::AuthenticationTest {
@@ -531,13 +548,13 @@ fn render_authentication_replay_action(
 }
 
 fn authentication_components<'a>(
-    cell: &'a ProofstormCell,
+    cell: &'a crate::LoadedCell,
     mint: &str,
     identity_provider: &str,
 ) -> Result<(&'a str, &'static str), ActionRenderError> {
     // The link check below and the catalog decide whether auth is supported.
     let implementation = cell
-        .spec
+        .revision
         .cell
         .components
         .iter()
@@ -556,7 +573,7 @@ fn authentication_components<'a>(
         "keycloak",
     )?;
     let links = cell
-        .spec
+        .revision
         .cell
         .links
         .iter()
@@ -582,7 +599,7 @@ fn authentication_components<'a>(
 
 fn render_native_exec_action(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
     request: &ComponentForensicsAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::ComponentForensics {
@@ -599,13 +616,9 @@ fn render_native_exec_action(
         ));
     }
 
-    let plans = crate::compile_component_plans(
-        &cell.spec.instance_key,
-        &cell.spec.revision_digest,
-        &cell.spec.cell,
-        &cell.spec.lock,
-    )
-    .map_err(|error| ActionRenderError::InvalidPlan(error.to_string()))?;
+    let plans = cell
+        .plans()
+        .map_err(|error| ActionRenderError::InvalidPlan(error.to_string()))?;
     let component = plans
         .iter()
         .find(|plan| plan.component_id == request.component)
@@ -649,7 +662,6 @@ fn render_native_exec_action(
         "automountServiceAccountToken": false,
         "enableServiceLinks": false,
         "securityContext": pod_security(1000),
-        "affinity": instance_affinity(&action.spec.instance_key),
         "containers": [exec_container],
         "volumes": context.volumes,
     });
@@ -876,7 +888,7 @@ fn native_exec_target_environment(
 
 fn render_reachability_oracle_action(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &crate::LoadedCell,
     request: &ReachabilityOracleAction,
 ) -> Result<Job, ActionRenderError> {
     if action.spec.capability != Capability::OracleRun {
@@ -884,14 +896,14 @@ fn render_reachability_oracle_action(
     }
     validate_reachability_oracle_action(request)?;
     let source = cell
-        .spec
+        .revision
         .cell
         .components
         .iter()
         .find(|component| component.id == request.from_component)
         .ok_or_else(|| ActionRenderError::UnknownComponent(request.from_component.clone()))?;
     let destination = cell
-        .spec
+        .revision
         .cell
         .components
         .iter()
@@ -915,7 +927,7 @@ fn render_reachability_oracle_action(
     );
     let pod = json!({
         "restartPolicy": "Never", "serviceAccountName": "proofstorm-workload", "automountServiceAccountToken": false, "enableServiceLinks": false,
-        "securityContext": pod_security(1000), "affinity": instance_affinity(&action.spec.instance_key),
+        "securityContext": pod_security(1000),
         "containers": [container("oracle", REACHABILITY_PROBE_IMAGE, &script, &[])]
     });
     let mut rendered = job(
@@ -989,12 +1001,12 @@ fn validate_reachability_oracle_action(
 }
 
 fn locked_component_image<'a>(
-    cell: &'a ProofstormCell,
+    cell: &'a crate::LoadedCell,
     id: &str,
     kind: ComponentKind,
     implementation: &'static str,
 ) -> Result<&'a str, ActionRenderError> {
-    let valid = cell.spec.cell.components.iter().any(|component| {
+    let valid = cell.revision.cell.components.iter().any(|component| {
         component.id == id && component.kind == kind && component.implementation == implementation
     });
     if !valid {
@@ -1004,7 +1016,7 @@ fn locked_component_image<'a>(
             kind,
         });
     }
-    cell.spec
+    cell.revision
         .lock
         .entries
         .iter()
@@ -1097,7 +1109,6 @@ pub fn render_authentication_conformance_job(
         "automountServiceAccountToken": false,
         "enableServiceLinks": false,
         "securityContext": pod_security(1000),
-        "affinity": instance_affinity(instance_key),
         "containers": [authentication]
     });
     job(
@@ -1158,7 +1169,6 @@ pub fn render_authentication_protected_spend_job(
         "automountServiceAccountToken": false,
         "enableServiceLinks": false,
         "securityContext": pod_security(1000),
-        "affinity": instance_affinity(instance_key),
         "containers": [authentication]
     });
     job(
@@ -1229,7 +1239,6 @@ pub fn render_authentication_replay_job(
         "automountServiceAccountToken": false,
         "enableServiceLinks": false,
         "securityContext": pod_security(1000),
-        "affinity": instance_affinity(instance_key),
         "containers": [authentication]
     });
     job(
@@ -1344,8 +1353,9 @@ mod tests {
 
     use super::*;
 
-    fn action_fixture() -> (ProofstormCell, ProofstormCellAction) {
+    fn action_fixture() -> (crate::LoadedCell, ProofstormCellAction) {
         let component = |id: &str, kind: ComponentKind, implementation: &str| ComponentSpec {
+            resources: None,
             id: id.into(),
             kind,
             implementation: implementation.into(),
@@ -1391,16 +1401,18 @@ mod tests {
             policy: CellPolicy::default(),
         };
         let lock = resolve_lock(&cell_spec, default_catalog()).expect("lock");
-        let cell = ProofstormCell::new(
-            "cell-resource",
-            crate::ProofstormCellSpec {
-                workspace_id: "workspace".into(),
-                instance_id: "instance".into(),
-                instance_key: "i0123456789012345678".into(),
-                revision_digest: "sha256:revision".into(),
-                lock,
-                cell: cell_spec,
-            },
+        let cell = crate::LoadedCell::from_spec(
+            ProofstormCell::new(
+                "cell-resource",
+                crate::ProofstormCellSpec {
+                    workspace_id: "workspace".into(),
+                    instance_id: "instance".into(),
+                    instance_key: "i0123456789012345678".into(),
+                    revision_digest: "sha256:revision".into(),
+                },
+            ),
+            cell_spec,
+            lock,
         );
         let action = ProofstormCellAction::new(
             "action-123",
@@ -1430,14 +1442,8 @@ mod tests {
         (cell, action)
     }
 
-    fn ready_admission_status(cell: &mut ProofstormCell) {
-        let plans = crate::compile_component_plans(
-            &cell.spec.instance_key,
-            &cell.spec.revision_digest,
-            &cell.spec.cell,
-            &cell.spec.lock,
-        )
-        .expect("plans");
+    fn ready_admission_status(cell: &mut crate::LoadedCell) {
+        let plans = cell.plans().expect("plans");
         let components = plans
             .iter()
             .map(|plan| ComponentStatus {
@@ -1501,7 +1507,7 @@ mod tests {
     }
 
     fn set_condition(
-        cell: &mut ProofstormCell,
+        cell: &mut crate::LoadedCell,
         component: &str,
         condition_type: ComponentConditionType,
         state: ComponentConditionState,
@@ -1874,7 +1880,7 @@ mod tests {
     }
 
     #[test]
-    fn bounded_jobs_preserve_deadlines_security_and_instance_placement() {
+    fn bounded_jobs_preserve_deadlines_and_security_without_node_affinity() {
         let (cell, action) = action_fixture();
         let job = render_cell_action_job(&action, &cell).expect("probe job");
         let spec = job.spec.expect("job spec");
@@ -1896,13 +1902,8 @@ mod tests {
                 "seccompProfile": {"type": "RuntimeDefault"}
             })
         );
-        assert_eq!(
-            serde_json::to_value(&pod.affinity).unwrap(),
-            json!({"podAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": [{
-                "labelSelector": {"matchLabels": {"proofstorm.dev/instance": action.spec.instance_key}},
-                "topologyKey": "kubernetes.io/hostname"
-            }]}})
-        );
+        // No node affinity: a Job that mounts a component's volume follows it.
+        assert!(pod.affinity.is_none());
         for container in &pod.containers {
             assert_eq!(
                 serde_json::to_value(&container.security_context).unwrap(),
@@ -1915,7 +1916,7 @@ mod tests {
     fn native_exec_uses_locked_component_image_data_and_uninterpolated_script() {
         let (cell, mut action) = action_fixture();
         let locked_bitcoin = cell
-            .spec
+            .revision
             .lock
             .entries
             .iter()
@@ -1973,6 +1974,109 @@ mod tests {
         );
         assert!(!pod_labels.contains_key("proofstorm.dev/component"));
         assert!(!pod_labels.contains_key("proofstorm.dev/operation"));
+    }
+
+    /// Whether `policy` selects a pod with `labels`, for the selector
+    /// operators the renderer uses.
+    fn selects(
+        policy: &k8s_openapi::api::networking::v1::NetworkPolicy,
+        labels: &BTreeMap<String, String>,
+    ) -> bool {
+        let selector = policy
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.pod_selector.as_ref())
+            .expect("pod selector");
+        selector
+            .match_labels
+            .iter()
+            .flatten()
+            .all(|(key, value)| labels.get(key) == Some(value))
+            && selector
+                .match_expressions
+                .iter()
+                .flatten()
+                .all(|expression| {
+                    let value = labels.get(&expression.key);
+                    let values = expression.values.as_deref().unwrap_or_default();
+                    match expression.operator.as_str() {
+                        "Exists" => value.is_some(),
+                        "DoesNotExist" => value.is_none(),
+                        "In" => value.is_some_and(|value| values.contains(value)),
+                        "NotIn" => value.is_none_or(|value| !values.contains(value)),
+                        other => panic!("unexpected selector operator {other}"),
+                    }
+                })
+    }
+
+    fn pod_labels(job: &Job) -> BTreeMap<String, String> {
+        job.spec
+            .as_ref()
+            .and_then(|spec| spec.template.metadata.as_ref())
+            .and_then(|metadata| metadata.labels.clone())
+            .expect("pod labels")
+    }
+
+    #[test]
+    fn pods_acting_as_a_component_get_the_cell_policy_and_its_partitions() {
+        let (cell, mut action) = action_fixture();
+        let key = cell.spec.instance_key.clone();
+        action.spec.capability = Capability::OracleRun;
+        action.spec.action = CellAction::ReachabilityOracle(ReachabilityOracleAction {
+            from_component: "chain".into(),
+            to_component: "chain-b".into(),
+            service: "rpc".into(),
+            timeout_seconds: 2,
+            attempts: 1,
+        });
+        let oracle = pod_labels(&render_cell_action_job(&action, &cell).expect("oracle job"));
+        action.spec.capability = Capability::ComponentForensics;
+        action.spec.action = CellAction::ComponentForensics(ComponentForensicsAction {
+            component: "chain".into(),
+            target_component: "chain-b".into(),
+            script: "bitcoin-cli getblockchaininfo".into(),
+            timeout_seconds: 30,
+        });
+        let exec = pod_labels(&render_cell_action_job(&action, &cell).expect("exec job"));
+        let component = BTreeMap::from([
+            (crate::INSTANCE_LABEL.to_owned(), key.clone()),
+            (crate::COMPONENT_LABEL.to_owned(), "chain".to_owned()),
+            (
+                "proofstorm.dev/network-identity".to_owned(),
+                "chain".to_owned(),
+            ),
+        ]);
+        let prober = crate::render_protocol_prober(&cell.plans().expect("plans"), "prober")
+            .expect("prober")
+            .expect("a probed component")
+            .spec
+            .and_then(|spec| spec.template.metadata)
+            .and_then(|metadata| metadata.labels)
+            .expect("prober labels");
+
+        let open = crate::render_cell_network_policy(&key, &[]).expect("cell policy");
+        for (pod, labels) in [
+            ("component", &component),
+            ("oracle", &oracle),
+            ("exec", &exec),
+        ] {
+            assert!(
+                selects(&open, labels),
+                "the cell policy must select the {pod} pod"
+            );
+        }
+        // The prober keeps the controller-action policy.
+        assert!(!selects(&open, &prober));
+
+        // In a partition the component's own policy governs every pod acting as it.
+        let partitioned =
+            crate::render_cell_network_policy(&key, &["chain".into()]).expect("cell policy");
+        let own = crate::render_component_network_policy(&key, "chain", &["chain-b".into()])
+            .expect("component policy");
+        for labels in [&component, &oracle, &exec] {
+            assert!(!selects(&partitioned, labels));
+            assert!(selects(&own, labels));
+        }
     }
 
     #[test]
@@ -2080,13 +2184,7 @@ mod tests {
         assert_eq!(mounts[2].mount_path, "/lnd");
         assert_eq!(mounts[2].read_only, Some(true));
 
-        let mut plans = crate::compile_component_plans(
-            &cell.spec.instance_key,
-            &cell.spec.revision_digest,
-            &cell.spec.cell,
-            &cell.spec.lock,
-        )
-        .expect("compiled plans");
+        let mut plans = cell.plans().expect("compiled plans");
         let mint = plans
             .iter_mut()
             .find(|plan| plan.component_id == "mint")
@@ -2212,17 +2310,21 @@ mod tests {
     fn expired_chain_evidence_invalidates_dependent_actions_at_the_boundary() {
         let (mut cell, mut action) = action_fixture();
         for lightning in ["mint-lnd", "payer-lnd"] {
-            cell.spec.cell.links.push(proofstorm_core::LinkSpec {
-                id: format!("{lightning}-chain"),
-                kind: proofstorm_core::LinkKind::ChainBackend,
-                from: lightning.into(),
-                to: "chain".into(),
-                binding: Some(proofstorm_core::DependencyBinding::Chain {
-                    network: proofstorm_core::BitcoinNetwork::Regtest,
-                }),
-            });
+            std::sync::Arc::make_mut(&mut cell.revision)
+                .cell
+                .links
+                .push(proofstorm_core::LinkSpec {
+                    id: format!("{lightning}-chain"),
+                    kind: proofstorm_core::LinkKind::ChainBackend,
+                    from: lightning.into(),
+                    to: "chain".into(),
+                    binding: Some(proofstorm_core::DependencyBinding::Chain {
+                        network: proofstorm_core::BitcoinNetwork::Regtest,
+                    }),
+                });
         }
-        cell.spec.lock = resolve_lock(&cell.spec.cell, default_catalog()).unwrap();
+        let lock = resolve_lock(&cell.revision.cell, default_catalog()).unwrap();
+        std::sync::Arc::make_mut(&mut cell.revision).lock = lock;
         ready_admission_status(&mut cell);
         action.spec.action =
             CellAction::AuthenticationConformance(AuthenticationConformanceAction {
@@ -2247,8 +2349,13 @@ mod tests {
                 ..
             })
         ));
-        let mut projected = cell.clone();
-        crate::probes::expire_cell_status(&mut projected, 100);
+        let mut projected = cell.resource.clone();
+        crate::probes::expire_cell_status(
+            &mut projected,
+            &cell.revision.cell,
+            &cell.revision.lock,
+            100,
+        );
         let lightning = projected
             .status
             .as_ref()

@@ -39,6 +39,7 @@ fn component(
     control: ControlClass,
 ) -> ComponentSpec {
     ComponentSpec {
+        resources: None,
         id: id.into(),
         kind,
         implementation: implementation.into(),
@@ -788,11 +789,48 @@ fn keycloak_waits_for_its_actual_database_service_without_database_credentials()
     }
 }
 
-/// The JVM augments and imports its realm at startup and does not fit the
-/// namespace default, so the limit must stay above it or the pod is OOM killed
+#[test]
+fn redis_memory_limit_tracks_its_cache_and_the_user_can_still_override_it() {
+    let memory_limit = |maxmemory: u64, resources: Option<serde_json::Value>| {
+        let (mut spec, id) = backend_cell("redis");
+        let component = spec.components.iter_mut().find(|c| c.id == id).unwrap();
+        component
+            .config
+            .insert("maxmemory_mb".into(), json!(maxmemory));
+        component.resources = resources.map(|r| serde_json::from_value(r).unwrap());
+        let lock = resolve_lock(&spec, default_catalog()).unwrap();
+        let rendered = render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+        let pod = rendered.deployments[0]
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .spec
+            .as_ref()
+            .unwrap();
+        let resources = pod.containers[0].resources.as_ref().unwrap();
+        resources
+            .limits
+            .as_ref()
+            .map(|limits| limits["memory"].0.clone())
+    };
+    assert_eq!(memory_limit(64, None).as_deref(), Some("512Mi"));
+    assert_eq!(memory_limit(1024, None).as_deref(), Some("1088Mi"));
+    assert_eq!(
+        memory_limit(1024, Some(json!({"memory": {"limit": "4Gi"}}))).as_deref(),
+        Some("4Gi")
+    );
+    assert_eq!(
+        memory_limit(1024, Some(json!({"memory": {"limit": "none"}}))),
+        None
+    );
+}
+
+/// The JVM augments and imports its realm at startup and needs more than the
+/// container default, so its limit must stay above it or the pod is OOM killed
 /// before it can ever pass its readiness probe.
 #[test]
-fn keycloak_declares_a_memory_limit_above_the_namespace_container_default() {
+fn keycloak_declares_a_memory_limit_above_the_container_default() {
     let mebibytes = |quantity: &k8s_openapi::apimachinery::pkg::api::resource::Quantity| {
         let value = &quantity.0;
         let (amount, scale) = value.split_at(value.len() - 2);
@@ -803,14 +841,9 @@ fn keycloak_declares_a_memory_limit_above_the_namespace_container_default() {
                 other => panic!("unexpected quantity scale {other:?} in {value:?}"),
             }
     };
-    let default = render_security_spine(INSTANCE_KEY)
-        .limits
-        .spec
-        .unwrap()
-        .limits[0]
-        .default
-        .clone()
-        .unwrap();
+    let default = k8s_openapi::apimachinery::pkg::api::resource::Quantity(
+        proofstorm_core::DEFAULT_MEMORY_LIMIT.into(),
+    );
     let (spec, _) = backend_cell("keycloak");
     let lock = resolve_lock(&spec, default_catalog()).unwrap();
     let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
@@ -830,7 +863,7 @@ fn keycloak_declares_a_memory_limit_above_the_namespace_container_default() {
         .expect("keycloak declares its own resources");
     let limits = resources.limits.as_ref().unwrap();
     let requests = resources.requests.as_ref().unwrap();
-    assert!(mebibytes(&limits["memory"]) > mebibytes(&default["memory"]));
+    assert!(mebibytes(&limits["memory"]) > mebibytes(&default));
     assert!(mebibytes(&requests["memory"]) <= mebibytes(&limits["memory"]));
 }
 
@@ -1800,16 +1833,18 @@ fn full_baseline_cell_matches_its_golden_contract() {
         assert_component_security(&one);
     }
 
-    let cell = ProofstormCell::new(
-        "golden-cell",
-        ProofstormCellSpec {
-            workspace_id: "workspace-golden".into(),
-            instance_id: "instance-golden".into(),
-            instance_key: INSTANCE_KEY.into(),
-            revision_digest: REVISION_DIGEST.into(),
-            lock,
-            cell: spec,
-        },
+    let cell = proofstorm_kube::LoadedCell::from_spec(
+        ProofstormCell::new(
+            "golden-cell",
+            ProofstormCellSpec {
+                workspace_id: "workspace-golden".into(),
+                instance_id: "instance-golden".into(),
+                instance_key: INSTANCE_KEY.into(),
+                revision_digest: REVISION_DIGEST.into(),
+            },
+        ),
+        spec,
+        lock,
     );
     let action = ProofstormCellAction::new(
         "golden-native-exec",
@@ -1859,7 +1894,7 @@ fn full_baseline_cell_matches_its_golden_contract() {
         json!(false)
     );
 
-    let spine = render_security_spine(INSTANCE_KEY);
+    let spine = render_security_spine(INSTANCE_KEY, &proofstorm_core::ResourcePolicy::default());
     assert_golden(
         "full-baseline-cell",
         &json!({
@@ -2427,4 +2462,60 @@ fn nutshell_native_env_reaches_the_mint_environment() {
         refused.contains("\"mint_database\" is already set"),
         "{refused}"
     );
+}
+
+/// Scale timing, run by hand: `cargo test -p proofstorm-kube --release --test
+/// golden_rendering scale_timing -- --ignored --nocapture`. One chain plus N
+/// Lightning nodes linked to it; prints compile and render time per size.
+#[test]
+#[ignore = "timing report, run by hand"]
+fn scale_timing_of_plan_compile_and_render() {
+    for size in [100_usize, 500, 1000, 2000] {
+        let mut components = vec![component(
+            "chain",
+            ComponentKind::Bitcoin,
+            "bitcoin-core",
+            ControlClass::Cell,
+        )];
+        let mut links = Vec::new();
+        for index in 0..size {
+            let id = format!("ln-{index}");
+            components.push(component(
+                &id,
+                ComponentKind::Lightning,
+                "lnd",
+                ControlClass::Cell,
+            ));
+            links.push(chain_link(&id, "chain"));
+        }
+        let spec = cell("scale", components, links);
+        let started = std::time::Instant::now();
+        let lock = resolve_lock(&spec, default_catalog()).unwrap();
+        let locked = started.elapsed();
+        let started = std::time::Instant::now();
+        let plans = compile_component_plans(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+        let compiled = started.elapsed();
+        let started = std::time::Instant::now();
+        let rendered = render_cell(INSTANCE_KEY, REVISION_DIGEST, &spec, &lock).unwrap();
+        let render = started.elapsed();
+        // The stored revision object, as the API server receives it.
+        let revision = proofstorm_kube::CellRevision {
+            workspace_id: "workspace".into(),
+            instance_key: INSTANCE_KEY.into(),
+            revision_digest: proofstorm_core::digest_json(&("workspace", &spec, &lock)),
+            cell: spec.clone(),
+            lock: lock.clone(),
+        };
+        let object = proofstorm_kube::revision_config_map(&revision, "proofstorm-system", None)
+            .map(|map| serde_json::to_vec(&map).unwrap().len());
+        println!(
+            "{size:>5} components: lock {:>8.1?}  compile {:>8.1?}  render {:>8.1?}  ({} plans, {} statefulsets)  revision object {:?} bytes",
+            locked,
+            compiled,
+            render,
+            plans.len(),
+            rendered.stateful_sets.len(),
+            object
+        );
+    }
 }

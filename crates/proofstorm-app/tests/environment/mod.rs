@@ -20,16 +20,36 @@ fn observer(cells: &Cells) -> Cells {
         "viewer".into(),
     )
 }
+/// Revisions the fake cluster stores, by digest, decoded as the controller reads them.
+pub(super) fn stored_revisions(
+    objects: &std::collections::BTreeMap<String, Value>,
+) -> std::collections::BTreeMap<String, proofstorm_kube::CellRevision> {
+    objects
+        .values()
+        .filter_map(|value| {
+            serde_json::from_value::<k8s_openapi::api::core::v1::ConfigMap>(value.clone()).ok()
+        })
+        .filter_map(|map| proofstorm_kube::decode_revision(&map).ok())
+        .map(|revision| (revision.revision_digest.clone(), revision))
+        .collect()
+}
+
 pub(super) fn ready(cluster: &Arc<Mutex<Cluster>>) {
-    for (path, object) in &mut cluster.lock().unwrap().objects {
+    let mut cluster = cluster.lock().unwrap();
+    let revisions = stored_revisions(&cluster.objects);
+    for (path, object) in &mut cluster.objects {
         if path.contains("/proofstormcells/") {
+            let rollout = object["spec"]["revisionDigest"]
+                .as_str()
+                .and_then(|digest| revisions.get(digest))
+                .map(|revision| revision.lock.entries[0].rollout_digest.clone());
             object["metadata"]["generation"] = json!(1);
             object["metadata"]["resourceVersion"] = json!("12");
             object["metadata"]["managedFields"] =
                 json!([{"subresource":"status","time":"2026-09-06T12:00:00Z"}]);
             object["status"]["observedGeneration"] = json!(1);
             object["status"]["phase"] = json!("Ready");
-            object["status"]["components"] = json!([{"id":"chain","kind":"bitcoin","observed_revision_digest":object["spec"]["revisionDigest"],"observed_rollout_digest":object["spec"]["lock"]["entries"][0]["rollout_digest"],"protocol_observation":{"observed_at_unix":0,"expires_at_unix":i64::MAX,"elapsed_micros":1},"conditions":[{"condition_type":"protocol_ready","state":"true","reason":"protocol_responding","message":"ready","last_transition_unix":1},{"condition_type":"component_ready","state":"true","reason":"component_operational","message":"ready","last_transition_unix":1}],"ready":true,"service":"chain","ports":{"rpc":18443}}]);
+            object["status"]["components"] = json!([{"id":"chain","kind":"bitcoin","observed_revision_digest":object["spec"]["revisionDigest"],"observed_rollout_digest":rollout,"protocol_observation":{"observed_at_unix":0,"expires_at_unix":i64::MAX,"elapsed_micros":1},"conditions":[{"condition_type":"protocol_ready","state":"true","reason":"protocol_responding","message":"ready","last_transition_unix":1},{"condition_type":"component_ready","state":"true","reason":"component_operational","message":"ready","last_transition_unix":1}],"ready":true,"service":"chain","ports":{"rpc":18443}}]);
         }
     }
 }
@@ -667,13 +687,21 @@ async fn stale_generation_keeps_unchanged_components_ready_but_rejects_wrong_ide
         view.cells.items[0].runtime.phase,
         Some(proofstorm_core::InstancePhase::Pending)
     );
-    cluster.lock().unwrap().objects.get_mut(&path).unwrap()["spec"]["workspaceId"] = json!("other");
+    // A cell of another workspace says so in its spec and in its metadata.
+    let set_workspace = |workspace: &str| {
+        let mut cluster = cluster.lock().unwrap();
+        let cell = cluster.objects.get_mut(&path).unwrap();
+        cell["spec"]["workspaceId"] = json!(workspace);
+        cell["metadata"]["annotations"][proofstorm_kube::WORKSPACE_ID_ANNOTATION] =
+            json!(workspace);
+    };
+    set_workspace("other");
     let view = cells
         .environment(&EnvironmentQuery::default())
         .await
         .unwrap();
     assert!(view.cells.items.is_empty());
-    cluster.lock().unwrap().objects.get_mut(&path).unwrap()["spec"]["workspaceId"] = json!("local");
+    set_workspace("local");
     cluster.lock().unwrap().objects.get_mut(&path).unwrap()["spec"]["instanceKey"] =
         json!("wrong-key");
     let mismatch = cells
@@ -1124,6 +1152,46 @@ async fn web_assets_and_same_origin_requests_are_served_safely() {
     let _ = server.await;
 }
 
+/// Telemetry enumerates cells from cached metadata and never reads one in
+/// full; the pod list comes from the API server's cache.
+fn assert_cached_metadata_reads(
+    cluster: &Arc<Mutex<Cluster>>,
+    instance_id: &str,
+    instance_key: &str,
+    pods_path: &str,
+) {
+    let cluster = cluster.lock().unwrap();
+    let cell = cluster
+        .objects
+        .iter()
+        .find(|(path, _)| path.contains("/proofstormcells/"))
+        .unwrap()
+        .1;
+    assert_eq!(
+        cell["metadata"]["annotations"][proofstorm_kube::INSTANCE_ID_ANNOTATION],
+        json!(instance_id)
+    );
+    assert_eq!(
+        cell["metadata"]["labels"][proofstorm_kube::INSTANCE_LABEL],
+        json!(instance_key)
+    );
+    let cell_reads = cluster
+        .reads
+        .iter()
+        .filter(|(path, _, _)| path.contains("/proofstormcells"))
+        .collect::<Vec<_>>();
+    assert_eq!(cell_reads.len(), 1);
+    assert!(cell_reads[0].0.ends_with("/proofstormcells"));
+    assert!(cell_reads[0].1.contains("resourceVersion=0"));
+    assert!(cell_reads[0].2.contains("as=PartialObjectMetadataList"));
+    let pod_read = cluster
+        .reads
+        .iter()
+        .find(|(path, _, _)| path == pods_path)
+        .unwrap();
+    assert!(pod_read.1.contains("resourceVersion=0"));
+}
+
 #[tokio::test]
 async fn system_measurements_are_scoped_passive_and_preserve_missing_metrics() {
     let store = Store::memory().unwrap();
@@ -1149,9 +1217,16 @@ async fn system_measurements_are_scoped_passive_and_preserve_missing_metrics() {
             "containers":[{"name":"component","usage":{"cpu":"125000000n","memory":"32Mi"}}]
         },{"metadata":{"name":"unrelated"},"containers":[{"name":"component","usage":{"cpu":"100","memory":"32Gi"}}]}]}));
         cluster.requests.clear();
+        cluster.reads.clear();
     }
     let viewer = observer(&cells);
     let view = viewer.system().await.unwrap();
+    assert_cached_metadata_reads(
+        &cluster,
+        &handle.instance_id,
+        &instance.instance_key,
+        &pods_path,
+    );
     assert_eq!(view.cells.len(), 1);
     assert_eq!(
         (view.totals.running, view.totals.ready, view.totals.sampled),
@@ -1181,8 +1256,13 @@ async fn system_measurements_are_scoped_passive_and_preserve_missing_metrics() {
         "/apis/proofstorm.dev/v1alpha1/namespaces/system/proofstormcells/{}",
         instance.resource_name
     );
-    cluster.lock().unwrap().objects.get_mut(&cell_path).unwrap()["spec"]["instanceKey"] =
-        json!("wrong-key");
+    // Another incarnation under the same name: its metadata names its own key.
+    {
+        let mut cluster = cluster.lock().unwrap();
+        let cell = cluster.objects.get_mut(&cell_path).unwrap();
+        cell["spec"]["instanceKey"] = json!("wrong-key");
+        cell["metadata"]["labels"][proofstorm_kube::INSTANCE_LABEL] = json!("wrong-key");
+    }
     let invalid = viewer.system().await.unwrap();
     assert!(invalid.cells[0].error.is_some());
     assert!(invalid.totals.cpu_millicores.is_none());

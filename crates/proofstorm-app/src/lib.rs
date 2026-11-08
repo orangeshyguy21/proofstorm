@@ -29,6 +29,7 @@ pub mod platform;
 pub mod query;
 pub mod release;
 pub mod runtime;
+pub mod runtime_settings;
 pub mod self_update;
 pub mod telemetry;
 pub mod updates;

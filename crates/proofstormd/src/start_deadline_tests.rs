@@ -8,6 +8,8 @@ use proofstorm_kube::{
 };
 use std::sync::Mutex;
 
+const DEADLINE: i64 = 120;
+
 fn exec_action(accepted_at_unix: i64) -> ProofstormCellAction {
     let mut action = ProofstormCellAction::new(
         "op-stale",
@@ -53,21 +55,21 @@ fn forensics_action(accepted_at_unix: i64) -> ProofstormCellAction {
 }
 
 fn stale(action: fn(i64) -> ProofstormCellAction) -> ProofstormCellAction {
-    action(now_unix() - ACTION_START_DEADLINE_SECONDS - 1)
+    action(now_unix() - DEADLINE - 1)
 }
 
 #[test]
 fn only_never_started_one_off_actions_expire_before_starting() {
     let accepted = 1_000;
-    let deadline = accepted + ACTION_START_DEADLINE_SECONDS;
+    let deadline = accepted + DEADLINE;
     let exec = exec_action(accepted);
-    assert!(!start_deadline_passed(&exec, deadline));
-    assert!(start_deadline_passed(&exec, deadline + 1));
+    assert!(!start_deadline_passed(&exec, deadline, DEADLINE));
+    assert!(start_deadline_passed(&exec, deadline + 1, DEADLINE));
 
     // A queued action has a Pending status but no start.
     let mut pending = exec.clone();
     pending.status = Some(ProofstormCellActionStatus::default());
-    assert!(start_deadline_passed(&pending, deadline + 1));
+    assert!(start_deadline_passed(&pending, deadline + 1, DEADLINE));
 
     // Started work runs to its own deadline instead.
     let mut started = exec.clone();
@@ -76,7 +78,7 @@ fn only_never_started_one_off_actions_expire_before_starting() {
         started_at_unix: Some(accepted + 5),
         ..ProofstormCellActionStatus::default()
     });
-    assert!(!start_deadline_passed(&started, deadline + 3600));
+    assert!(!start_deadline_passed(&started, deadline + 3600, DEADLINE));
 
     // An action created long after acceptance (an upload, or an idempotent retry
     // of an old request) gets its full window from creation.
@@ -85,10 +87,11 @@ fn only_never_started_one_off_actions_expire_before_starting() {
         Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
             k8s_openapi::jiff::Timestamp::from_second(deadline + 600).unwrap(),
         ));
-    assert!(!start_deadline_passed(&retried, deadline + 601));
+    assert!(!start_deadline_passed(&retried, deadline + 601, DEADLINE));
     assert!(start_deadline_passed(
         &retried,
-        deadline + 601 + ACTION_START_DEADLINE_SECONDS
+        deadline + 601 + DEADLINE,
+        DEADLINE
     ));
 
     // Network faults are replayed from the action list; they keep their lifecycle.
@@ -97,7 +100,11 @@ fn only_never_started_one_off_actions_expire_before_starting() {
         from_component: "a".into(),
         to_component: "b".into(),
     });
-    assert!(!start_deadline_passed(&partition, deadline + 3600));
+    assert!(!start_deadline_passed(
+        &partition,
+        deadline + 3600,
+        DEADLINE
+    ));
 }
 
 /// What the fake API server holds: the action as stored (with its own
@@ -184,12 +191,10 @@ fn server_holding(action: &ProofstormCellAction) -> Server {
 }
 
 fn context(client: kube::Client) -> Arc<Context> {
-    Arc::new(Context {
-        probes: probes::Manager::new(client.clone(), "fixture".into()).0,
-        client,
-        retries: Arc::default(),
-        native: Arc::default(),
-    })
+    Arc::new(Context::for_tests(
+        client.clone(),
+        probes::Manager::new(client, "fixture".into()).0,
+    ))
 }
 
 async fn reconcile(

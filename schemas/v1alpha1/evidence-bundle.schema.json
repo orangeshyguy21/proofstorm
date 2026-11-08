@@ -472,6 +472,66 @@
         "limits": {
           "$ref": "#/$defs/CellLimits",
           "default": {}
+        },
+        "resources": {
+          "additionalProperties": false,
+          "description": "`defaults` (same shape as a component's `resources`) and optional `quota` (`cpu`, `memory`, `pods`, `volumes` totals). Omit for no caps beyond defaults.",
+          "properties": {
+            "defaults": {
+              "additionalProperties": false,
+              "properties": {
+                "cpu": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "limit": {
+                      "type": "string"
+                    },
+                    "request": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "memory": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "limit": {
+                      "type": "string"
+                    },
+                    "request": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "object"
+            },
+            "quota": {
+              "additionalProperties": false,
+              "properties": {
+                "cpu": {
+                  "type": "string"
+                },
+                "memory": {
+                  "type": "string"
+                },
+                "pods": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "volumes": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
         }
       },
       "type": "object"
@@ -554,6 +614,40 @@
         },
         "kind": {
           "$ref": "#/$defs/ComponentKind"
+        },
+        "resources": {
+          "additionalProperties": false,
+          "description": "Main container `{cpu,memory}:{request,limit}`, e.g. `250m`, `2Gi`; limit `none` removes it. Unset values use the component's own defaults, then `policy.resources.defaults`.",
+          "properties": {
+            "cpu": {
+              "additionalProperties": false,
+              "properties": {
+                "limit": {
+                  "type": "string"
+                },
+                "request": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "memory": {
+              "additionalProperties": false,
+              "properties": {
+                "limit": {
+                  "type": "string"
+                },
+                "request": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "version": {
           "description": "Version of the service binary, image, or implementation.",

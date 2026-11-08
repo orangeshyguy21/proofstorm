@@ -1,10 +1,10 @@
 //! Durable supervisor handles. Reconciliation polls receipts; it never replays starts.
 use super::{
     ACTION_CANCEL_ANNOTATION, Action, ActionPhase, Api, AttachParams, COMPONENT_LABEL, CellAction,
-    Context, Duration, Error, INSTANCE_LABEL, ListParams, Pod, ProofstormCell,
-    ProofstormCellAction, ProofstormCellActionStatus, ResourceExt, compile_component_plans,
-    exec_exit_code, instance_namespace, now_unix, patch_action_failure, patch_action_status,
-    patch_invalid_action, read_bounded_output, status_object,
+    Context, Duration, Error, INSTANCE_LABEL, ListParams, Pod, ProofstormCellAction,
+    ProofstormCellActionStatus, ResourceExt, exec_exit_code, instance_namespace, now_unix,
+    patch_action_failure, patch_action_status, patch_invalid_action, read_bounded_output,
+    status_object,
 };
 use kube::api::{Patch, PatchParams};
 use proofstorm_core::native::{NativeCommand, cap_public_streams};
@@ -22,30 +22,33 @@ use tokio::sync::Semaphore;
 /// starts took every action-controller slot and starved status polls, cancels
 /// and all other actions (PS-44). Together the pools leave controller slots for
 /// everything else. A cancel of a running command bypasses both.
-pub(super) const NATIVE_POLL_CONCURRENCY: usize = 6;
-pub(super) const NATIVE_START_CONCURRENCY: usize = 4;
-/// Starts into one component at once. A component whose execs hang (frozen,
-/// overloaded) then holds at most this many start permits, and starts into
-/// every other component keep going.
-pub(super) const NATIVE_STARTS_PER_COMPONENT: usize = 2;
-const _: () = assert!(NATIVE_STARTS_PER_COMPONENT < NATIVE_START_CONCURRENCY);
-
-/// Shared limits on native exec work. Reconciles take permits without waiting:
-/// a reconcile that finds none requeues shortly instead of holding a slot.
+///
+/// Each component may hold only some of the start places, so a component whose
+/// execs hang (frozen, overloaded) leaves starts into every other component
+/// going. The sizes come from `runtime.toml`; `ControllerLimits::validate`
+/// keeps these rules.
 pub(super) struct Gate {
     polls: Semaphore,
     starts: Semaphore,
+    starts_per_component: usize,
     /// Starts in progress per `instance_key/component`.
     components: Mutex<HashMap<String, usize>>,
 }
 
-impl Default for Gate {
-    fn default() -> Self {
+impl Gate {
+    pub(super) fn new(limits: &proofstorm_core::ControllerLimits) -> Self {
         Self {
-            polls: Semaphore::new(NATIVE_POLL_CONCURRENCY),
-            starts: Semaphore::new(NATIVE_START_CONCURRENCY),
+            polls: Semaphore::new(usize::from(limits.native_polls)),
+            starts: Semaphore::new(usize::from(limits.native_starts)),
+            starts_per_component: usize::from(limits.native_starts_per_component),
             components: Mutex::default(),
         }
+    }
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self::new(&proofstorm_core::ControllerLimits::default())
     }
 }
 
@@ -54,7 +57,7 @@ impl Gate {
     fn start_component(&self, key: &str) -> Option<ComponentStart<'_>> {
         let mut active = self.components.lock().expect("native start gate lock");
         let count = active.entry(key.to_owned()).or_default();
-        if *count >= NATIVE_STARTS_PER_COMPONENT {
+        if *count >= self.starts_per_component {
             return None;
         }
         *count += 1;
@@ -103,14 +106,61 @@ fn poll_interval(elapsed_seconds: i64) -> Duration {
 /// Upload the runner into a fresh private directory under `base` and print the
 /// directory. An incomplete upload (the transport timed out mid-stream) or a
 /// hangup removes the directory instead of leaving a partial runner behind.
-fn install_script(base: &str, bytes: usize) -> String {
+///
+/// A complete upload also replaces this pod's cached runner (removing caches of
+/// other versions), so later starts copy it instead of uploading. Caching is
+/// skipped where no SHA-256 tool can check the cache before use.
+fn install_script(base: &str, bytes: usize, digest: &str) -> String {
     format!(
         "set -eu; umask 077; dir=$(mktemp -d {base}/proofstorm-exec.XXXXXXXX); \
          trap 'rm -rf -- \"$dir\"; exit 70' HUP PIPE TERM; \
          if cat > \"$dir/runner\" && size=$(wc -c < \"$dir/runner\") && [ \"$((size))\" -eq {bytes} ]; then \
-         chmod 700 \"$dir/runner\"; printf '%s' \"$dir\"; trap - HUP PIPE TERM; \
+         chmod 700 \"$dir/runner\"; \
+         if {CHECKSUM_TOOL} && cp \"$dir/runner\" {base}/.proofstorm-runner.$$ 2>/dev/null; then \
+         for old in {base}/proofstorm-runner-*; do [ \"$old\" = {base}/proofstorm-runner-{digest} ] || rm -f -- \"$old\"; done; \
+         mv -f {base}/.proofstorm-runner.$$ {base}/proofstorm-runner-{digest} 2>/dev/null || rm -f -- {base}/.proofstorm-runner.$$; fi; \
+         printf '%s' \"$dir\"; trap - HUP PIPE TERM; \
          else rm -rf -- \"$dir\"; exit 65; fi"
     )
+}
+
+/// True where the container can compute SHA-256.
+const CHECKSUM_TOOL: &str =
+    "{ command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; }";
+
+/// Exit code of [`cached_install_script`] when this pod has no usable cache.
+const NO_CACHED_RUNNER: i32 = 75;
+
+/// Start from this pod's cached runner instead of uploading it. Anything in the
+/// container can write the cache, so the private copy must match the digest
+/// before it is used; a mismatch deletes the cache. Exits
+/// [`NO_CACHED_RUNNER`] when the cache is absent, wrong or uncheckable.
+fn cached_install_script(base: &str, digest: &str) -> String {
+    format!(
+        "set -eu; umask 077; cache={base}/proofstorm-runner-{digest}; \
+         {CHECKSUM_TOOL} && [ -f \"$cache\" ] || exit {NO_CACHED_RUNNER}; \
+         sum() {{ sha256sum \"$1\" 2>/dev/null || shasum -a 256 \"$1\"; }}; \
+         dir=$(mktemp -d {base}/proofstorm-exec.XXXXXXXX); \
+         trap 'rm -rf -- \"$dir\"; exit 70' HUP PIPE TERM; \
+         if cp \"$cache\" \"$dir/runner\" && [ \"$(sum \"$dir/runner\" | cut -c1-64)\" = {digest} ]; then \
+         chmod 700 \"$dir/runner\"; printf '%s' \"$dir\"; trap - HUP PIPE TERM; exit 0; fi; \
+         rm -rf -- \"$dir\"; rm -f -- \"$cache\"; exit {NO_CACHED_RUNNER}"
+    )
+}
+
+/// The runner binary and its SHA-256, read once per controller process.
+fn runner() -> Result<&'static (Vec<u8>, String), Error> {
+    static RUNNER: std::sync::OnceLock<(Vec<u8>, String)> = std::sync::OnceLock::new();
+    if let Some(runner) = RUNNER.get() {
+        return Ok(runner);
+    }
+    let binary = std::fs::read(
+        std::env::var("PROOFSTORM_NATIVE_RUNNER")
+            .unwrap_or_else(|_| "/usr/local/lib/proofstorm-exec".into()),
+    )
+    .map_err(|_| Error::LiveExec("native supervisor binary unavailable".into()))?;
+    let digest = format!("{:x}", Sha256::digest(&binary));
+    Ok(RUNNER.get_or_init(|| (binary, digest)))
 }
 
 /// Best effort: remove an exec directory that holds no receipt anyone needs.
@@ -134,6 +184,20 @@ async fn remove_directory(pods: &Api<Pod>, reference: &NativeExecutionRef) {
     .await;
 }
 
+/// kube-client sends stdin in chunks no larger than this buffer, one WebSocket
+/// message each, and never more than 4 KiB at a time. Its default is 1 KiB:
+/// about 3,700 messages per runner upload. 4 KiB measured about twice as fast.
+const EXEC_STDIN_BUFFER_BYTES: usize = 4096;
+
+fn attach_params(container: &str, stdin: bool) -> AttachParams {
+    AttachParams::default()
+        .container(container.to_owned())
+        .stdin(stdin)
+        .stdout(true)
+        .stderr(true)
+        .max_stdin_buf_size(EXEC_STDIN_BUFFER_BYTES)
+}
+
 pub(super) async fn exec_bounded(
     pods: &Api<Pod>,
     pod: &str,
@@ -142,12 +206,23 @@ pub(super) async fn exec_bounded(
     input: Option<&[u8]>,
     maximum: usize,
 ) -> Result<Vec<u8>, Error> {
+    match exec_status(pods, pod, container, args, input, maximum).await? {
+        (0, out) => Ok(out),
+        _ => Err(Error::LiveExec("native supervisor transport failed".into())),
+    }
+}
+
+/// Run a helper and return its exit code with its bounded stdout.
+async fn exec_status(
+    pods: &Api<Pod>,
+    pod: &str,
+    container: &str,
+    args: Vec<String>,
+    input: Option<&[u8]>,
+    maximum: usize,
+) -> Result<(i32, Vec<u8>), Error> {
     let run = async {
-        let attach = AttachParams::default()
-            .container(container.to_owned())
-            .stdin(input.is_some())
-            .stdout(true)
-            .stderr(true);
+        let attach = attach_params(container, input.is_some());
         let mut process = pods.exec(pod, args, &attach).await?;
         let stdout = process
             .stdout()
@@ -194,10 +269,10 @@ pub(super) async fn exec_bounded(
             .join()
             .await
             .map_err(|_| Error::LiveExec("native transport interrupted".into()))?;
-        if exec_exit_code(status.as_ref()) != 0 || truncated {
+        if truncated {
             return Err(Error::LiveExec("native supervisor transport failed".into()));
         }
-        Ok(out)
+        Ok((exec_exit_code(status.as_ref()), out))
     };
     tokio::time::timeout(Duration::from_secs(20), run)
         .await
@@ -271,7 +346,7 @@ fn helper_args(reference: &NativeExecutionRef, mode: &str) -> Vec<String> {
 )]
 pub async fn reconcile(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &proofstorm_kube::LoadedCell,
     context: &Context,
 ) -> Result<Action, Error> {
     let CellAction::ComponentExecLive(request) = &action.spec.action else {
@@ -302,12 +377,7 @@ pub async fn reconcile(
     if let Err(message) = command.validate() {
         return patch_invalid_action(action, context, message).await;
     }
-    let plans = compile_component_plans(
-        &cell.spec.instance_key,
-        &cell.spec.revision_digest,
-        &cell.spec.cell,
-        &cell.spec.lock,
-    )?;
+    let plans = cell.plans()?;
     let Some(component) = plans
         .iter()
         .find(|plan| plan.component_id == request.component)
@@ -559,23 +629,39 @@ pub async fn reconcile(
     if let Err(message) = command.validate() {
         return patch_invalid_action(action, context, message).await;
     }
-    let binary = std::fs::read(
-        std::env::var("PROOFSTORM_NATIVE_RUNNER")
-            .unwrap_or_else(|_| "/usr/local/lib/proofstorm-exec".into()),
-    )
-    .map_err(|_| Error::LiveExec("native supervisor binary unavailable".into()))?;
-    let directory = exec(
+    let (binary, digest) = runner()?;
+    // Copy this pod's cached runner when it checks out; upload it otherwise.
+    let directory = match exec_status(
         &pods,
         &pod.name_any(),
         &container,
         vec![
             "/bin/sh".into(),
             "-c".into(),
-            install_script("/tmp", binary.len()),
+            cached_install_script("/tmp", digest),
         ],
-        Some(&binary),
+        None,
+        65536,
     )
-    .await?;
+    .await?
+    {
+        (0, directory) => directory,
+        (NO_CACHED_RUNNER, _) => {
+            exec(
+                &pods,
+                &pod.name_any(),
+                &container,
+                vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    install_script("/tmp", binary.len(), digest),
+                ],
+                Some(binary),
+            )
+            .await?
+        }
+        _ => return Err(Error::LiveExec("native supervisor transport failed".into())),
+    };
     let directory = String::from_utf8(directory)
         .map_err(|_| Error::LiveExec("invalid supervisor directory".into()))?;
     if !is_exec_directory(&directory) {
@@ -589,7 +675,7 @@ pub async fn reconcile(
             .ok_or(Error::ControllerInvariant("pod UID missing"))?,
         container,
         directory,
-        runner_digest: format!("sha256:{:x}", Sha256::digest(&binary)),
+        runner_digest: format!("sha256:{digest}"),
     };
     let version = action.resource_version().ok_or(Error::ControllerInvariant(
         "native start requires an observed resource version",
@@ -675,19 +761,28 @@ mod tests {
     use std::process::{Command, Stdio};
 
     #[test]
+    fn runner_uploads_use_the_largest_stdin_chunks_kube_sends() {
+        let attach = attach_params("component", true);
+        assert_eq!(attach.max_stdin_buf_size, Some(4096));
+        assert_eq!(attach.container.as_deref(), Some("component"));
+        assert!(attach.stdin && attach.stdout && attach.stderr && !attach.tty);
+        assert!(!attach_params("component", false).stdin);
+    }
+
+    #[test]
     fn polls_and_starts_cannot_starve_each_other_or_the_controller() {
-        // Both pools full still leaves controller slots for other actions.
-        assert!(
-            NATIVE_POLL_CONCURRENCY + NATIVE_START_CONCURRENCY
-                < usize::from(super::super::ACTION_CONTROLLER_CONCURRENCY)
+        let limits = proofstorm_core::ControllerLimits::default();
+        let (polls_cap, starts_cap) = (
+            usize::from(limits.native_polls),
+            usize::from(limits.native_starts),
         );
-        let gate = Gate::default();
-        let polls = (0..NATIVE_POLL_CONCURRENCY)
+        let gate = Gate::new(&limits);
+        let polls = (0..polls_cap)
             .map(|_| gate.polls.try_acquire().unwrap())
             .collect::<Vec<_>>();
         assert!(gate.polls.try_acquire().is_err());
         // A full poll pool doesn't block starts, and the reverse.
-        let starts = (0..NATIVE_START_CONCURRENCY)
+        let starts = (0..starts_cap)
             .map(|_| gate.starts.try_acquire().unwrap())
             .collect::<Vec<_>>();
         assert!(
@@ -695,14 +790,33 @@ mod tests {
             "a fifth concurrent start waits"
         );
         drop((polls, starts));
-        assert_eq!(gate.polls.available_permits(), NATIVE_POLL_CONCURRENCY);
-        assert_eq!(gate.starts.available_permits(), NATIVE_START_CONCURRENCY);
+        assert_eq!(gate.polls.available_permits(), polls_cap);
+        assert_eq!(gate.starts.available_permits(), starts_cap);
+    }
+
+    #[test]
+    fn configured_limits_size_every_pool() {
+        let limits = proofstorm_core::ControllerLimits {
+            action_slots: 64,
+            native_starts: 24,
+            native_starts_per_component: 3,
+            native_polls: 24,
+            start_deadline_seconds: 300,
+        };
+        let gate = Gate::new(&limits);
+        assert_eq!(gate.starts.available_permits(), 24);
+        assert_eq!(gate.polls.available_permits(), 24);
+        let held = (0..3)
+            .map(|_| gate.start_component("i1/wallet").unwrap())
+            .collect::<Vec<_>>();
+        assert!(gate.start_component("i1/wallet").is_none());
+        drop(held);
     }
 
     #[test]
     fn a_hung_component_holds_only_its_own_start_places() {
         let gate = Gate::default();
-        let hung = (0..NATIVE_STARTS_PER_COMPONENT)
+        let hung = (0..gate.starts_per_component)
             .map(|_| gate.start_component("i1/chain").unwrap())
             .collect::<Vec<_>>();
         assert!(gate.start_component("i1/chain").is_none());
@@ -726,10 +840,36 @@ mod tests {
         assert_eq!(poll_interval(-30), Duration::from_secs(1));
     }
 
+    fn digest(runner: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(runner))
+    }
+
+    fn exec_dirs(base: &std::path::Path) -> usize {
+        std::fs::read_dir(base)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("proofstorm-exec.")
+            })
+            .count()
+    }
+
+    fn cached(base: &str, digest: &str) -> std::process::Output {
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg(cached_install_script(base, digest))
+            .output()
+            .unwrap()
+    }
+
     fn install(base: &str, input: &[u8], expected_bytes: usize) -> std::process::Output {
         let mut child = Command::new("/bin/sh")
             .arg("-c")
-            .arg(install_script(base, expected_bytes))
+            .arg(install_script(base, expected_bytes, &digest(input)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -761,10 +901,63 @@ mod tests {
         let short = install(base_path, &runner[..5], runner.len());
         assert_eq!(short.status.code(), Some(65));
         assert!(short.stdout.is_empty());
+        assert_eq!(exec_dirs(&base), 0, "partial runner left behind");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_cached_runner_is_used_only_when_its_private_copy_matches_the_digest() {
+        let base =
+            std::env::temp_dir().join(format!("proofstorm-cache-test-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let base_path = base.to_str().unwrap();
+        let runner = b"#!/bin/sh\nexit 0\n";
+        let expected = digest(runner);
+        let cache = base.join(format!("proofstorm-runner-{expected}"));
+
+        // Nothing cached yet: the controller uploads instead.
         assert_eq!(
-            std::fs::read_dir(&base).unwrap().count(),
-            0,
-            "partial runner left behind"
+            cached(base_path, &expected).status.code(),
+            Some(NO_CACHED_RUNNER)
+        );
+        assert_eq!(exec_dirs(&base), 0);
+
+        // A complete upload caches the runner for this pod.
+        let uploaded = install(base_path, runner, runner.len());
+        assert!(uploaded.status.success(), "{uploaded:?}");
+        std::fs::remove_dir_all(String::from_utf8(uploaded.stdout).unwrap()).unwrap();
+        assert_eq!(std::fs::read(&cache).unwrap(), runner);
+
+        // A later start copies it without an upload.
+        let hit = cached(base_path, &expected);
+        assert!(hit.status.success(), "{hit:?}");
+        let directory = String::from_utf8(hit.stdout).unwrap();
+        assert!(is_exec_directory(&directory.replace(base_path, "/tmp")));
+        assert_eq!(
+            std::fs::read(format!("{directory}/runner")).unwrap(),
+            runner
+        );
+        std::fs::remove_dir_all(&directory).unwrap();
+
+        // Something in the container replaced the cache: refuse it and remove it.
+        std::fs::write(&cache, b"#!/bin/sh\nexit 7\n").unwrap();
+        assert_eq!(
+            cached(base_path, &expected).status.code(),
+            Some(NO_CACHED_RUNNER)
+        );
+        assert!(!cache.exists());
+        assert_eq!(exec_dirs(&base), 0);
+
+        // A new runner version's upload removes the old version's cache.
+        std::fs::write(&cache, runner).unwrap();
+        let newer = b"#!/bin/sh\nexit 0 # v2\n";
+        let upgraded = install(base_path, newer, newer.len());
+        assert!(upgraded.status.success(), "{upgraded:?}");
+        std::fs::remove_dir_all(String::from_utf8(upgraded.stdout).unwrap()).unwrap();
+        assert!(!cache.exists());
+        assert_eq!(
+            std::fs::read(base.join(format!("proofstorm-runner-{}", digest(newer)))).unwrap(),
+            newer
         );
         std::fs::remove_dir_all(&base).unwrap();
     }

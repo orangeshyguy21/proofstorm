@@ -58,6 +58,20 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum ConfigCommand {
+    /// Set settings, for example controller.cpu.limit=none.
+    Set {
+        #[arg(required = true, value_name = "KEY=VALUE")]
+        pairs: Vec<String>,
+    },
+    /// Return settings to their defaults.
+    Unset {
+        #[arg(required = true, value_name = "KEY")]
+        keys: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum Command {
     /// Update this installation from the official release feed.
     #[command(
@@ -77,6 +91,14 @@ enum Command {
     Start(RuntimeLifecycleArgs),
     /// Diagnose installation and runtime problems.
     Doctor,
+    /// Show or change runtime settings; `setup` applies them.
+    #[command(
+        long_about = "Show or change this installation's runtime settings in runtime.toml: the controller's CPU and memory, how much work it runs at once, and how long an action may wait to start. Run setup afterwards to apply them."
+    )]
+    Config {
+        #[command(subcommand)]
+        command: Option<ConfigCommand>,
+    },
     /// Open or manage the GUI.
     Gui(GuiArgs),
     /// Configure and launch coding agents.
@@ -489,6 +511,11 @@ impl Command {
                 yes,
             },
             Self::Doctor => Action::Doctor {},
+            Self::Config { command } => match command {
+                None => Action::ConfigShow,
+                Some(ConfigCommand::Set { pairs }) => Action::ConfigSet { pairs },
+                Some(ConfigCommand::Unset { keys }) => Action::ConfigUnset { keys },
+            },
             Self::Gui(GuiArgs {
                 command,
                 project,

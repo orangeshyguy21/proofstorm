@@ -21,10 +21,13 @@ struct Resources {
     volumes: BTreeMap<String, Value>,
 }
 
-fn container_names(installation: &Installation) -> Vec<String> {
-    ["server-0", "agent-0", "serverlb", "registry", "tools"]
-        .map(|suffix| format!("{}-{suffix}", installation.context()))
-        .to_vec()
+fn container_names(installation: &Installation) -> Result<Vec<String>> {
+    let mut names = super::cluster::nodes(installation)?;
+    names.extend(
+        ["serverlb", "registry", "tools"]
+            .map(|suffix| format!("{}-{suffix}", installation.context())),
+    );
+    Ok(names)
 }
 
 fn lines(output: &str) -> Vec<&str> {
@@ -61,7 +64,7 @@ fn snapshot(
     };
     let mut containers = BTreeMap::new();
     let mut volumes = BTreeMap::new();
-    for name in container_names(installation) {
+    for name in container_names(installation)? {
         if !lines(&all_names).contains(&name.as_str()) {
             continue;
         }
@@ -151,11 +154,9 @@ fn read_receipt(installation: &Installation) -> Result<Resources> {
         receipt.format_version == 1 && receipt.installation_id == installation.id,
         "runtime resource receipt belongs to another installation"
     );
+    let names = container_names(installation)?;
     ensure!(
-        receipt
-            .containers
-            .keys()
-            .all(|name| container_names(installation).contains(name)),
+        receipt.containers.keys().all(|name| names.contains(name)),
         "unexpected container in runtime receipt"
     );
     Ok(receipt)

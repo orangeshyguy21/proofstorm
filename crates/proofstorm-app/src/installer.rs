@@ -27,6 +27,7 @@ const REQUIRED: &[&str] = &[
     "chart/crds/proofstorm.dev_proofstormcells.yaml",
     "chart/crds/proofstorm.dev_proofstormcellactions.yaml",
     "chart/crds/proofstorm.dev_proofstormcandidatebuilds.yaml",
+    "chart/crds/proofstorm.dev_proofstormcomponents.yaml",
 ];
 
 #[derive(Deserialize)]

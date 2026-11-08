@@ -65,6 +65,13 @@ pub fn validate_cell(cell: &CellSpec) -> ValidationReport {
         );
     }
     validate_limits(cell, &mut issues);
+    let component_resources = cell
+        .components
+        .iter()
+        .enumerate()
+        .map(|(index, component)| (index, component.resources.as_ref()))
+        .collect::<Vec<_>>();
+    crate::resources::validate(&cell.policy.resources, &component_resources, &mut issues);
 
     let ids = validate_components(cell, &mut issues);
     let kinds = cell
@@ -579,6 +586,7 @@ mod tests {
             name: "cdk-lightning-cell".into(),
             components: vec![
                 ComponentSpec {
+                    resources: None,
                     id: "chain".into(),
                     kind: ComponentKind::Bitcoin,
                     implementation: "bitcoin-core".into(),
@@ -588,6 +596,7 @@ mod tests {
                     config: BTreeMap::new(),
                 },
                 ComponentSpec {
+                    resources: None,
                     id: "mint-lnd".into(),
                     kind: ComponentKind::Lightning,
                     implementation: "lnd".into(),
@@ -597,6 +606,7 @@ mod tests {
                     config: BTreeMap::new(),
                 },
                 ComponentSpec {
+                    resources: None,
                     id: "target".into(),
                     kind: ComponentKind::Mint,
                     implementation: "cdk".into(),
@@ -768,6 +778,7 @@ mod tests {
         let mut cell = valid_cell();
         cell.components.extend([
             ComponentSpec {
+                resources: None,
                 id: "identity-db".into(),
                 kind: ComponentKind::Database,
                 implementation: "postgresql".into(),
@@ -777,6 +788,7 @@ mod tests {
                 config: BTreeMap::new(),
             },
             ComponentSpec {
+                resources: None,
                 id: "identity".into(),
                 kind: ComponentKind::IdentityProvider,
                 implementation: "keycloak".into(),

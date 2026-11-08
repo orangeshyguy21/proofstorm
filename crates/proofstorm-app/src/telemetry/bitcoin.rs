@@ -1,7 +1,7 @@
 //! Map live getpeerinfo addresses only to current same-cell Bitcoin workloads.
 use k8s_openapi::api::core::v1::Pod;
 use kube::ResourceExt;
-use proofstorm_kube::{COMPONENT_LABEL, ProofstormCell, ROLLOUT_DIGEST_ANNOTATION};
+use proofstorm_kube::{COMPONENT_LABEL, ROLLOUT_DIGEST_ANNOTATION};
 use proofstorm_view::BitcoinObservation;
 use serde_json::Value;
 use std::{
@@ -10,7 +10,7 @@ use std::{
 };
 
 pub(super) fn project(
-    cell: &ProofstormCell,
+    revision: &proofstorm_kube::CellRevision,
     inventory: &[Pod],
     response: &Value,
 ) -> Option<BitcoinObservation> {
@@ -22,13 +22,12 @@ pub(super) fn project(
         let Some(id) = pod.labels().get(COMPONENT_LABEL) else {
             continue;
         };
-        if !cell
-            .spec
+        if !revision
             .cell
             .components
             .iter()
             .any(|c| &c.id == id && c.implementation == "bitcoin-core")
-            || !cell.spec.lock.entries.iter().any(|e| {
+            || !revision.lock.entries.iter().any(|e| {
                 &e.component_id == id
                     && pod.annotations().get(ROLLOUT_DIGEST_ANNOTATION) == Some(&e.rollout_digest)
             })

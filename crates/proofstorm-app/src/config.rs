@@ -116,6 +116,7 @@ impl Environment {
         }
         let config = self.kubernetes_config().await?;
         Ok(crate::Runtime {
+            revisions: std::sync::Arc::default(),
             client: kube::Client::try_from(config)?,
             control_namespace: self.namespace.clone(),
             cluster_source: self.context.clone(),

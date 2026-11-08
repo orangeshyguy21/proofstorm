@@ -27,11 +27,21 @@ fn stopped(context: &GateContext) -> Result<()> {
     let receipt: Value = serde_json::from_slice(&fs::read(
         context.installation.home.join("runtime-resources.json"),
     )?)?;
-    for id in receipt["containers"]
+    let containers = receipt["containers"]
         .as_object()
-        .context("container receipt missing")?
-        .values()
+        .context("container receipt missing")?;
+    // Every node must be recorded, or stop and start would skip it.
+    let agents = context.installation.cluster_agents()?;
+    for node in
+        std::iter::once("server-0".to_owned()).chain((0..agents).map(|i| format!("agent-{i}")))
     {
+        let name = format!("{}-{node}", context.installation.context());
+        ensure!(
+            containers.contains_key(&name),
+            "runtime receipt misses node {name}"
+        );
+    }
+    for id in containers.values() {
         let mut command = Command::new("docker");
         command.args([
             "inspect",

@@ -58,6 +58,13 @@ pub enum Action {
         yes: bool,
     },
     Doctor {},
+    ConfigShow,
+    ConfigSet {
+        pairs: Vec<String>,
+    },
+    ConfigUnset {
+        keys: Vec<String>,
+    },
     InstallBundle {
         expected_current: Option<String>,
         bundle: PathBuf,

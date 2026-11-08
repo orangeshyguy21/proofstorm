@@ -57,7 +57,7 @@ pub(super) fn is_controlled_start(action: &ProofstormCellAction) -> bool {
 
 pub(super) fn controlled_start(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &proofstorm_kube::LoadedCell,
 ) -> Option<TaskStart> {
     let start = requested_start(action)?;
     let CellAction::ComponentExecLive(request) = &action.spec.action else {
@@ -65,7 +65,7 @@ pub(super) fn controlled_start(
     };
     if !same_instance(action, cell)
         || !cell
-            .spec
+            .revision
             .cell
             .components
             .iter()
@@ -74,7 +74,7 @@ pub(super) fn controlled_start(
             .control
             .as_ref()?
             .targets()
-            .any(|id| !cell.spec.cell.components.iter().any(|c| c.id == id))
+            .any(|id| !cell.revision.cell.components.iter().any(|c| c.id == id))
     {
         return None;
     }
@@ -324,7 +324,7 @@ fn child_matches(
 /// Check again at the point of execution; a queued command cannot outlive its task grant.
 pub(super) async fn admit_child(
     child: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &proofstorm_kube::LoadedCell,
     context: &Context,
 ) -> Result<bool, Error> {
     let namespace = child

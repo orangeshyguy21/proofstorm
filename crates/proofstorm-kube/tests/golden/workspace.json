@@ -194,20 +194,6 @@
               }
             },
             "spec": {
-              "affinity": {
-                "podAffinity": {
-                  "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                      "labelSelector": {
-                        "matchLabels": {
-                          "proofstorm.dev/instance": "i-golden-b2"
-                        }
-                      },
-                      "topologyKey": "kubernetes.io/hostname"
-                    }
-                  ]
-                }
-              },
               "automountServiceAccountToken": false,
               "containers": [
                 {
@@ -247,7 +233,6 @@
                   },
                   "resources": {
                     "limits": {
-                      "cpu": "2",
                       "memory": "1Gi"
                     },
                     "requests": {
@@ -290,7 +275,6 @@
                   "name": "proofstorm-workspace",
                   "resources": {
                     "limits": {
-                      "cpu": "200m",
                       "memory": "128Mi"
                     },
                     "requests": {

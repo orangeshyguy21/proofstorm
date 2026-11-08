@@ -45,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         store.update_candidate_build("catalog-preview", &candidate)?;
     }
     let runtime = Runtime {
+        revisions: std::sync::Arc::default(),
         client: kube::Client::new(
             tower::service_fn(|_: http::Request<kube::client::Body>| async {
                 Ok::<_, std::io::Error>(http::Response::new(kube::client::Body::from(

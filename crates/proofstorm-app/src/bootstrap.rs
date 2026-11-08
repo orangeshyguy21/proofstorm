@@ -485,13 +485,18 @@ pub fn prefetch_cell_images(
 }
 
 /// Only explicit, authorized cell mutations call this. Reads never start downloads.
+/// How long preparing an edit's images waits for another installation operation.
+const IMAGE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub(crate) async fn prepare_images(
     installation: Installation,
     lock: proofstorm_core::ResolvedLock,
 ) -> Result<()> {
     let selected = selected_images(&installation, &lock)?;
     tokio::task::spawn_blocking(move || {
-        let _guard = Installation::lock(&installation.home)?;
+        // Another agent's image mirror or a prefetch often holds the lock
+        // briefly; an accepted edit waits for it rather than stalling.
+        let _guard = Installation::lock_within(&installation.home, IMAGE_LOCK_WAIT)?;
         ensure!(
             Installation::load(&installation.home)? == installation,
             "installation identity changed"
@@ -638,7 +643,7 @@ fn mirror_with_progress(
                 "mirror changed the catalog digest"
             );
         }
-        for node in cluster::nodes(installation) {
+        for node in cluster::nodes(installation)? {
             cluster::owned(installation)?;
             registry.image_preparation(
                 &installation.home,
@@ -696,8 +701,12 @@ fn deploy(
     let image = controller["image"].as_str().context("controller image")?;
     let (repository, digest) = image.split_once('@').context("controller digest")?;
     let expected = format!("{repository}@{digest}");
+    // The user's runtime settings; a change re-runs Helm and restarts the controller once.
+    let settings = crate::runtime_settings::load(&installation.home)?;
+    let settings_args = crate::runtime_settings::helm_args(&settings);
     let inputs = json!({"installation_id":installation.id, "image":expected,
-        "chart_sha256":crate::artifacts::tree_sha256(&bundle.join("chart"))?});
+        "chart_sha256":crate::artifacts::tree_sha256(&bundle.join("chart"))?,
+        "settings":settings_args});
     let receipt = installation.home.join("deployment-inputs.json");
     let same_inputs = std::fs::symlink_metadata(&receipt).is_ok_and(|meta| meta.is_file())
         && std::fs::read(&receipt)
@@ -711,35 +720,35 @@ fn deploy(
         return Ok(());
     }
     progress("Waiting for controller to become ready");
-    process::run(
+    let chart = bundle.join("chart");
+    let kubeconfig = installation.kubeconfig();
+    let context = installation.context();
+    let repository = format!("image.repository={repository}");
+    let digest = format!("image.digest={digest}");
+    let mut args = vec![
+        "upgrade",
+        "--install",
+        "proofstorm",
+        chart.to_str().context("chart path")?,
+        "--kubeconfig",
+        kubeconfig.to_str().context("kubeconfig path")?,
+        "--kube-context",
+        &context,
+        "--namespace",
+        "proofstorm-system",
+        "--create-namespace",
+        "--skip-crds",
+        "--set-string",
+        &repository,
+        "--set-string",
+        &digest,
+    ];
+    args.extend(settings_args.iter().map(String::as_str));
+    args.extend(["--wait", "--timeout", "120s", "--rollback-on-failure"]);
+    process::controller_deploy(
         &installation.home,
         &tool(&installation.home, "helm")?,
-        &[
-            "upgrade",
-            "--install",
-            "proofstorm",
-            bundle.join("chart").to_str().context("chart path")?,
-            "--kubeconfig",
-            installation
-                .kubeconfig()
-                .to_str()
-                .context("kubeconfig path")?,
-            "--kube-context",
-            &installation.context(),
-            "--namespace",
-            "proofstorm-system",
-            "--create-namespace",
-            "--skip-crds",
-            "--set-string",
-            &format!("image.repository={repository}"),
-            "--set-string",
-            &format!("image.digest={digest}"),
-            "--wait",
-            "--timeout",
-            "120s",
-            "--rollback-on-failure",
-        ],
-        150,
+        &args,
     )?;
     ensure!(!expected.is_empty(), "missing deployment image");
     healthy(installation, controller)?;
@@ -754,7 +763,7 @@ fn validate_existing_specs<T: serde::de::DeserializeOwned>(resources: &Value) ->
     {
         serde_json::from_value::<T>(resource["spec"].clone()).with_context(|| {
             format!(
-                "existing runtime resource {} is incompatible; close its cell with the currently installed version before upgrading; no automatic migration or deletion",
+                "existing runtime resource {} is from an earlier release and can't be migrated, so setup changed nothing. Run storm setup --recreate to replace the runtime, which deletes all cells",
                 resource["metadata"]["name"]
             )
         })?;

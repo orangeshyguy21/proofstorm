@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 fn component(id: &str) -> ComponentSpec {
     ComponentSpec {
+        resources: None,
         id: id.into(),
         kind: ComponentKind::Bitcoin,
         implementation: "bitcoin-core".into(),

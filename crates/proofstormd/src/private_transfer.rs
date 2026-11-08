@@ -61,7 +61,7 @@ fn vault(cell: &ProofstormCell) -> Result<Vault, Error> {
 async fn live_cell(
     action: &ProofstormCellAction,
     context: &Context,
-) -> Result<ProofstormCell, Error> {
+) -> Result<proofstorm_kube::LoadedCell, Error> {
     let cells = Api::<ProofstormCell>::namespaced(
         context.client.clone(),
         &action.namespace().ok_or_else(failure)?,
@@ -74,7 +74,7 @@ async fn live_cell(
     {
         return Err(failure());
     }
-    Ok(cell)
+    Ok(context.revisions.loaded(&context.client, cell).await?)
 }
 fn recipient_access(cell: &ProofstormCell, id: &str) -> Result<PrivateAccessGrant, Error> {
     let grants: std::collections::BTreeMap<String, PrivateAccessGrant> = serde_json::from_str(
@@ -148,12 +148,12 @@ fn recipient_grant(access: &PrivateAccessGrant, cell: &ProofstormCell, wallet: &
 
 fn grant(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &proofstorm_kube::LoadedCell,
     wallet: &str,
 ) -> Result<Grant, Error> {
     if action.spec.capability != Capability::ComponentExecLive
         || !cell
-            .spec
+            .revision
             .cell
             .components
             .iter()
@@ -248,7 +248,7 @@ async fn metadata(action: &ProofstormCellAction, context: &Context) -> Result<Tr
         )?;
         let maximum = request.maximum_bytes.ok_or_else(failure)?;
         if cell
-            .spec
+            .revision
             .cell
             .components
             .iter()
@@ -367,6 +367,7 @@ pub async fn complete(
     {
         return Err(failure());
     }
+    let cell = context.revisions.loaded(&context.client, cell).await?;
     let mut vault = vault(&cell)?;
     let native: NativeReceipt = serde_json::from_value(receipt.clone()).map_err(|_| failure())?;
     let id = binding.reference();
@@ -442,12 +443,11 @@ mod tests {
     use proofstorm_kube::{
         PrivateTransferAction, ProofstormCellActionSpec, ProofstormCellSpec, TransferMethod,
     };
-    fn fixture() -> (ProofstormCell, ProofstormCellAction) {
-        let cell=ProofstormCell::new("cell",ProofstormCellSpec {
+    fn fixture() -> (proofstorm_kube::LoadedCell, ProofstormCellAction) {
+        let cell=proofstorm_kube::LoadedCell::from_spec(ProofstormCell::new("cell",ProofstormCellSpec {
             workspace_id:"workspace".into(),instance_id:"instance".into(),instance_key:"instance-key".into(),revision_digest:"revision".into(),
-            lock:proofstorm_core::ResolvedLock {api_version:"proofstorm/v1alpha1".into(),digest:"lock".into(),entries:vec![]},
-            cell:serde_json::from_value(serde_json::json!({"api_version":"proofstorm/v1alpha1","name":"cell","components":[{"id":"wallet","kind":"wallet","implementation":"cocod-wallet","config_version":"test","control":"cell","config":{}}],"links":[]})).unwrap(),
-        });
+
+        }), serde_json::from_value(serde_json::json!({"api_version":"proofstorm/v1alpha1","name":"cell","components":[{"id":"wallet","kind":"wallet","implementation":"cocod-wallet","config_version":"test","control":"cell","config":{}}],"links":[]})).unwrap(), proofstorm_core::ResolvedLock {api_version:"proofstorm/v1alpha1".into(),digest:"lock".into(),entries:vec![]});
         let action = ProofstormCellAction::new(
             "action",
             ProofstormCellActionSpec {

@@ -285,3 +285,14 @@ fn file_read_pages_preserve_utf8_across_boundaries() {
         text
     );
 }
+
+#[test]
+fn install_runs_again_over_its_own_read_only_copy() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("workspace");
+    install(&path).unwrap();
+    // A pod restarted in place runs its init container again over the same volume.
+    install(&path).unwrap();
+    let mode = fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o555);
+}

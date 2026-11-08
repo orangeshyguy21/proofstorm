@@ -199,12 +199,33 @@ fn names_include_auxiliary_resources_without_default_cluster() {
         api_port: 1234,
         registry_port: 1235,
     };
-    assert_eq!(container_names(&installation).len(), 5);
+    let names = container_names(&installation).unwrap();
+    assert_eq!(names.len(), 5);
     assert!(
-        container_names(&installation)
+        names
             .iter()
             .all(|name| name.starts_with("k3d-proofstorm-aaaaaaaa-"))
     );
+}
+
+#[test]
+fn every_agent_the_cluster_was_created_with_is_a_runtime_container() {
+    let home = tempfile::tempdir().unwrap();
+    let installation = Installation {
+        format_version: 2,
+        id: "a".repeat(32),
+        home: home.path().to_owned(),
+        api_port: 1234,
+        registry_port: 1235,
+    };
+    // The saved k3d configuration wins over a later runtime.toml.
+    fs::write(installation.cluster_config_path(), r#"{"agents":3}"#).unwrap();
+    fs::write(home.path().join("runtime.toml"), "[cluster]\nagents = 1\n").unwrap();
+    let names = container_names(&installation).unwrap();
+    for agent in ["agent-0", "agent-1", "agent-2"] {
+        assert!(names.contains(&format!("{}-{agent}", installation.context())));
+    }
+    assert_eq!(names.len(), 7);
 }
 
 #[test]

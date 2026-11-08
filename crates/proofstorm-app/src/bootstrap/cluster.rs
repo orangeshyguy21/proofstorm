@@ -8,20 +8,27 @@ use std::{
     net::{Ipv4Addr, TcpListener},
 };
 
-pub(super) fn nodes(installation: &Installation) -> Vec<String> {
-    vec![
-        format!("{}-server-0", installation.context()),
-        format!("{}-agent-0", installation.context()),
-    ]
+/// The cluster's node containers: the server, then every agent.
+pub(super) fn nodes(installation: &Installation) -> Result<Vec<String>> {
+    Ok(node_names(
+        &installation.context(),
+        installation.cluster_agents()?,
+    ))
 }
 
-fn names(installation: &Installation) -> Vec<String> {
-    let mut names = nodes(installation);
+pub(super) fn node_names(context: &str, agents: u16) -> Vec<String> {
+    std::iter::once(format!("{context}-server-0"))
+        .chain((0..agents).map(|index| format!("{context}-agent-{index}")))
+        .collect()
+}
+
+fn names(installation: &Installation) -> Result<Vec<String>> {
+    let mut names = nodes(installation)?;
     names.extend([
         format!("{}-serverlb", installation.context()),
         installation.registry_name(),
     ]);
-    names
+    Ok(names)
 }
 
 fn ensure_names_available(
@@ -32,7 +39,7 @@ fn ensure_names_available(
 ) -> Result<()> {
     // Include k3d's auxiliary resources: it can reuse an existing tools node
     // or image volume. A short-name collision must never imply ownership.
-    let mut containers_needed = names(installation);
+    let mut containers_needed = names(installation)?;
     containers_needed.push(format!("{}-tools", installation.context()));
     let network = installation.network_name();
     let volume = format!("{}-images", installation.context());
@@ -53,7 +60,7 @@ fn ensure_names_available(
 
 fn inventory(installation: &Installation) -> Result<BTreeMap<String, String>> {
     let mut result = BTreeMap::new();
-    for name in names(installation) {
+    for name in names(installation)? {
         // Select only the ownership label, never dump k3d's credential-bearing labels.
         let output = docker(
             &installation.home,
@@ -220,7 +227,7 @@ mod tests {
         };
         assert_ne!(first.id, second.id);
         assert_eq!(first.cluster_name(), second.cluster_name());
-        let mut containers = names(&first);
+        let mut containers = names(&first).unwrap();
         containers.push(format!("{}-tools", first.context()));
         for container in containers {
             let error =

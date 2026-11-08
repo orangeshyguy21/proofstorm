@@ -7,10 +7,12 @@ use std::{
 };
 
 struct Cluster {
-    cell: ProofstormCell,
+    cell: proofstorm_kube::LoadedCell,
     actions: BTreeMap<String, ProofstormCellAction>,
     policies: BTreeMap<String, Value>,
     fail_policy_once: bool,
+    /// Policy writes in order, as `METHOD name`.
+    writes: Vec<String>,
 }
 
 fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
@@ -25,7 +27,7 @@ fn client(cluster: Arc<Mutex<Cluster>>) -> kube::Client {
                 let name = route.split('/').next_back().unwrap();
                 let mut code = 200;
                 let body = if route.ends_with("/proofstormcells/cell") {
-                    json!(cluster.cell)
+                    json!(cluster.cell.resource)
                 } else if route.ends_with("/proofstormcellactions") {
                     json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormCellActionList","metadata":{},"items":cluster.actions.values().collect::<Vec<_>>()})
                 } else if route.contains("/networkpolicies") {
@@ -71,18 +73,38 @@ fn policy_request(
     name: &str,
     bytes: &[u8],
 ) -> (u16, Value) {
-    if *method == http::Method::GET {
-        return cluster.policies.get(name).map_or_else(|| (404,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","message":"missing policy","code":404})), |policy| (200,policy.clone()));
-    }
-    let mut policy: Value = serde_json::from_slice(bytes).unwrap();
-    let name = policy["metadata"]["name"].as_str().unwrap().to_owned();
-    if cluster.fail_policy_once && name == "scripts" {
+    // The policy step fails partway: the next policy request, read or write.
+    if cluster.fail_policy_once {
         cluster.fail_policy_once = false;
         return (
             503,
             json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Unavailable","message":"fixture partial policy write","code":503}),
         );
     }
+    if *method == http::Method::GET && name == "networkpolicies" {
+        let items = cluster.policies.values().cloned().collect::<Vec<_>>();
+        return (
+            200,
+            json!({"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicyList","metadata":{},"items":items}),
+        );
+    }
+    if *method == http::Method::DELETE {
+        let request: Value = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(
+            request["preconditions"]["resourceVersion"],
+            cluster.policies[name]["metadata"]["resourceVersion"],
+            "every policy delete must fence its earlier read"
+        );
+        cluster.writes.push(format!("DELETE {name}"));
+        let removed = cluster.policies.remove(name).unwrap();
+        return (200, removed);
+    }
+    if *method == http::Method::GET {
+        return cluster.policies.get(name).map_or_else(|| (404,json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","message":"missing policy","code":404})), |policy| (200,policy.clone()));
+    }
+    let mut policy: Value = serde_json::from_slice(bytes).unwrap();
+    let name = policy["metadata"]["name"].as_str().unwrap().to_owned();
+    cluster.writes.push(format!("{method} {name}"));
     if *method == http::Method::PATCH {
         assert_eq!(
             policy["metadata"]["resourceVersion"],
@@ -104,28 +126,33 @@ fn policy_request(
 
 fn context(cluster: &Arc<Mutex<Cluster>>) -> Context {
     let client = client(cluster.clone());
-    Context {
-        probes: crate::probes::Manager::new(client.clone(), "fixture".into()).0,
-        client,
-        retries: std::sync::Arc::default(),
-        native: std::sync::Arc::default(),
-    }
+    let context = Context::for_tests(
+        client.clone(),
+        crate::probes::Manager::new(client, "fixture".into()).0,
+    );
+    // This fake API serves no revision objects; the controller has read this one.
+    context
+        .revisions
+        .insert((*cluster.lock().unwrap().cell.revision).clone());
+    context
 }
 
 fn fixture() -> (Arc<Mutex<Cluster>>, Context) {
     let spec: proofstorm_core::CellSpec =
         serde_json::from_str(include_str!("../../../examples/workspace/cell.json")).unwrap();
     let lock = proofstorm_core::resolve_lock(&spec, proofstorm_core::default_catalog()).unwrap();
-    let mut cell = ProofstormCell::new(
-        "cell",
-        ProofstormCellSpec {
-            workspace_id: "local".into(),
-            instance_id: "instance".into(),
-            instance_key: "i0123456789012345678".into(),
-            revision_digest: "revision".into(),
-            lock,
-            cell: spec,
-        },
+    let mut cell = proofstorm_kube::LoadedCell::from_spec(
+        ProofstormCell::new(
+            "cell",
+            ProofstormCellSpec {
+                workspace_id: "local".into(),
+                instance_id: "instance".into(),
+                instance_key: "i0123456789012345678".into(),
+                revision_digest: "revision".into(),
+            },
+        ),
+        spec,
+        lock,
     );
     cell.metadata.namespace = Some("system".into());
     let mut actions = BTreeMap::new();
@@ -178,6 +205,7 @@ fn fixture() -> (Arc<Mutex<Cluster>>, Context) {
         actions,
         policies: BTreeMap::new(),
         fail_policy_once: false,
+        writes: Vec::new(),
     }));
     let context = context(&cluster);
     (cluster, context)
@@ -215,6 +243,12 @@ async fn partial_cleanup_recovers_without_replaying_or_removing_another_tasks_pa
         cluster.policies["chain"]["spec"]["egress"][0]["to"][0]["podSelector"]["matchExpressions"]
             [0]["values"],
         json!(["scripts"])
+    );
+    // The shared policy stops selecting both partitioned components.
+    assert_eq!(
+        cluster.policies[proofstorm_kube::CELL_NETWORK_POLICY]["spec"]["podSelector"]["matchExpressions"]
+            [2],
+        json!({"key": "proofstorm.dev/network-identity", "operator": "NotIn", "values": ["chain", "scripts"]})
     );
 }
 
@@ -262,10 +296,16 @@ async fn expiry_and_missing_owner_heal_without_workspace_access_and_stale_snapsh
     for name in ["one", "two"] {
         assert!(!needs_cleanup(&cluster.actions[name]));
     }
-    assert!(
-        cluster.policies["chain"]["spec"]["egress"][0]["to"][0]["podSelector"]
-            .get("matchExpressions")
-            .is_none()
+    // Healed: no component keeps a policy of its own, and the shared one
+    // selects every component again.
+    assert!(!cluster.policies.contains_key("chain"));
+    assert!(!cluster.policies.contains_key("scripts"));
+    assert_eq!(
+        cluster.policies[proofstorm_kube::CELL_NETWORK_POLICY]["spec"]["podSelector"]["matchExpressions"],
+        json!([
+            {"key": "proofstorm.dev/network-identity", "operator": "Exists"},
+            {"key": "proofstorm.dev/operation", "operator": "DoesNotExist"}
+        ])
     );
     assert_eq!(
         cluster.actions["one"].annotations()[RELEASED_ANNOTATION],
@@ -308,4 +348,34 @@ async fn cancelling_before_activation_does_not_partition_and_cleanup_preserves_o
     );
     assert_eq!(active.len(), 1);
     assert!(active.contains_key("ordinary"));
+}
+
+#[tokio::test]
+async fn partitioned_components_are_never_left_without_an_allow_policy() {
+    let (cluster, ctx) = fixture();
+    let cell = cluster.lock().unwrap().cell.clone();
+    let shared = proofstorm_kube::CELL_NETWORK_POLICY;
+    super::super::apply_network_fault_policies(&cell, None, &ctx)
+        .await
+        .unwrap();
+    // Partitioning: each component's own policy exists before the shared one
+    // stops selecting it.
+    assert_eq!(
+        std::mem::take(&mut cluster.lock().unwrap().writes),
+        ["POST chain", "POST scripts", &format!("POST {shared}")]
+    );
+    // Nothing changed: nothing is written.
+    super::super::apply_network_fault_policies(&cell, None, &ctx)
+        .await
+        .unwrap();
+    assert!(cluster.lock().unwrap().writes.is_empty());
+    // Healing: the shared policy selects them again before their own go away.
+    cluster.lock().unwrap().actions.clear();
+    super::super::apply_network_fault_policies(&cell, None, &ctx)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::mem::take(&mut cluster.lock().unwrap().writes),
+        [&format!("PATCH {shared}"), "DELETE chain", "DELETE scripts"]
+    );
 }

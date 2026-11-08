@@ -65,7 +65,7 @@ fn actions(
 /// May be retried after any partial policy write. Does not depend on a live workspace.
 async fn release(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &proofstorm_kube::LoadedCell,
     context: &Context,
     reason: &str,
 ) -> Result<(), Error> {
@@ -163,6 +163,7 @@ pub(super) async fn reconcile(
         )
         .await;
     }
+    let cell = context.revisions.loaded(&context.client, cell).await?;
     match &action.spec.action {
         CellAction::NetworkPartition(_) => partition(&action, &cell, context).await,
         CellAction::NetworkHeal(_) => heal(&action, &cell, context).await,
@@ -172,7 +173,7 @@ pub(super) async fn reconcile(
 
 async fn partition(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &proofstorm_kube::LoadedCell,
     context: &Context,
 ) -> Result<Action, Error> {
     if !needs_cleanup(action) {
@@ -226,7 +227,7 @@ async fn partition(
 
 async fn heal(
     action: &ProofstormCellAction,
-    cell: &ProofstormCell,
+    cell: &proofstorm_kube::LoadedCell,
     context: &Context,
 ) -> Result<Action, Error> {
     if action

@@ -359,7 +359,7 @@ pub struct CellFile {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum CellInput {
-    Inline(AuthoredCellSpec),
+    Inline(Box<AuthoredCellSpec>),
     File(CellFile),
     Json(String),
 }
@@ -376,14 +376,14 @@ impl<'de> Deserialize<'de> for CellInput {
                 .map_err(serde::de::Error::custom);
         }
         deserialize_authored_cell(value)
-            .map(Self::Inline)
+            .map(|cell| Self::Inline(Box::new(cell)))
             .map_err(serde::de::Error::custom)
     }
 }
 
 impl From<AuthoredCellSpec> for CellInput {
     fn from(cell: AuthoredCellSpec) -> Self {
-        Self::Inline(cell)
+        Self::Inline(Box::new(cell))
     }
 }
 
@@ -392,7 +392,7 @@ impl TryFrom<CellInput> for CellSpec {
 
     fn try_from(input: CellInput) -> Result<Self, Self::Error> {
         let authored = match input {
-            CellInput::Inline(cell) => cell,
+            CellInput::Inline(cell) => *cell,
             CellInput::Json(encoded) => {
                 deserialize_authored_cell(serde_json::Value::String(encoded))
                     .map_err(|error| error.to_string())?

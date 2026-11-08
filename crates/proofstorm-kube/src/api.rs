@@ -1,9 +1,7 @@
 use std::collections::BTreeMap;
 
 use kube::CustomResource;
-use proofstorm_core::{
-    CandidateBuildPhase, Capability, CellSpec, ComponentStatus, InventoryEntry, ResolvedLock,
-};
+use proofstorm_core::{CandidateBuildPhase, Capability, ComponentStatus, InventoryEntry};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,10 +22,35 @@ pub struct ProofstormCellSpec {
     pub instance_id: String,
     /// Stable opaque identity used to derive the instance namespace.
     pub instance_key: String,
-    /// Digest of the immutable resolved cell revision.
+    /// Digest of the immutable resolved cell revision. Its spec and lock are
+    /// stored in the revision object, not here; see [`crate::LoadedCell`].
     pub revision_digest: String,
-    pub lock: ResolvedLock,
-    pub cell: CellSpec,
+}
+
+/// One component's observed state, owned by its cell. Written by the controller
+/// only when the component's state changes.
+#[derive(CustomResource, Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[kube(
+    group = "proofstorm.dev",
+    version = "v1alpha1",
+    kind = "ProofstormComponent",
+    plural = "proofstormcomponents",
+    shortname = "pscomp",
+    namespaced,
+    status = "ComponentStatus"
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofstormComponentSpec {
+    pub instance_key: String,
+    pub component_id: String,
+}
+
+/// The window in which every probed component of a cell was last confirmed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProtocolFreshness {
+    pub observed_at_unix: i64,
+    pub expires_at_unix: i64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -69,8 +92,15 @@ pub struct ProofstormCellStatus {
     pub observed_revision_digest: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_protocol_probe_lease: Option<String>,
-    #[serde(default)]
+    /// Assembled in memory from the cell's `ProofstormComponent` objects; never
+    /// stored on the cell (see `assemble_component_statuses`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<ComponentStatus>,
+    /// The oldest protocol observation across the cell's components. Component
+    /// objects are written only when their state changes; this heartbeat keeps
+    /// their protocol evidence fresh while the prober keeps confirming it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_freshness: Option<ProtocolFreshness>,
     #[serde(default)]
     pub inventory: Vec<InventoryEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

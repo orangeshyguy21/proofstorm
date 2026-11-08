@@ -91,10 +91,14 @@ pub async fn reconcile_name(
         ));
     }
     let api = Api::<ProofstormCell>::namespaced(runtime.client.clone(), &runtime.control_namespace);
-    if let Some(cell) = api.get_opt(&instance.resource_name).await? {
-        if cell.spec.instance_key != instance.instance_key
-            || cell.spec.instance_id != instance.id
-            || cell.spec.workspace_id != workspace
+    // Identity and uid are all the sweep needs: never fetch the cell's status.
+    if let Some(cell) = api.get_metadata_opt(&instance.resource_name).await? {
+        if proofstorm_kube::cell_identity(&cell.metadata)
+            != Some(proofstorm_kube::CellIdentity {
+                workspace_id: workspace.to_owned(),
+                instance_id: instance.id.clone(),
+                instance_key: instance.instance_key.clone(),
+            })
         {
             return Err(mismatch());
         }
@@ -225,25 +229,35 @@ async fn remove_receipts(
     let api = Api::<ConfigMap>::namespaced(runtime.client.clone(), &runtime.control_namespace);
     // Namespace deletion collects cell workloads. Snapshots normally disappear via owner GC;
     // remove only exact recorded owners, plus the controller's verified teardown receipt.
-    let removable = |map: &ConfigMap| {
-        let owned = map.owner_references().iter().any(|owner| {
+    let receipt_name = format!("proofstorm-teardown-{}", instance.instance_key);
+    let owned = |metadata: &kube::api::ObjectMeta| {
+        metadata.owner_references.iter().flatten().any(|owner| {
             owner.kind == "ProofstormCell"
                 && owner.name == instance.resource_name
                 && binding.and_then(|b| b.resource_uid.as_deref()) == Some(owner.uid.as_str())
-        });
-        let receipt = map.name_any() == format!("proofstorm-teardown-{}", instance.instance_key)
+        })
+    };
+    let removable = |map: &ConfigMap| {
+        let receipt = map.name_any() == receipt_name
             && map.data.as_ref().is_some_and(|d| {
                 d.get("instanceNamespace")
                     == Some(&proofstorm_kube::instance_namespace(&instance.instance_key))
                     && d.get("verifiedAbsent").is_some_and(|v| v == "true")
             });
-        owned || receipt
+        owned(&map.metadata) || receipt
     };
-    let maps = api.list(&ListParams::default()).await?;
-    for mut map in maps {
-        if !removable(&map) {
-            continue;
+    // Metadata picks the candidates, so revision payloads are never listed;
+    // only the candidates are read in full.
+    let mut maps = Vec::new();
+    for candidate in api.list_metadata(&ListParams::default()).await? {
+        if (owned(&candidate.metadata) || candidate.name_any() == receipt_name)
+            && let Some(map) = api.get_opt(&candidate.name_any()).await?
+            && removable(&map)
+        {
+            maps.push(map);
         }
+    }
+    for mut map in maps {
         let mut attempts = 0;
         loop {
             let uid = map.uid().ok_or_else(mismatch)?;

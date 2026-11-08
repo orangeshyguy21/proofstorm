@@ -154,6 +154,7 @@ pub(super) async fn delegated_fixture() -> (
         .unwrap()
         .clone();
     spec.components.push(ComponentSpec {
+        resources: None,
         id: "wallet".into(),
         kind: ComponentKind::Wallet,
         implementation: entry.id,

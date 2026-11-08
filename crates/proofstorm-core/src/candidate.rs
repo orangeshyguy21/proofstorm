@@ -1048,6 +1048,7 @@ mod tests {
         let catalog = effective_catalog(default_catalog(), &[succeeded_candidate()])
             .expect("merge candidate catalog");
         let mint = |version: &str| crate::ComponentSpec {
+            resources: None,
             id: "mint".into(),
             kind: crate::ComponentKind::Mint,
             implementation: "nutshell".into(),

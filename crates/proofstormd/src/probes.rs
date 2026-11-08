@@ -35,6 +35,11 @@ use tokio::{
 
 type Namespaced<K> = BTreeMap<String, BTreeMap<String, K>>;
 
+/// A cell whose spec and annotations haven't changed is re-applied this often,
+/// only to repair drift. Changes apply at once, and then only the documents
+/// that changed are sent, so this pass is the only one that scales with size.
+const RESYNC_SECONDS: u64 = 600;
+
 #[derive(Clone)]
 pub(super) struct Applied {
     pub signature: String,
@@ -43,6 +48,11 @@ pub(super) struct Applied {
     pub inventory: Vec<InventoryEntry>,
     pub retained_storage: BTreeMap<String, String>,
     pub pruned: bool,
+    /// Digest of each document this pass sent, keyed by `Kind/name`.
+    pub documents: Arc<BTreeMap<String, String>>,
+    /// Components whose workload change was held back: their volumes are on
+    /// different nodes.
+    pub held: Arc<BTreeSet<String>>,
 }
 
 #[derive(Default, Clone)]
@@ -76,10 +86,17 @@ struct Cell {
     revision: String,
     plans: Arc<Vec<ComponentPlanContract>>,
     worker: Option<(Identity, String)>,
+    /// When the probe targets were last recomputed from the resource caches.
+    targeted_at: u64,
     applied: Option<Applied>,
     last_notify: u64,
     outcomes: BTreeMap<String, Outcome>,
 }
+
+/// A cell's probe targets follow its resource changes at most this often.
+/// Recomputing them copies every resource in the namespace, about 40 ms at
+/// 2,000 components. A changed worker still applies at once.
+const RETARGET_MILLIS: u64 = 1_000;
 
 #[derive(Default)]
 struct State {
@@ -92,6 +109,8 @@ struct State {
     endpoints: Namespaced<EndpointSlice>,
     ready: BTreeSet<&'static str>,
     dirty: BTreeSet<String>,
+    /// Cells whose probe targets wait for their next recompute.
+    retarget: BTreeSet<String>,
     notify: BTreeSet<String>,
     force_notify: BTreeSet<String>,
     scheduler: Scheduler,
@@ -216,7 +235,7 @@ impl State {
     }
 
     fn resources(&self, key: &str) -> Resources {
-        if self.ready.len() != 6 {
+        if !self.caches_ready() {
             return Resources::default();
         }
         let namespace = proofstorm_kube::instance_namespace(key);
@@ -231,65 +250,98 @@ impl State {
         }
     }
 
-    fn refresh(&mut self, image: &str, now: u64) {
-        for key in std::mem::take(&mut self.dirty) {
-            let resources = self.resources(&key);
-            let Some(cell) = self.cells.get_mut(&key) else {
-                continue;
-            };
-            cell.worker = resources
-                .pods
-                .iter()
-                .find(|pod| {
-                    pod.labels()
-                        .get(PROTOCOL_PROBER_LABEL)
-                        .is_some_and(|label| label == "true")
-                        && pod.labels().get(INSTANCE_LABEL) == Some(&key)
-                        && pod.metadata.deletion_timestamp.is_none()
-                        && pod
-                            .status
-                            .as_ref()
-                            .and_then(|status| status.phase.as_deref())
-                            == Some("Running")
-                        && pod
-                            .status
-                            .as_ref()
-                            .and_then(|status| status.conditions.as_ref())
-                            .is_some_and(|conditions| {
-                                conditions.iter().any(|condition| {
-                                    condition.type_ == "Ready" && condition.status == "True"
-                                })
-                            })
-                        && pod.spec.as_ref().is_some_and(|spec| {
-                            spec.containers.iter().any(|container| {
-                                container.name == "worker"
-                                    && container.image.as_deref() == Some(image)
+    /// Whether all six resource watches have listed.
+    fn caches_ready(&self) -> bool {
+        self.ready.len() == 6
+    }
+
+    /// The cell's ready worker of this image, found without copying the cache.
+    fn worker(&self, key: &str, cell: &Cell, image: &str) -> Option<(Identity, String)> {
+        if !self.caches_ready() {
+            return None;
+        }
+        let pod = self
+            .pods
+            .get(&proofstorm_kube::instance_namespace(key))?
+            .values()
+            .find(|pod| {
+                pod.labels()
+                    .get(PROTOCOL_PROBER_LABEL)
+                    .is_some_and(|label| label == "true")
+                    && pod.labels().get(INSTANCE_LABEL).map(String::as_str) == Some(key)
+                    && pod.metadata.deletion_timestamp.is_none()
+                    && pod
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.phase.as_deref())
+                        == Some("Running")
+                    && pod
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.conditions.as_ref())
+                        .is_some_and(|conditions| {
+                            conditions.iter().any(|condition| {
+                                condition.type_ == "Ready" && condition.status == "True"
                             })
                         })
-                })
-                .and_then(|pod| {
-                    Some((
-                        Identity {
-                            instance_key: key.clone(),
-                            incarnation: format!("{}:{}", cell.uid, container_incarnation(pod)),
-                            revision_digest: cell.revision.clone(),
-                            worker_uid: pod.uid()?,
-                        },
-                        pod.name_any(),
-                    ))
-                });
-            if let Some((identity, _)) = &cell.worker {
-                let targets = eligible_targets(&cell.plans, &resources.observed());
-                if let Err(code) = self.scheduler.register(identity.clone(), targets, now) {
-                    eprintln!("protocol target registration failed: {code}");
-                    self.scheduler.remove(&key);
-                }
-            } else {
-                self.scheduler.remove(&key);
-            }
+                    && pod.spec.as_ref().is_some_and(|spec| {
+                        spec.containers.iter().any(|container| {
+                            container.name == "worker" && container.image.as_deref() == Some(image)
+                        })
+                    })
+            })?;
+        Some((
+            Identity {
+                instance_key: key.to_owned(),
+                incarnation: format!("{}:{}", cell.uid, container_incarnation(pod)),
+                revision_digest: cell.revision.clone(),
+                worker_uid: pod.uid()?,
+            },
+            pod.name_any(),
+        ))
+    }
+
+    /// Apply resource changes. A changed or lost worker is applied at once, so
+    /// its old work is never accepted; target changes wait for [`RETARGET_MILLIS`].
+    fn refresh(&mut self, image: &str, now: u64) {
+        for key in std::mem::take(&mut self.dirty) {
+            self.retarget.insert(key.clone());
             self.force_notify.insert(key.clone());
             self.notify.insert(key);
         }
+        let mut deferred = BTreeSet::new();
+        for key in std::mem::take(&mut self.retarget) {
+            let Some(cell) = self.cells.get(&key) else {
+                continue;
+            };
+            let worker = self.worker(&key, cell, image);
+            let same_worker = cell.worker.as_ref().map(|(identity, _)| identity)
+                == worker.as_ref().map(|(identity, _)| identity);
+            if same_worker
+                && worker.is_some()
+                && now.saturating_sub(cell.targeted_at) < RETARGET_MILLIS
+            {
+                deferred.insert(key);
+                continue;
+            }
+            // Only a cell with a worker has targets worth the copy.
+            let targets = worker
+                .as_ref()
+                .map(|_| eligible_targets(&cell.plans, &self.resources(&key).observed()));
+            let cell = self.cells.get_mut(&key).expect("cell found above");
+            cell.worker = worker;
+            cell.targeted_at = now;
+            match (&cell.worker, targets) {
+                (Some((identity, _)), Some(targets)) => {
+                    if let Err(code) = self.scheduler.register(identity.clone(), targets, now) {
+                        eprintln!("protocol target registration failed: {code}");
+                        self.scheduler.remove(&key);
+                    }
+                }
+                _ => self.scheduler.remove(&key),
+            }
+        }
+        self.retarget = deferred;
     }
 }
 
@@ -360,6 +412,7 @@ impl Manager {
                 revision: cell.spec.revision_digest.clone(),
                 plans,
                 worker: None,
+                targeted_at: 0,
                 applied: None,
                 last_notify: 0,
                 outcomes: BTreeMap::new(),
@@ -375,6 +428,7 @@ impl Manager {
         state.cells.remove(key);
         state.scheduler.remove(key);
         state.dirty.remove(key);
+        state.retarget.remove(key);
         state.notify.remove(key);
         state.force_notify.remove(key);
         self.wake.notify_one();
@@ -392,21 +446,33 @@ impl Manager {
         }
     }
 
+    /// The last apply of this cell's current signature, while it is recent
+    /// enough to skip applying again.
     pub fn applied(&self, cell: &ProofstormCell) -> Option<Applied> {
-        self.state
-            .lock()
-            .expect("prober state lock")
+        self.read_applied(cell, |applied| {
+            (applied.signature == signature(cell)
+                && applied.at.elapsed()
+                    < Duration::from_secs(if applied.pruned { RESYNC_SECONDS } else { 3 }))
+            .then(|| applied.clone())
+        })
+    }
+
+    /// The last completed apply of this exact cell, however old.
+    pub fn last_applied(&self, cell: &ProofstormCell) -> Option<Applied> {
+        self.read_applied(cell, |applied| Some(applied.clone()))
+    }
+
+    fn read_applied<R>(
+        &self,
+        cell: &ProofstormCell,
+        read: impl FnOnce(&Applied) -> Option<R>,
+    ) -> Option<R> {
+        let state = self.state.lock().expect("prober state lock");
+        let binding = state
             .cells
             .get(&cell.spec.instance_key)
-            .filter(|binding| Some(&binding.uid) == cell.metadata.uid.as_ref())?
-            .applied
-            .as_ref()
-            .filter(|applied| {
-                applied.signature == signature(cell)
-                    && applied.at.elapsed()
-                        < Duration::from_secs(if applied.pruned { 30 } else { 3 })
-            })
-            .cloned()
+            .filter(|binding| Some(&binding.uid) == cell.metadata.uid.as_ref())?;
+        read(binding.applied.as_ref()?)
     }
 
     pub fn snapshot(&self, key: &str) -> Resources {

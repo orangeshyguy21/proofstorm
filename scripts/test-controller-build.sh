@@ -77,7 +77,7 @@ case "$1" in
     if [[ " $* " == *' --entrypoint /usr/local/lib/proofstorm-prober '* ]]; then
       [[ " $* " == *' --self-check '* ]] || exit 97
       if [[ ${CONTROLLER_TEST_FAIL:-none} == prober ]]; then echo 'loader failure' >&2; exit 127; fi
-      printf '{"protocol_version":2}\n'; exit 0
+      printf '{"protocol_version":3}\n'; exit 0
     fi
     if [[ " $* " == *' --entrypoint /usr/local/lib/proofstorm-driver '* ]]; then
       [[ " $* " == *' --self-check '* ]] || exit 97

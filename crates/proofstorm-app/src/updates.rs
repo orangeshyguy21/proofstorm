@@ -1,8 +1,7 @@
 //! Resume accepted cell edits without allowing an older request to overwrite newer desired state.
 use crate::{Error, Runtime};
-use k8s_openapi::api::core::v1::ConfigMap;
 use kube::{
-    Api, Resource, ResourceExt,
+    Api, ResourceExt,
     api::{Patch, PatchParams, PostParams},
 };
 use proofstorm_core::{CellInstanceStatus, InstancePhase};
@@ -12,31 +11,6 @@ use proofstorm_store::Store;
 pub const GENERATION: &str = "proofstorm.dev/desired-generation";
 pub const DELETE_DATA: &str = "proofstorm.dev/delete-component-data";
 
-pub async fn snapshot(runtime: &Runtime, cell: &ProofstormCell) -> Result<(), Error> {
-    let name = proofstorm_core::digest_json(&(&cell.spec.instance_key, &cell.spec.revision_digest));
-    let maps = Api::<ConfigMap>::namespaced(runtime.client.clone(), &runtime.control_namespace);
-    let name = format!("revision-{}", &name[7..39]);
-    let value = serde_json::json!({"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":name,"ownerReferences":cell.controller_owner_ref(&()).into_iter().collect::<Vec<_>>()},"immutable":true,"data":{"spec.json":serde_json::to_string(&cell.spec).map_err(|e|Error::problem("serialization_failed",e.to_string()))?}});
-    if let Some(existing) = maps.get_opt(&name).await.map_err(runtime_error)? {
-        let expected = serde_json::to_string(&cell.spec)
-            .map_err(|e| Error::problem("serialization_failed", e.to_string()))?;
-        if existing.data.as_ref().and_then(|d| d.get("spec.json")) != Some(&expected) {
-            return Err(Error::problem(
-                "cell_revision_conflict",
-                "Immutable revision snapshot differs from the expected cell configuration",
-            ));
-        }
-    } else {
-        maps.patch(
-            &name,
-            &PatchParams::apply("proofstorm-mcp"),
-            &Patch::Apply(value),
-        )
-        .await
-        .map_err(runtime_error)?;
-    }
-    Ok(())
-}
 #[allow(
     clippy::needless_pass_by_value,
     reason = "map_err consumes the runtime error"
@@ -120,7 +94,21 @@ async fn reconcile_once(
         ));
     }
     if cell.spec.revision_digest != revision.digest || observed_desired != state.generation {
-        snapshot(runtime, &cell).await?;
+        // The new revision is stored, owned by this cell, before the cell switches
+        // to it. The old one stays for actions submitted against it.
+        let digest = revision.digest.clone();
+        runtime
+            .store_revision(
+                &cell,
+                proofstorm_kube::CellRevision {
+                    workspace_id: workspace.into(),
+                    instance_key: instance.instance_key.clone(),
+                    revision_digest: digest.clone(),
+                    cell: revision.cell,
+                    lock: revision.lock,
+                },
+            )
+            .await?;
         let actions = Api::<proofstorm_kube::ProofstormCellAction>::namespaced(
             runtime.client.clone(),
             &runtime.control_namespace,
@@ -145,9 +133,7 @@ async fn reconcile_once(
             workspace_id: workspace.into(),
             instance_id: id.into(),
             instance_key: instance.instance_key.clone(),
-            revision_digest: revision.digest,
-            lock: revision.lock,
-            cell: revision.cell,
+            revision_digest: digest,
         };
         cell.annotations_mut()
             .insert(GENERATION.into(), state.generation.to_string());
@@ -162,9 +148,8 @@ async fn reconcile_once(
             .replace(&instance.resource_name, &PostParams::default(), &cell)
             .await
             .map_err(runtime_error)?;
-        snapshot(runtime, &cell).await?;
     }
-    let status = crate::runtime::status_from_resource(instance, &cell);
+    let status = crate::runtime::status_from_resource(instance, &runtime.observed(cell).await?);
     if status.phase == InstancePhase::Ready {
         store.mark_update_applied(
             workspace,

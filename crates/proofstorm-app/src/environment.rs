@@ -241,7 +241,7 @@ impl Cells {
             self.runtime.client.clone(),
             &self.runtime.control_namespace,
         );
-        let resource = match tokio::time::timeout(
+        let mut resource = match tokio::time::timeout(
             Duration::from_secs(3),
             cells.get_opt(&instance.resource_name),
         )
@@ -264,13 +264,47 @@ impl Cells {
                 );
             }
         };
-        observe_resource(instance, resource)
+        // After the cell, as assembly requires. The list grows with the
+        // cell's components, so it gets the longer bound.
+        let objects = match tokio::time::timeout(
+            crate::runtime::GROWING_LIST_TIMEOUT,
+            self.runtime.component_objects(&instance.instance_key),
+        )
+        .await
+        {
+            Ok(Ok(objects)) => objects,
+            Ok(Err(_)) => {
+                return (
+                    empty_runtime(ObservationState::Unavailable, Some("runtime_read_failed")),
+                    None,
+                );
+            }
+            Err(_) => {
+                return (
+                    empty_runtime(ObservationState::Unavailable, Some("runtime_read_timeout")),
+                    None,
+                );
+            }
+        };
+        let revision = self
+            .store
+            .revision(&self.workspace, &self.principal, &instance.revision_digest)
+            .ok();
+        proofstorm_kube::assemble_component_statuses(
+            &mut resource,
+            revision.as_ref().map(|revision| &revision.cell),
+            &objects,
+        );
+        observe_resource(instance, resource, revision.as_ref())
     }
 }
 
+/// `revision` is the cell's published revision from the store, used to expire
+/// stale protocol results; without it they are shown as recorded.
 fn observe_resource(
     instance: &proofstorm_core::CellInstance,
     mut resource: ProofstormCell,
+    revision: Option<&proofstorm_core::PublishedRevision>,
 ) -> (RuntimeObservation, Option<ProofstormCell>) {
     if resource.spec.workspace_id != instance.workspace_id
         || resource.spec.instance_id != instance.id
@@ -284,7 +318,14 @@ fn observe_resource(
             None,
         );
     }
-    proofstorm_kube::probes::expire_cell_status(&mut resource, now());
+    if let Some(revision) = revision {
+        proofstorm_kube::probes::expire_cell_status(
+            &mut resource,
+            &revision.cell,
+            &revision.lock,
+            now(),
+        );
+    }
     let status = resource.status.as_ref();
     let current = status.is_some_and(|s| {
         s.observed_desired_generation == instance.generation

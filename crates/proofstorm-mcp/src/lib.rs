@@ -3945,27 +3945,36 @@ mod tests {
                 .unwrap()
                 .contains(&Capability::ExperimentCreate)
         );
-        let resource = proofstorm_kube::ProofstormCell::new(
-            &instance.resource_name,
-            proofstorm_kube::ProofstormCellSpec {
-                workspace_id: "alpha".into(),
-                instance_id: instance.id,
-                instance_key: instance.instance_key,
-                revision_digest: revision.digest,
-                lock: revision.lock,
-                cell: revision.cell,
-            },
+        let resource = proofstorm_kube::LoadedCell::from_spec(
+            proofstorm_kube::ProofstormCell::new(
+                &instance.resource_name,
+                proofstorm_kube::ProofstormCellSpec {
+                    workspace_id: "alpha".into(),
+                    instance_id: instance.id,
+                    instance_key: instance.instance_key,
+                    revision_digest: revision.digest,
+                },
+            ),
+            revision.cell,
+            revision.lock,
         ); // No Ready status: diagnosis must still work.
-        let cell_json = serde_json::to_vec(&resource).unwrap();
+        let cell_json = serde_json::to_vec(&resource.resource).unwrap();
+        let revision_json = serde_json::to_vec(
+            &proofstorm_kube::revision_config_map(&resource.revision, "system", None).unwrap(),
+        )
+        .unwrap();
         let submissions = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = submissions.clone();
         let client = kube::Client::new(
             tower::service_fn(move |request: http::Request<kube::client::Body>| {
                 let cell_json = cell_json.clone();
+                let revision_json = revision_json.clone();
                 let count = count.clone();
                 async move {
                     let response = if request.uri().path().contains("/proofstormcells/") {
                         http::Response::new(kube::client::Body::from(cell_json))
+                    } else if request.uri().path().contains("/configmaps/revision-") {
+                        http::Response::new(kube::client::Body::from(revision_json))
                     } else if request.method() == http::Method::GET {
                         http::Response::builder().status(404).body(kube::client::Body::from(r#"{"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","message":"missing","code":404}"#.as_bytes().to_vec())).unwrap()
                     } else {
@@ -4880,8 +4889,12 @@ mod tests {
             ComponentConditionType,
         };
         let store = seeded_store();
+        // A component the cell has: the controller writes status objects only for those.
+        let mut blocked_cell: CellSpec =
+            serde_json::from_str(include_str!("../../../examples/developer-cell.json")).unwrap();
+        blocked_cell.name = "blocked".into();
         store
-            .create_draft("alpha", "designer", "blocked", &cell("blocked"), "create")
+            .create_draft("alpha", "designer", "blocked", &blocked_cell, "create")
             .unwrap();
         let revision = store
             .publish("alpha", "designer", "blocked", 1, "publish")
@@ -4897,7 +4910,7 @@ mod tests {
             .unwrap();
         let component = ComponentStatus {
             protocol_observation: None,
-            id: "wallet-cdk".into(), kind: proofstorm_core::ComponentKind::Wallet,
+            id: "chain".into(), kind: proofstorm_core::ComponentKind::Bitcoin,
             observed_revision_digest: revision.digest.clone(), observed_rollout_digest: "rollout".into(),
             ready: false, service: String::new(), ports: BTreeMap::new(),
             conditions: vec![ComponentCondition {
@@ -4907,27 +4920,44 @@ mod tests {
                 last_transition_unix: 1,
             }],
         };
-        let mut resource = proofstorm_kube::ProofstormCell::new(
-            &instance.resource_name,
-            proofstorm_kube::ProofstormCellSpec {
-                workspace_id: "alpha".into(),
-                instance_id: instance.id.clone(),
-                instance_key: instance.instance_key,
-                revision_digest: revision.digest.clone(),
-                lock: revision.lock,
-                cell: revision.cell,
-            },
+        let mut resource = proofstorm_kube::LoadedCell::from_spec(
+            proofstorm_kube::ProofstormCell::new(
+                &instance.resource_name,
+                proofstorm_kube::ProofstormCellSpec {
+                    workspace_id: "alpha".into(),
+                    instance_id: instance.id.clone(),
+                    instance_key: instance.instance_key,
+                    revision_digest: revision.digest.clone(),
+                },
+            ),
+            revision.cell,
+            revision.lock,
         );
+        resource.metadata.namespace = Some("system".into());
         resource.status = Some(proofstorm_kube::ProofstormCellStatus {
-            components: vec![component],
             observed_revision_digest: revision.digest,
             ..Default::default()
         });
-        let body = serde_json::to_string(&resource).unwrap();
+        let body = serde_json::to_string(&resource.resource).unwrap();
+        let revision_body = serde_json::to_string(
+            &proofstorm_kube::revision_config_map(&resource.revision, "system", None).unwrap(),
+        )
+        .unwrap();
+        // The controller stores the component's status in its own object.
+        let components_body = serde_json::json!({"apiVersion":"proofstorm.dev/v1alpha1","kind":"ProofstormComponentList","metadata":{},
+            "items":[proofstorm_kube::component_object(&resource.spec.instance_key, "system", &component, None)]}).to_string();
         let client = kube::Client::new(
-            tower::service_fn(move |_: http::Request<kube::client::Body>| {
+            tower::service_fn(move |request: http::Request<kube::client::Body>| {
+                let path = request.uri().path();
+                let body = if path.contains("/configmaps/revision-") {
+                    revision_body.clone()
+                } else if path.ends_with("/proofstormcomponents") {
+                    components_body.clone()
+                } else {
+                    body.clone()
+                };
                 std::future::ready(Ok::<_, std::io::Error>(http::Response::new(
-                    kube::client::Body::from(body.clone().into_bytes()),
+                    kube::client::Body::from(body.into_bytes()),
                 )))
             }),
             "system",
@@ -4954,7 +4984,7 @@ mod tests {
         assert_eq!(result.requested_timeout_seconds, 120);
         assert_eq!(result.effective_timeout_seconds, 120);
         assert_eq!(result.next_tool.as_deref(), Some("cell_inspect"));
-        assert_eq!(result.blockers[0].component_id, "wallet-cdk");
+        assert_eq!(result.blockers[0].component_id, "chain");
         assert_eq!(result.blockers[0].reason, Reason::ImagePullBackoff);
         assert!(result.blockers[0].message.contains("storm doctor"));
         let message = result.message.as_deref().unwrap();

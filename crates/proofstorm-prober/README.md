@@ -27,19 +27,42 @@ Sources accessed September 12, 2026. The choices below are our application of th
 
 ## Candidate architecture
 
-One persistent, restricted worker per cell accepts small batches from a fair controller scheduler. Batches limit concurrent work, not the number of targets a cell can contain. The worker accepts batches of up to 32 targets and permits four concurrent batches (128 checks) across six transport connections. The pure scheduler permits eight batches globally (256 requested checks); the controller now uses this scheduler. These defaults must be assessed against measured latency, CPU, memory and freshness under failure.
+One persistent, restricted worker per cell accepts small batches from a fair controller scheduler. Batches limit concurrent work, not the number of targets a cell can contain. Protocol v3 (ULTRASTORM) sets these limits: batches of up to 64 targets, eight concurrent batches per worker (512 checks) across ten transport connections, and 32 batches globally. The measurements behind them are in [Capacity for large cells](#capacity-for-large-cells-protocol-v3); the earlier limits (32 targets, four batches per worker, eight globally) are the ones measured in the sections below.
 
 The worker has no Kubernetes token, custody storage, shell commands or user-supplied credentials. It accepts component names rather than arbitrary target URLs, constructs their Service DNS names inside its own namespace, and rejects an entire invalid batch before network work. It does not use environment HTTP proxies or follow redirects to other hosts. TCP establishes a connection; HTTP requires a 2xx status. These are reachability checks, not proof that an authenticated RPC or transaction will succeed.
 
 The prototype transport is bounded, length-prefixed JSON on loopback, reached through Kubernetes authenticated port-forward. This preserves the existing authorization boundary and works for a host-run development controller. It is **not yet a validated fleet-scale transport choice**: measure connection establishment and API-server load, compare connection reuse, and replace it with authenticated direct in-cluster transport if the control plane becomes the bottleneck. Probe requests carry no target response bodies.
 
-Protocol v2 makes connection lifetime explicit. Ordinary scheduler requests set `keep_alive: false`; the worker closes its socket immediately after writing the reply. A measurement client can explicitly request reuse. The six-connection limit and four-batch limit remain unchanged. The version change prevents an older worker from silently retaining connections under the new controller's assumption.
+Protocol v2 makes connection lifetime explicit. Ordinary scheduler requests set `keep_alive: false`; the worker closes its socket immediately after writing the reply. A measurement client can explicitly request reuse. The connection limit stays the batch limit plus two. The version change prevents an older worker from silently retaining connections under the new controller's assumption.
 
 Every result includes component and rollout identity, batch/revision identity, duration and monotonic age within the batch. The controller must bind accepted observations to the current cell incarnation and worker Pod UID and expire them. Worker unavailable, overdue, invalid or cancelled observations become Unknown. Old success must never authorize a changed component. Recheck action admission and client projections as well as controller status; merely adding timestamps to a report is insufficient.
 
 Controller integration must also gate dispatch on the *observed current workload*, not just attach the desired rollout string to a request. An echo of a desired revision cannot prove that a still-old Service endpoint was replaced. Runtime endpoint/Pod identity and eligibility changes must invalidate the affected target. Incremental registration must preserve unaffected targets and their due times; repeatedly resetting a whole cell when one target flaps would cause starvation. Incremental registration now preserves unaffected observations and due times, while per-target generations reject late replies after removal or replacement.
 
 Scheduling should rotate bounded batches while workers remain alive. A cell that has many failed targets cannot monopolize all slots or stop another cell being checked. Closing or replacing a cell cancels its work without a global teardown barrier. Stable results should not cause a complete workload reapply for every batch; observation updates and desired-resource reconciliation need separate paths or coalescing.
+
+## Capacity for large cells (protocol v3)
+
+Measured 2026-11-06 for ULTRASTORM. A batch replies only when its slowest check finishes, so a single timed-out target holds its whole batch for the 2 s check timeout. At 32 targets per batch, a cell where just 5% of checks time out has one in nearly every batch. It behaves as if every check timed out.
+
+A deterministic simulation of the production scheduler shows the effect. In it, a batch with any stalled target takes 2.04 s, any other 40 ms, and dispatch runs on completions and the controller's 250 ms tick. The table shows the longest gap between two checks of one target after the first 30 s. The freshness window is 30 s.
+
+| Cell | v2 limits (32 × 4 per worker, 8 global) | v3 limits (64 × 8 per worker, 32 global) |
+|---|---|---|
+| 1,000 targets, 5% stalled | 16.4 s | 8.5 s |
+| 2,000 targets, 5% or 100% stalled | 32.6 s (stale) | 8.2 s |
+| 4,000 targets, 5% stalled | 65 s (stale) | 16.3 s |
+| 8,000 targets, 5% stalled | never completes a sweep in 120 s | 32.6 s (stale) |
+| 4 cells × 1,000 targets, 5% stalled | 32.6 s (stale): the global cap splits slots | 8.5 s |
+| any size, all healthy | about 5.75 s (the check interval) | about 5.75 s |
+
+`two_thousand_targets_stay_fresh_when_some_checks_time_out` in `src/scheduler.rs` pins the v3 rows for 2,000 targets, against half the freshness window. It fails with the v2 limits.
+
+Worker memory: 512 concurrent stalled HTTP checks peaked at 27 MiB process RSS (macOS release build, local fixture), and 128 at 10 MiB. Stalled TCP checks add almost nothing. Both are inside the 64Mi worker limit. Healthy batches cost one Pod GET and one port-forward each, so 64-target batches halve the API requests per sweep: about 12 requests a second for a 2,000-target cell.
+
+The controller's prober manager recomputes a cell's targets from its resource caches, which copies every resource in the namespace. Copying 2,000 real pods takes about 20 ms, or roughly 40 ms with the other kinds. It now does this at most once a second per cell, and never for a cell without a worker. A changed, restarted or lost worker still applies at once, so old work is never accepted.
+
+Which components are probed: bitcoin-core, lnd, cln, postgresql, redis, keycloak, cdk and nutshell. The busybox workspace isn't probed, so a workspace-only scale run doesn't exercise the prober. Redis is the lightest probed component.
 
 ## Application quota isolation
 

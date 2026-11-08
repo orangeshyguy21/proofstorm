@@ -14,7 +14,7 @@ use kube::{
     api::{ApiResource, DynamicObject, ListParams},
 };
 use proofstorm_core::Capability;
-use proofstorm_kube::{COMPONENT_LABEL, INSTANCE_LABEL, ProofstormCell, instance_namespace};
+use proofstorm_kube::{COMPONENT_LABEL, INSTANCE_LABEL, instance_namespace};
 use proofstorm_view::{CellUsage, ProcessUsage, SystemView, UsageTotals};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{sync::watch, task::JoinHandle};
@@ -63,34 +63,28 @@ impl Cells {
             self.store
                 .authorize(&self.workspace, &self.principal, capability)?;
         }
-        let api = Api::<ProofstormCell>::namespaced(
-            self.runtime.client.clone(),
-            &self.runtime.control_namespace,
-        );
-        let resources =
-            tokio::time::timeout(Duration::from_secs(3), api.list(&ListParams::default()))
-                .await
-                .map_err(|_| Error::failure("system inventory timed out", None))??;
+        // Identity is all the sampler needs from a cell: read metadata only.
         let mut scoped = Vec::new();
-        for cell in resources
-            .items
-            .into_iter()
-            .filter(|cell| cell.spec.workspace_id == self.workspace)
-        {
+        for (identity, metadata) in self.runtime.workspace_cells(&self.workspace).await? {
+            let resource_name = metadata.name.unwrap_or_default();
             match self.store.environment_entry(
                 &self.workspace,
                 &self.principal,
-                &cell.spec.instance_id,
+                &identity.instance_id,
             ) {
-                Ok(entry) => scoped.push((cell, entry.handle.map(|handle| handle.name))),
+                Ok(entry) => scoped.push((
+                    identity,
+                    resource_name,
+                    entry.handle.map(|handle| handle.name),
+                )),
                 Err(proofstorm_store::StoreError::NotFound { .. }) => {}
                 Err(error) => return Err(error.into()),
             }
         }
         let mut cells = stream::iter(scoped)
-            .map(|(cell, name)| {
+            .map(|(identity, resource_name, name)| {
                 let service = (*self).clone();
-                async move { service.sample_cell(&cell, name).await }
+                async move { service.sample_cell(&identity, &resource_name, name).await }
             })
             .buffer_unordered(2)
             .collect::<Vec<_>>()
@@ -110,29 +104,37 @@ impl Cells {
         })
     }
 
-    async fn sample_cell(&self, cell: &ProofstormCell, name: Option<String>) -> CellUsage {
+    async fn sample_cell(
+        &self,
+        identity: &proofstorm_kube::CellIdentity,
+        resource_name: &str,
+        name: Option<String>,
+    ) -> CellUsage {
         let mut usage = CellUsage {
-            incarnation: format!("{}:{}", cell.spec.workspace_id, cell.spec.instance_key),
-            id: cell.spec.instance_id.clone(),
-            name: name.unwrap_or_else(|| cell.spec.instance_id.clone()),
+            incarnation: format!("{}:{}", identity.workspace_id, identity.instance_key),
+            id: identity.instance_id.clone(),
+            name: name.unwrap_or_else(|| identity.instance_id.clone()),
             ..CellUsage::default()
         };
-        if self
+        let Some(instance) = self
             .store
-            .instance(&self.workspace, &self.principal, &cell.spec.instance_id)
+            .instance(&self.workspace, &self.principal, &identity.instance_id)
             .ok()
-            .is_none_or(|instance| {
-                instance.instance_key != cell.spec.instance_key
-                    || instance.resource_name != cell.name_any()
+            .filter(|instance| {
+                instance.instance_key == identity.instance_key
+                    && instance.resource_name == resource_name
             })
-        {
+        else {
             usage.error = Some("Runtime identity unavailable.".into());
             return usage;
-        }
-        let namespace = instance_namespace(&cell.spec.instance_key);
+        };
+        let namespace = instance_namespace(&identity.instance_key);
         let pods = Api::<Pod>::namespaced(self.runtime.client.clone(), &namespace);
-        let params =
-            ListParams::default().labels(&format!("{INSTANCE_LABEL}={}", cell.spec.instance_key));
+        // A cell's pod list grows with its components: read it from the API
+        // server's cache, with the longer bound.
+        let params = ListParams::default()
+            .labels(&format!("{INSTANCE_LABEL}={}", identity.instance_key))
+            .match_any();
         let resource = ApiResource {
             group: "metrics.k8s.io".into(),
             version: "v1beta1".into(),
@@ -147,8 +149,11 @@ impl Cells {
         );
         let metric_params = ListParams::default();
         let (pod_list, metric_list) = tokio::join!(
-            tokio::time::timeout(Duration::from_secs(3), pods.list(&params)),
-            tokio::time::timeout(Duration::from_secs(3), metrics.list(&metric_params))
+            tokio::time::timeout(crate::runtime::GROWING_LIST_TIMEOUT, pods.list(&params)),
+            tokio::time::timeout(
+                crate::runtime::GROWING_LIST_TIMEOUT,
+                metrics.list(&metric_params)
+            )
         );
         let Ok(Ok(pod_list)) = pod_list else {
             usage.error = Some("Processes unavailable.".into());
@@ -158,12 +163,17 @@ impl Cells {
         if measurements.is_none() {
             usage.metrics_error = Some("CPU and memory metrics unavailable.".into());
         }
+        let by_pod = measurements
+            .iter()
+            .flat_map(|list| &list.items)
+            .filter_map(|metric| Some((metric.metadata.name.as_deref()?, metric)))
+            .collect::<std::collections::HashMap<_, _>>();
         for pod in &pod_list.items {
-            let measurement = measurements.as_ref().and_then(|list| {
-                list.items
-                    .iter()
-                    .find(|metric| metric.name_any() == pod.name_any())
-            });
+            let measurement = pod
+                .metadata
+                .name
+                .as_deref()
+                .and_then(|name| by_pod.get(name).copied());
             usage.processes.extend(processes(pod, measurement));
         }
         usage
@@ -180,7 +190,21 @@ impl Cells {
             )
             .is_ok()
         {
-            usage.balances = balances::sample(cell, &pods, &pod_list.items).await;
+            // Balances need the cell's components and lock: the store's
+            // published revision has them, so the cell itself is never read.
+            if let Ok(revision) =
+                self.store
+                    .revision(&self.workspace, &self.principal, &instance.revision_digest)
+            {
+                let revision = proofstorm_kube::CellRevision {
+                    workspace_id: identity.workspace_id.clone(),
+                    instance_key: identity.instance_key.clone(),
+                    revision_digest: instance.revision_digest.clone(),
+                    cell: revision.cell,
+                    lock: revision.lock,
+                };
+                usage.balances = balances::sample(&revision, &pods, &pod_list.items).await;
+            }
         }
         usage
     }
@@ -281,7 +305,8 @@ fn metric_is_current(metric: &DynamicObject, pod: &Pod) -> bool {
 }
 
 /// Kubernetes decimal and binary quantities, including metrics-server nanocores.
-fn quantity(value: &str) -> Option<f64> {
+#[must_use]
+pub fn quantity(value: &str) -> Option<f64> {
     let suffixes = [
         ("Ki", 1024.0),
         ("Mi", 1024.0_f64.powi(2)),
@@ -353,6 +378,7 @@ mod tests {
 #[cfg(test)]
 mod live_relationship_tests {
     use super::*;
+    use proofstorm_kube::ProofstormCell;
     #[tokio::test]
     #[ignore = "requires an explicit existing test cell and kubeconfig"]
     async fn standalone_ldk_channels_match_their_peer_observations() {
@@ -367,12 +393,15 @@ mod live_relationship_tests {
         .unwrap();
         let client = kube::Client::try_from(config).unwrap();
         let cells = Api::<ProofstormCell>::namespaced(client.clone(), "proofstorm-system");
-        let cell = cells.get(&name).await.unwrap();
+        let cell = proofstorm_kube::RevisionCache::default()
+            .loaded(&client, cells.get(&name).await.unwrap())
+            .await
+            .unwrap();
         let pods = Api::<Pod>::namespaced(client, &instance_namespace(&cell.spec.instance_key));
         let inventory = pods.list(&ListParams::default()).await.unwrap().items;
-        let observations = balances::sample(&cell, &pods, &inventory).await;
+        let observations = balances::sample(&cell.revision, &pods, &inventory).await;
         let components = cell
-            .spec
+            .revision
             .cell
             .components
             .iter()
@@ -430,10 +459,13 @@ mod live_relationship_tests {
         .unwrap();
         let client = kube::Client::try_from(config).unwrap();
         let cells = Api::<ProofstormCell>::namespaced(client.clone(), "proofstorm-system");
-        let cell = cells.get(&name).await.unwrap();
+        let cell = proofstorm_kube::RevisionCache::default()
+            .loaded(&client, cells.get(&name).await.unwrap())
+            .await
+            .unwrap();
         let pods = Api::<Pod>::namespaced(client, &instance_namespace(&cell.spec.instance_key));
         let inventory = pods.list(&ListParams::default()).await.unwrap().items;
-        let observations = balances::sample(&cell, &pods, &inventory).await;
+        let observations = balances::sample(&cell.revision, &pods, &inventory).await;
         let bitcoin = observations
             .iter()
             .filter_map(|b| b.bitcoin.as_ref())
@@ -447,7 +479,7 @@ mod live_relationship_tests {
             "test cell needs connected Bitcoin peers"
         );
         let ldk = cell
-            .spec
+            .revision
             .cell
             .components
             .iter()

@@ -63,6 +63,9 @@ struct Arguments {
     /// Permit an explicitly selected development bundle.
     #[arg(long)]
     allow_development: bool,
+    /// Agent nodes for the isolated cluster, so pods can spread (default 1).
+    #[arg(long)]
+    cluster_agents: Option<u16>,
     /// New directory for installation state, logs and report; retained after cleanup.
     #[arg(long)]
     work_dir: Option<PathBuf>,
@@ -132,6 +135,7 @@ async fn main() -> Result<()> {
         checkout_home: args.checkout_home,
         bundle: args.bundle,
         allow_development: args.allow_development,
+        cluster_agents: args.cluster_agents,
     };
     let root = args.root.unwrap_or(std::env::current_dir()?);
     let names = if args.gates.is_empty() {

@@ -31,6 +31,7 @@ pub mod gui;
 pub mod isolation;
 pub mod keycloak;
 pub mod ldk_server;
+mod measure;
 pub mod mint_management;
 pub mod native_exec;
 pub mod nutshell_cln;
@@ -40,10 +41,13 @@ pub mod nutshell_postgres;
 pub mod onboarding;
 pub mod private_handoff;
 pub mod private_transfer;
+pub mod prober;
 pub mod progress;
 pub mod quote_composition;
 pub mod reliable_exec;
+mod relink;
 pub mod runtime_lifecycle;
+pub mod scale;
 pub mod slice2;
 pub mod slice4;
 pub mod slice5;
@@ -120,6 +124,13 @@ pub const NAMES: &[&str] = &[
     "quote-composition",
     "nutshell-oidc",
     "keycloak",
+    "scale-100",
+    "scale-500",
+    "scale-1000",
+    "scale-2000",
+    "prober-50",
+    "prober-1000",
+    "relink",
 ];
 
 /// Managed payment-stack gates whose exact images can be cached before a runtime exists.
@@ -227,6 +238,13 @@ pub fn run(name: &str, context: &GateContext) -> Result<()> {
         "quote-composition" => quote_composition::run(context),
         "nutshell-oidc" => nutshell_oidc::run(context),
         "keycloak" => keycloak::run(context),
+        "scale-100" => scale::run(context, 100),
+        "scale-500" => scale::run(context, 500),
+        "scale-1000" => scale::run(context, 1000),
+        "scale-2000" => scale::run(context, 2000),
+        "prober-50" => prober::run(context, 50),
+        "prober-1000" => prober::run(context, 1000),
+        "relink" => relink::run(context),
         other => bail!(
             "unknown gate {other}; available gates: {}",
             NAMES.join(", ")

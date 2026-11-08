@@ -1,7 +1,9 @@
 use std::{fs, path::PathBuf};
 
 use kube::CustomResourceExt;
-use proofstorm_kube::{ProofstormCandidateBuild, ProofstormCell, ProofstormCellAction};
+use proofstorm_kube::{
+    ProofstormCandidateBuild, ProofstormCell, ProofstormCellAction, ProofstormComponent,
+};
 
 #[test]
 fn retired_workflows_are_not_executable_but_history_is_readable() {
@@ -139,15 +141,29 @@ fn checked_in_crds_match_typed_contracts() {
             serde_yaml::to_string(&ProofstormCandidateBuild::crd())
                 .expect("serialize candidate build CRD"),
         ),
+        (
+            "proofstorm.dev_proofstormcomponents.yaml",
+            serde_yaml::to_string(&ProofstormComponent::crd()).expect("serialize component CRD"),
+        ),
     ];
     for (name, generated) in cases {
         if name == "proofstorm.dev_proofstormcells.yaml" {
-            assert!(generated.contains("x-kubernetes-validations:"));
-            assert!(generated.contains("chain, Ark and Spark bindings require only network"));
-            assert!(generated.contains("backend links require a binding"));
-            assert!(generated.contains("backend link kind must match its binding type"));
-            assert!(generated.contains("ark_backend"));
-            assert!(generated.contains("spark_backend"));
+            // The cell object names its revision; the spec and lock live in the
+            // revision object, and the controller validates them when it loads it.
+            let crd: serde_yaml::Value = serde_yaml::from_str(&generated).unwrap();
+            let spec = &crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+                ["properties"];
+            let mut fields = spec
+                .as_mapping()
+                .unwrap()
+                .keys()
+                .map(|key| key.as_str().unwrap())
+                .collect::<Vec<_>>();
+            fields.sort_unstable();
+            assert_eq!(
+                fields,
+                ["instanceId", "instanceKey", "revisionDigest", "workspaceId"]
+            );
         }
         let checked_in = fs::read_to_string(root.join("charts/proofstorm/crds").join(name))
             .unwrap_or_else(|error| panic!("read checked-in {name}: {error}"));
