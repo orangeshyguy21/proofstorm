@@ -2,11 +2,11 @@
 //! validate orchestration only; they are not evidence of live payment behavior.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use proofstorm_qualification::{ImageEvidence, Plan, Receipt};
-use serde_json::{Value, json};
+use proofstorm_qualification::{ImageEvidence, Plan, Receipt, Scenario};
+use serde_json::Value;
 use tempfile::TempDir;
 
 fn qualifier(args: &[&str]) -> Output {
@@ -69,7 +69,7 @@ fn synthetic_receipts(plan: &Plan) -> Vec<Receipt> {
 }
 
 #[test]
-fn cli_policy_and_matrix_schedule_each_required_case_once_on_its_native_runner() {
+fn cli_matrix_schedules_each_required_case_once_in_balanced_native_shards() {
     let root = TempDir::new().unwrap();
     let mut scheduled = BTreeMap::new();
     for mode in ["full", "compatibility", "documentation", "pull"] {
@@ -78,6 +78,8 @@ fn cli_policy_and_matrix_schedule_each_required_case_once_on_its_native_runner()
         let mut seen = BTreeSet::new();
         let mut platforms = BTreeSet::new();
         let mut shards = BTreeSet::new();
+        // Runtime cases (not image or Lightning checks) per shard, per platform.
+        let mut runtime: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
         for entry in matrix["include"].as_array().unwrap() {
             assert!(shards.insert(entry["shard"].as_str().unwrap()));
             let platform = entry["platform"].as_str().unwrap();
@@ -92,14 +94,27 @@ fn cli_policy_and_matrix_schedule_each_required_case_once_on_its_native_runner()
             );
             assert_eq!(entry["arch"], platform.strip_prefix("linux/").unwrap());
             let ids = entry["cases"].as_array().unwrap();
-            assert!((1..=8).contains(&ids.len()));
+            assert!(!ids.is_empty());
+            let mut count = 0;
             for id in ids {
                 let id = id.as_str().unwrap();
                 assert!(seen.insert(id));
                 let case = plan.case(id).unwrap();
                 assert!(case.required);
                 assert_eq!(case.platform, platform);
+                count += usize::from(!matches!(
+                    case.scenario,
+                    Scenario::Image { .. } | Scenario::Lightning { .. }
+                ));
             }
+            runtime.entry(platform).or_default().push(count);
+        }
+        for counts in runtime.values() {
+            // Nine shards per architecture leave two of GitHub's 20 job slots
+            // for main's bundle jobs.
+            assert!(counts.len() <= 9);
+            let (low, high) = (counts.iter().min().unwrap(), counts.iter().max().unwrap());
+            assert!(high - low <= 1, "unbalanced runtime cases: {counts:?}");
         }
         assert_eq!(platforms, ["linux/amd64", "linux/arm64"].into());
         assert_eq!(
@@ -120,18 +135,6 @@ fn cli_policy_and_matrix_schedule_each_required_case_once_on_its_native_runner()
     assert!(scheduled["documentation"] > 0);
     assert!(scheduled["documentation"] < scheduled["compatibility"]);
     assert!(scheduled["compatibility"] < scheduled["full"]);
-
-    let paths = root.path().join("changed-paths");
-    for (contents, expected) in [
-        ("README.md\ndocs/merge-qualification.md\n", "pull"),
-        ("README.md\nCargo.toml\n", "pull"),
-        ("Cargo.toml\ndocker/mint/cdk/Dockerfile\n", "compatibility"),
-        ("", "compatibility"),
-    ] {
-        fs::write(&paths, contents).unwrap();
-        let output = successful(&["policy", paths.to_str().unwrap()]);
-        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
-    }
 }
 
 #[test]
@@ -177,7 +180,7 @@ fn mint_auth_is_qualified_only_where_declared_and_keeps_identity_provider_covera
 }
 
 #[test]
-fn downloaded_artifacts_and_aggregate_reject_failed_missing_duplicate_and_stale_evidence() {
+fn downloaded_artifacts_reject_failed_missing_duplicate_and_stale_evidence() {
     let root = TempDir::new().unwrap();
     let (plan_path, plan) = planned(root.path(), "full");
     let receipts = synthetic_receipts(&plan);
@@ -217,38 +220,11 @@ fn downloaded_artifacts_and_aggregate_reject_failed_missing_duplicate_and_stale_
     }
     write_json(&path, receipt);
     successful(&verify);
-
-    let needs_path = root.path().join("needs.json");
-    let checks: Value =
-        serde_saphyr::from_str(include_str!("../../../.github/workflows/check.yml")).unwrap();
-    let mut needs: Value = checks["jobs"]["merge-qualification"]["needs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|name| {
-            (
-                name.as_str().unwrap().to_owned(),
-                json!({"result":"success"}),
-            )
-        })
-        .collect::<serde_json::Map<_, _>>()
-        .into();
-    write_json(&needs_path, &needs);
-    successful(&["aggregate", needs_path.to_str().unwrap()]);
-    for result in ["failure", "skipped", "cancelled"] {
-        needs["qualification"]["result"] = result.into();
-        write_json(&needs_path, &needs);
-        assert!(
-            !qualifier(&["aggregate", needs_path.to_str().unwrap()])
-                .status
-                .success()
-        );
-    }
 }
 
 /// Stands in for the acceptance binary: records each case it was asked to
 /// run, emits the fixture receipt, and writes one public gate diagnostic per
-/// category the shard script has to classify.
+/// category the shard runner has to classify.
 #[cfg(unix)]
 const ACCEPTANCE_STUB: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
@@ -262,6 +238,7 @@ done
 mkdir "$work"
 printf '%s\n' "$id" >> "$QUALIFICATION_TEST_CALLS"
 printf 'private fixture output\n' > "$work/private.log"
+printf 'not a log or record\n' > "$work/excluded.txt"
 if [[ "$id" == "${QUALIFICATION_TEST_FLAKY:-}" && ! -e "$QUALIFICATION_TEST_CALLS.flaked" ]]; then
   : > "$QUALIFICATION_TEST_CALLS.flaked"
   jq '.passed=false | .stage="teardown"' "$QUALIFICATION_TEST_FIXTURES/$id.json" > "$work/qualification-receipt.json"
@@ -290,39 +267,80 @@ if [[ "$id" == "$QUALIFICATION_TEST_FAILED" ]]; then
 fi
 "#;
 
+/// A checkout whose acceptance binary is the stub, with its fixture receipts.
 #[cfg(unix)]
-#[test]
-fn real_shard_continues_after_failures_and_exports_only_receipts() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
-
-    let root = TempDir::new().unwrap();
-    let (plan_path, plan) = planned(root.path(), "documentation");
-    let receipts: Vec<_> = synthetic_receipts(&plan).into_iter().take(3).collect();
-    let ids: Vec<_> = receipts.iter().map(|receipt| &receipt.case_id).collect();
-    let cases = root.path().join("cases.json");
-    write_json(&cases, &ids);
-    let scripts = root.path().join("scripts");
-    let binaries = root.path().join("target/check/debug");
-    let fixtures = root.path().join("fixtures");
-    for path in [&scripts, &binaries, &fixtures] {
+fn shard_checkout(root: &Path, plan: &Plan) -> (Vec<Receipt>, Vec<String>, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let receipts: Vec<_> = synthetic_receipts(plan).into_iter().take(3).collect();
+    let ids: Vec<_> = receipts
+        .iter()
+        .map(|receipt| receipt.case_id.clone())
+        .collect();
+    let binaries = root.join("target/check/debug");
+    let fixtures = root.join("fixtures");
+    for path in [&binaries, &fixtures] {
         fs::create_dir_all(path).unwrap();
     }
-    fs::write(
-        scripts.join("qualification-shard.sh"),
-        include_str!("../../../scripts/qualification-shard.sh"),
-    )
-    .unwrap();
-    symlink(
-        env!("CARGO_BIN_EXE_proofstorm-qualification"),
-        binaries.join("proofstorm-qualification"),
-    )
-    .unwrap();
     for receipt in &receipts {
         write_json(&fixtures.join(format!("{}.json", receipt.case_id)), receipt);
     }
     let stub = binaries.join("proofstorm-acceptance");
     fs::write(&stub, ACCEPTANCE_STUB).unwrap();
     fs::set_permissions(&stub, fs::Permissions::from_mode(0o700)).unwrap();
+    let cases = root.join("cases.json");
+    write_json(&cases, &ids);
+    (receipts, ids, cases)
+}
+
+/// The real shard runner in `root`, writing under `directory`.
+#[cfg(unix)]
+fn shard(root: &Path, plan: &str, directory: &Path, previous: Option<&Path>) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_proofstorm-qualification"));
+    command
+        .current_dir(root)
+        .arg("shard")
+        .arg(plan)
+        .arg(root.join("cases.json"))
+        .arg(directory.join("work"))
+        .arg(directory.join("receipts"))
+        .args(previous)
+        .env("QUALIFICATION_TEST_CALLS", directory.join("calls"))
+        .env("QUALIFICATION_TEST_FIXTURES", root.join("fixtures"));
+    for name in [
+        "QUALIFICATION_TEST_FAILED",
+        "QUALIFICATION_TEST_MISSING",
+        "QUALIFICATION_TEST_CATEGORY",
+        "QUALIFICATION_TEST_FLAKY",
+    ] {
+        command.env(name, "");
+    }
+    for name in [
+        "GITHUB_STEP_SUMMARY",
+        "QUALIFICATION_IMAGE_CACHE",
+        "QUALIFICATION_LOG_DIR",
+        "QUALIFICATION_LOG_RECIPIENT",
+    ] {
+        command.env_remove(name);
+    }
+    command
+}
+
+#[cfg(unix)]
+fn calls(directory: &Path) -> Vec<String> {
+    fs::read_to_string(directory.join("calls"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn real_shard_continues_after_failures_and_exports_only_receipts() {
+    let root = TempDir::new().unwrap();
+    let (plan_path, plan) = planned(root.path(), "documentation");
+    let (_, ids, _) = shard_checkout(root.path(), &plan);
+    let ids: Vec<_> = ids.iter().collect();
     for category in [
         "successful",
         "channel-request-rejected",
@@ -334,15 +352,7 @@ fn real_shard_continues_after_failures_and_exports_only_receipts() {
         let fail = !matches!(category, "successful" | "flaky");
         let directory = root.path().join(category);
         fs::create_dir(&directory).unwrap();
-        let calls = directory.join("calls");
-        let output = Command::new("bash")
-            .arg(scripts.join("qualification-shard.sh"))
-            .arg(&plan_path)
-            .arg(&cases)
-            .arg(directory.join("work"))
-            .arg(directory.join("receipts"))
-            .env("QUALIFICATION_TEST_CALLS", &calls)
-            .env("QUALIFICATION_TEST_FIXTURES", &fixtures)
+        let output = shard(root.path(), &plan_path, &directory, None)
             .env("QUALIFICATION_TEST_FAILED", if fail { ids[0] } else { "" })
             .env("QUALIFICATION_TEST_MISSING", if fail { ids[1] } else { "" })
             .env("QUALIFICATION_TEST_CATEGORY", category)
@@ -365,13 +375,7 @@ fn real_shard_continues_after_failures_and_exports_only_receipts() {
             "flaky" => vec![ids[0], ids[0], ids[1], ids[2]],
             _ => vec![ids[0], ids[0], ids[1], ids[1], ids[2]],
         };
-        assert_eq!(
-            fs::read_to_string(calls)
-                .unwrap()
-                .lines()
-                .collect::<Vec<_>>(),
-            expected
-        );
+        assert_eq!(calls(&directory).iter().collect::<Vec<_>>(), expected);
         let files: Vec<_> = fs::read_dir(directory.join("receipts"))
             .unwrap()
             .map(|entry| entry.unwrap().path())
@@ -383,6 +387,126 @@ fn real_shard_continues_after_failures_and_exports_only_receipts() {
             assert_eq!(receipt.passed, !(fail && receipt.case_id == *ids[0]));
         }
     }
+}
+
+/// Re-running a failed shard repeats only what has no current, passing receipt.
+#[cfg(unix)]
+#[test]
+fn rerun_keeps_earlier_passes_and_repeats_everything_else() {
+    let root = TempDir::new().unwrap();
+    let (plan_path, plan) = planned(root.path(), "documentation");
+    let (receipts, ids, _) = shard_checkout(root.path(), &plan);
+    let previous = root.path().join("previous");
+    fs::create_dir(&previous).unwrap();
+    let mut failed = receipts[1].clone();
+    failed.passed = false;
+    let mut stale = receipts[2].clone();
+    stale.identity.attempt += 1;
+    for receipt in [&receipts[0], &failed, &stale] {
+        write_json(&previous.join(format!("{}.json", receipt.case_id)), receipt);
+    }
+    fs::write(previous.join("unrelated.json"), "not a receipt").unwrap();
+    let directory = root.path().join("rerun");
+    fs::create_dir(&directory).unwrap();
+    let output = shard(root.path(), &plan_path, &directory, Some(&previous))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let log = String::from_utf8(output.stdout).unwrap();
+    assert!(log.contains(&format!(
+        "{} passed in an earlier attempt of this run; kept its receipt",
+        ids[0]
+    )));
+    assert!(
+        log.ends_with("Qualification shard passed: 3 cases, 1 kept from an earlier attempt.\n")
+    );
+    assert_eq!(calls(&directory), [ids[1].clone(), ids[2].clone()]);
+    assert_eq!(
+        fs::read(directory.join("receipts").join(format!("{}.json", ids[0]))).unwrap(),
+        fs::read(previous.join(format!("{}.json", ids[0]))).unwrap()
+    );
+    assert_eq!(fs::read_dir(directory.join("receipts")).unwrap().count(), 3);
+
+    // A first attempt has nothing to download; every case runs.
+    let directory = root.path().join("first");
+    fs::create_dir(&directory).unwrap();
+    let absent = root.path().join("absent");
+    let output = shard(root.path(), &plan_path, &directory, Some(&absent))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(calls(&directory), ids);
+}
+
+/// A failed attempt's logs and records leave the runner only through `age`;
+/// a pass on retry is written to the GitHub job summary.
+#[cfg(unix)]
+#[test]
+fn failed_attempts_are_sealed_and_retries_reach_the_job_summary() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = TempDir::new().unwrap();
+    let (plan_path, plan) = planned(root.path(), "documentation");
+    let (_, ids, _) = shard_checkout(root.path(), &plan);
+    let stubs = root.path().join("stubs");
+    fs::create_dir(&stubs).unwrap();
+    let age = stubs.join("age");
+    fs::write(
+        &age,
+        "#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = -o ]; then out=$2; shift; fi\n  shift\ndone\nexec cat > \"$out\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&age, fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(stubs).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let directory = root.path().join("sealed");
+    fs::create_dir(&directory).unwrap();
+    let summary = directory.join("summary.md");
+    let output = shard(root.path(), &plan_path, &directory, None)
+        .env("PATH", path)
+        .env("QUALIFICATION_TEST_FLAKY", &ids[0])
+        .env("QUALIFICATION_LOG_RECIPIENT", "age1fixture")
+        .env("QUALIFICATION_LOG_DIR", directory.join("private"))
+        .env("GITHUB_STEP_SUMMARY", &summary)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let bundle = format!("{}-attempt-1.tar.gz.age", ids[0]);
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains(&format!("Encrypted private logs: {bundle}"))
+    );
+    let sealed: Vec<_> = fs::read_dir(directory.join("private"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(sealed, std::slice::from_ref(&bundle));
+    let listing = Command::new("tar")
+        .arg("-tzf")
+        .arg(directory.join("private").join(&bundle))
+        .output()
+        .unwrap();
+    assert!(listing.status.success(), "{listing:?}");
+    let names: BTreeSet<_> = String::from_utf8(listing.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "gate-failure.json",
+            "private.log",
+            "qualification-receipt.json"
+        ]
+        .map(String::from)
+        .into()
+    );
+    let summary = fs::read_to_string(summary).unwrap();
+    assert!(summary.contains("Passed only on retry"));
+    assert!(summary.contains(&ids[0]));
 }
 
 #[cfg(unix)]

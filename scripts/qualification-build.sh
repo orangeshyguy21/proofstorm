@@ -10,9 +10,14 @@ case "$platform:$(uname -s)/$(uname -m)" in
   *) exit 1 ;;
 esac
 mkdir -p "$output"
-just dev-build
+# A dev target outside .proofstorm-dev lets CI restore a cargo cache before
+# dev-build creates and claims .proofstorm-dev.
+just dev-build --target-dir dev-target
 CARGO_TARGET_DIR="$root/target/check" cargo build --locked -p proofstorm-acceptance -p proofstorm-qualification -p proofstorm-xtask
-resources=$(jq -er '.resources' .proofstorm-dev/state/checkout-artifacts.json)
+registration=.proofstorm-dev/state/checkout-artifacts.json
+resources=$(jq -er '.resources' "$registration")
+cli=$(jq -er '.cli' "$registration") mcp=$(jq -er '.mcp' "$registration")
+[[ "$cli" == "$root"/* && "$mcp" == "$root"/* ]] || exit 1
 sha=$(jq -er '.sha256' "$resources/controller-source.json")
 docker buildx build --platform "$platform" --load --provenance=false \
   --build-arg CARGO_BUILD_JOBS=2 --build-arg "PROOFSTORM_CONTROLLER_SOURCE_SHA256=$sha" \
@@ -41,6 +46,6 @@ docker image save --output "$output/runtime-images.tar" "${runtime_images[@]}"
 tar -cf "$output/host.tar" .proofstorm-dev/owner.json .proofstorm-dev/build.json \
   .proofstorm-dev/state/installation.json .proofstorm-dev/state/checkout-artifacts.json \
   .proofstorm-dev/resources .proofstorm-dev/web \
-  .proofstorm-dev/target/debug/proofstorm .proofstorm-dev/target/debug/proofstorm-mcp \
+  "${cli#"$root"/}" "${mcp#"$root"/}" \
   target/check/debug/proofstorm-acceptance target/check/debug/proofstorm-qualification target/check/debug/proofstorm-xtask
 (cd "$output" && sha256sum host.tar controller.tar runtime-images.tar > SHA256SUMS)

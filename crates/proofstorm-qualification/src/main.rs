@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use proofstorm_qualification::{Identity, Mode, Plan, Receipt};
-use std::fs;
+use std::{fs, path::Path};
 
 fn read<T: serde::de::DeserializeOwned>(path: &str) -> Result<T> {
     let metadata = fs::symlink_metadata(path)?;
@@ -23,19 +23,6 @@ fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let args: Vec<_> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
-        ["policy", input] => {
-            let paths = fs::read_to_string(input)?
-                .lines()
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
-            println!(
-                "{}",
-                match proofstorm_qualification::pull_request_mode(&paths) {
-                    Mode::Pull => "pull",
-                    _ => "compatibility",
-                }
-            );
-        }
         ["plan", revision, run_id, attempt, mode, output] => {
             let mode = match *mode {
                 "full" => Mode::Full,
@@ -77,27 +64,25 @@ fn main() -> Result<()> {
             proofstorm_qualification::verify_receipts(&plan, &receipts)?;
             println!("Verified {} qualification receipts", receipts.len());
         }
-        ["aggregate", input] => proofstorm_qualification::aggregate(&read(input)?)?,
         ["matrix", input] => {
             let plan: Plan = read(input)?;
             plan.validate()?;
-            let mut entries = Vec::new();
-            for (platform, runner) in [
-                ("linux/amd64", "ubuntu-24.04"),
-                ("linux/arm64", "ubuntu-24.04-arm"),
-            ] {
-                let cases: Vec<_> = plan
-                    .cases
-                    .iter()
-                    .filter(|case| case.required && case.platform == platform)
-                    .map(|case| case.id.as_str())
-                    .collect();
-                for (index, chunk) in cases.chunks(8).enumerate() {
-                    let arch = platform.rsplit('/').next().unwrap();
-                    entries.push(serde_json::json!({"platform":platform,"arch":arch,"runner":runner,"shard":format!("{arch}-{index}"),"cases":chunk}));
-                }
+            println!("{}", proofstorm_qualification::matrix(&plan));
+        }
+        ["shard", plan_path, cases, work, receipts, previous @ ..] if previous.len() <= 1 => {
+            let plan: Plan = read(plan_path)?;
+            let ids: Vec<String> = read(cases)?;
+            let passed = proofstorm_qualification::run_shard(
+                Path::new(plan_path),
+                &plan,
+                &ids,
+                Path::new(work),
+                Path::new(receipts),
+                previous.first().map(Path::new),
+            )?;
+            if !passed {
+                std::process::exit(1);
             }
-            println!("{}", serde_json::json!({"include":entries}));
         }
         ["case", input, id] => {
             let plan: Plan = read(input)?;
@@ -112,7 +97,7 @@ fn main() -> Result<()> {
             );
         }
         _ => bail!(
-            "usage: qualification plan REVISION RUN_ID ATTEMPT compatibility|full|documentation|pull OUTPUT; matrix PLAN; case PLAN ID; images PLAN; verify PLAN RECEIPTS; aggregate NEEDS"
+            "usage: qualification plan REVISION RUN_ID ATTEMPT compatibility|full|documentation|pull OUTPUT; matrix PLAN; shard PLAN CASES WORK RECEIPTS [EARLIER_RECEIPTS]; case PLAN ID; images PLAN; verify PLAN RECEIPTS"
         ),
     }
     Ok(())

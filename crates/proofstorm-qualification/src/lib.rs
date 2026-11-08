@@ -4,78 +4,18 @@
 mod images;
 mod planner;
 mod receipt;
+mod shard;
 
 pub use images::{ImageInputs, image_inputs, validate_cache_endpoint};
 
 pub use planner::{catalog, plan};
-pub use receipt::{ImageEvidence, Receipt, aggregate, verify_receipts};
+pub use receipt::{ImageEvidence, Receipt, verify_receipts};
+pub use shard::{matrix, run_shard};
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-
-/// Pull requests run the small [`Mode::Pull`] suite unless they change what the
-/// catalog claims or how its components are built and rendered. Main, weekly
-/// and release runs always cover every claim. A failed/empty comparison is
-/// treated as a catalog change.
-#[must_use]
-pub fn pull_request_mode(paths: &[String]) -> Mode {
-    const CATALOG: [&str; 10] = [
-        "docker/",
-        "crates/proofstorm-core/src/catalog.rs",
-        "crates/proofstorm-core/src/processor_catalog.rs",
-        "crates/proofstorm-core/src/bark_catalog.rs",
-        "crates/proofstorm-core/src/bark_images.json",
-        "crates/proofstorm-core/src/spark_catalog.rs",
-        "crates/proofstorm-core/src/spark_images.json",
-        "crates/proofstorm-kube/",
-        "scripts/catalog-image.sh",
-        "scripts/qualification-images.sh",
-    ];
-    if paths.is_empty()
-        || paths.iter().any(|path| {
-            path.contains("..") || CATALOG.iter().any(|prefix| path.starts_with(prefix))
-        })
-    {
-        Mode::Compatibility
-    } else {
-        Mode::Pull
-    }
-}
-
-#[cfg(test)]
-mod policy_tests {
-    use super::{Mode, pull_request_mode};
-    #[test]
-    fn catalog_changes_and_failed_comparisons_keep_full_compatibility() {
-        for paths in [
-            vec!["README.md".into(), "docs/usage.md".into()],
-            vec!["crates/proofstorm-app/src/runtime.rs".into()],
-            vec!["scripts/qualification-shard.sh".into(), "Cargo.toml".into()],
-            vec!["crates/proofstorm-qualification/src/planner.rs".into()],
-        ] {
-            assert_eq!(pull_request_mode(&paths), Mode::Pull);
-        }
-        for paths in [
-            vec![],
-            vec!["docker/mint/cdk/Dockerfile".into()],
-            vec![
-                "README.md".into(),
-                "crates/proofstorm-core/src/catalog.rs".into(),
-            ],
-            vec!["crates/proofstorm-kube/src/adapter.rs".into()],
-            vec!["crates/proofstorm-core/src/bark_catalog.rs".into()],
-            vec!["crates/proofstorm-core/src/bark_images.json".into()],
-            vec!["crates/proofstorm-core/src/spark_catalog.rs".into()],
-            vec!["crates/proofstorm-core/src/spark_images.json".into()],
-            vec!["scripts/qualification-images.sh".into()],
-            vec!["docs/../docker/x".into()],
-        ] {
-            assert_eq!(pull_request_mode(&paths), Mode::Compatibility);
-        }
-    }
-}
 
 /// The exact checkout and hosted run whose evidence is being collected.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

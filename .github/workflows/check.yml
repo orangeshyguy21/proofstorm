@@ -6,8 +6,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-  merge_group:
-  # Pull requests run a small native subset; main and a weekly run cover every claim.
+  # Pull requests run a small native subset; main, a weekly run and manual runs
+  # (on any branch) cover every claim.
   schedule:
     - cron: '17 7 * * 1'
 
@@ -34,18 +34,13 @@ jobs:
     if: always()
     needs: [quick, rust, macos-installer-contract, qualification]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      # Exact names: renaming or dropping a lane cannot silently remove coverage.
       - name: Require all checks and qualification evidence
         env:
           NEEDS: ${{ toJSON(needs) }}
-          CARGO_TARGET_DIR: target/check
-        run: |
-          printf '%s\n' "$NEEDS" > "$RUNNER_TEMP/needs.json"
-          cargo run --locked -p proofstorm-qualification -- aggregate "$RUNNER_TEMP/needs.json"
+        run: jq -e 'keys==["macos-installer-contract","qualification","quick","rust"] and all(.[]; .result=="success")' <<< "$NEEDS"
 
   quick:
     name: Formatting and shell

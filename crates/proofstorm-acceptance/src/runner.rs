@@ -866,6 +866,20 @@ pub fn run(
         report["error"] = json!(format!("{error:#}"));
     }
     save(&work, &report)?;
+    if operation.is_err()
+        && !cancelled.load(Ordering::SeqCst)
+        && home.join("runtime-resources.json").exists()
+    {
+        eprintln!("Saving controller evidence before cleanup...");
+        if let Err(error) = controller_evidence(&work) {
+            // The error can quote cluster output, so it stays in a private file.
+            eprintln!("Controller evidence is incomplete");
+            let _ = private_file(
+                &work.join("controller-evidence-error.log"),
+                format!("{error:#}\n").as_bytes(),
+            );
+        }
+    }
     let cleanup_result = if home.join("runtime-resources.json").exists() {
         eprintln!("Removing only this run's recorded runtime and storage...");
         cleanup(&work)
@@ -970,14 +984,76 @@ pub fn run(
     operation
 }
 
+/// Save the controller's record of a failed run before cleanup deletes the
+/// runtime: its log, cluster events, pods and Proofstorm objects. The gate log
+/// shows what the test waited for; these show what the controller was doing.
+/// They stay private: CI uploads them only encrypted, with the case's logs.
+fn controller_evidence(work: &Path) -> Result<()> {
+    let (installation, _) = read(work)?;
+    let kubectl = crate::kubectl::Kubectl::for_installation(&installation)?;
+    let directory = work.join("controller-evidence");
+    fs::DirBuilder::new().mode(0o700).create(&directory)?;
+    let logs = [
+        "logs",
+        "deployment/proofstormd",
+        "-n",
+        crate::kubectl::CONTROL_NAMESPACE,
+        "--all-containers",
+        "--timestamps",
+        "--tail=20000",
+    ];
+    let objects = "proofstormcells.proofstorm.dev,proofstormcellactions.proofstorm.dev,\
+        proofstormcomponents.proofstorm.dev,proofstormcandidatebuilds.proofstorm.dev";
+    let captures = [
+        ("proofstormd.log", logs.to_vec()),
+        (
+            "proofstormd-previous.log",
+            [&logs[..], &["--previous"]].concat(),
+        ),
+        (
+            "events.log",
+            vec![
+                "get",
+                "events",
+                "--all-namespaces",
+                "-o",
+                "wide",
+                "--sort-by=.metadata.creationTimestamp",
+            ],
+        ),
+        (
+            "pods.log",
+            vec!["get", "pods", "--all-namespaces", "-o", "wide"],
+        ),
+        (
+            "objects.log",
+            vec!["get", objects, "--all-namespaces", "-o", "yaml"],
+        ),
+    ];
+    for (name, mut args) in captures {
+        args.push("--request-timeout=30s");
+        // A stalled API server must not hold up cleanup for long.
+        let text = match crate::process::capture(kubectl.command(&args)?, 60) {
+            Ok(output) => [output.stdout, output.stderr].concat(),
+            Err(error) => format!("{error:#}\n").into_bytes(),
+        };
+        private_file(&directory.join(name), &text)?;
+    }
+    Ok(())
+}
+
 fn private_json(path: &Path, value: &Value) -> Result<()> {
+    private_file(path, &serde_json::to_vec_pretty(value)?)
+}
+
+fn private_file(path: &Path, contents: &[u8]) -> Result<()> {
     use std::{io::Write, os::unix::fs::OpenOptionsExt};
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(path)?;
-    file.write_all(&serde_json::to_vec_pretty(value)?)?;
+    file.write_all(contents)?;
     Ok(())
 }
 
