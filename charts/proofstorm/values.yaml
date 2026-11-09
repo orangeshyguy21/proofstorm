@@ -1,6 +1,6 @@
 image:
   repository: proofstorm-registry.localhost:5000/proofstormd
-  tag: 0.1.0-alpha.13
+  tag: 0.1.0-alpha.14
   # Release bundles set an immutable digest; empty preserves contributor tags.
   digest: ""
   pullPolicy: Always
@@ -13,12 +13,14 @@ image:
 # caches every action, component and pod it watches, so its memory grows with
 # the work it holds: at 256Mi, a 24-agent swarm's 19,600 actions crash-looped it
 # out of memory, and a controller that can't start can't expire them either.
+# Swarm season 2 (48 agents, 36 components, faults) needed about 2.1Gi and was
+# OOM-killed at 2Gi, hence 4Gi.
 resources:
   requests:
     cpu: 250m
     memory: 64Mi
   limits:
-    memory: 1Gi
+    memory: 4Gi
 
 # Work the controller runs at once and how long a one-off action may wait to
 # start. `storm config` sets these in runtime.toml and `storm setup` applies

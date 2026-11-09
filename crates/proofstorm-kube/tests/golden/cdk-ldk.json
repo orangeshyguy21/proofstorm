@@ -337,16 +337,11 @@
                     }
                   ],
                   "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "sh",
-                        "-ec",
-                        "wget -q -T 1 -O /dev/null http://127.0.0.1:3338/v1/info && cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info >/dev/null"
-                      ]
-                    },
-                    "failureThreshold": 40,
-                    "periodSeconds": 3,
-                    "timeoutSeconds": 3
+                    "failureThreshold": 3,
+                    "periodSeconds": 10,
+                    "tcpSocket": {
+                      "port": 3338
+                    }
                   },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
@@ -355,6 +350,18 @@
                         "ALL"
                       ]
                     }
+                  },
+                  "startupProbe": {
+                    "exec": {
+                      "command": [
+                        "sh",
+                        "-ec",
+                        "wget -q -T 1 -O /dev/null http://127.0.0.1:3338/v1/info && cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info >/dev/null"
+                      ]
+                    },
+                    "failureThreshold": 900,
+                    "periodSeconds": 2,
+                    "timeoutSeconds": 3
                   },
                   "volumeMounts": [
                     {

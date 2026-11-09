@@ -14,7 +14,7 @@ proofstorm-core = { path = "../proofstorm-core" }
 proofstorm-prober = { path = "../proofstorm-prober" }
 schemars.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 thiserror.workspace = true
 toml_edit = { version = "=0.22.27", features = ["serde"] }
 flate2 = "1.1"

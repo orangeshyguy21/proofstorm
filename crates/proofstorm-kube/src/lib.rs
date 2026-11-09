@@ -1,5 +1,6 @@
 mod adapter;
 mod api;
+mod apply;
 mod candidate;
 mod components;
 mod identity;
@@ -51,6 +52,7 @@ pub use api::{
     ProofstormCellStatus, ProofstormComponent, ProofstormComponentSpec, ProtocolFreshness,
     ReachabilityOracleAction, TeardownReceipt,
 };
+pub use apply::{ApplyDocument, apply_patch};
 pub use candidate::{
     CANDIDATE_BUILD_LABEL, CANDIDATE_BUNDLE_KEY, CANDIDATE_CANCEL_ANNOTATION,
     CandidateBuildRenderError, candidate_bundle_secret, render_candidate_build_job,

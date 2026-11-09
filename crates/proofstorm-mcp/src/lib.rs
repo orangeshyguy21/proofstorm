@@ -68,6 +68,7 @@ use proofstorm_core::{
 };
 use proofstorm_kube::{
     CANDIDATE_CANCEL_ANNOTATION, ProofstormCandidateBuild, ProofstormCandidateBuildSpec,
+    apply_patch,
 };
 use proofstorm_store::{Draft, Store, StoreError, Workspace};
 use rmcp::{
@@ -2994,7 +2995,7 @@ impl KubernetesRuntime {
                 .patch(
                     &candidate.resource_name,
                     &PatchParams::apply("proofstorm-mcp").force(),
-                    &Patch::Apply(&resource),
+                    &apply_patch(&resource),
                 )
                 .await
                 .map_err(kube_error)?
@@ -3039,7 +3040,7 @@ impl KubernetesRuntime {
             .patch(
                 &proofstorm_kube::candidate_bundle_secret(&candidate.resource_name),
                 &PatchParams::apply("proofstorm-mcp").force(),
-                &Patch::Apply(&secret),
+                &apply_patch(&secret),
             )
             .await
             .map_err(kube_error)?;

@@ -1608,13 +1608,12 @@ pub fn render_postgres_component(
                         ],
                         "ports": [{"name": "postgres", "containerPort": postgres_port}],
                         "securityContext": container_security(),
-                        "readinessProbe": {
-                            // The entrypoint's temporary bootstrap server only
-                            // listens on a Unix socket. Consumers need TCP.
-                            "exec": {"command": ["pg_isready", "-h", "127.0.0.1", "-p", postgres_port.to_string(), "-U", POSTGRES_OWNER, "-d", "postgres"]},
-                            "periodSeconds": 3,
-                            "failureThreshold": 40
-                        },
+                        // The entrypoint's temporary bootstrap server only
+                        // listens on a Unix socket. Consumers need TCP.
+                        "startupProbe": startup_probe(&json!({
+                            "exec": {"command": ["pg_isready", "-h", "127.0.0.1", "-p", postgres_port.to_string(), "-U", POSTGRES_OWNER, "-d", "postgres"]}
+                        })),
+                        "readinessProbe": tcp_readiness(postgres_port),
                         "volumeMounts": [{"name": "data", "mountPath": "/var/lib/postgresql/data"}]
                     }]
                 }
@@ -1767,11 +1766,10 @@ pub fn render_redis_component(
                     "securityContext": container_security(),
                     // Keep the container limit above the cache size, with room for Redis itself.
                     "resources": {"limits": {"memory": format!("{}Mi", (maxmemory_mb + 64).max(512))}},
-                    "readinessProbe": {
-                        "exec": {"command": ["sh", "-c", "redis-cli --no-auth-warning -a \"$REDIS_PASSWORD\" ping | grep -qx PONG"]},
-                        "periodSeconds": 3,
-                        "failureThreshold": 40
-                    }
+                    "startupProbe": startup_probe(&json!({
+                        "exec": {"command": ["sh", "-c", "redis-cli --no-auth-warning -a \"$REDIS_PASSWORD\" ping | grep -qx PONG"]}
+                    })),
+                    "readinessProbe": tcp_readiness(redis_port)
                 }]
             }
         }}
@@ -1832,6 +1830,7 @@ pub fn render_bitcoin_component(
         &json!({
             "exec": {"command": ["bitcoin-cli", "-regtest", format!("-rpcuser={RPC_USER}"), format!("-rpcpassword={RPC_PASSWORD}"), "getblockchaininfo"]}
         }),
+        plan.target_descriptor.ports.get("rpc").copied(),
         Some(plan),
     ))?);
     Ok(rendered)
@@ -1896,6 +1895,7 @@ pub fn render_lnd_component(
         &json!({
             "exec": {"command": ["lncli", "--lnddir=/home/lnd/.lnd", "--network=regtest", "getinfo"]}
         }),
+        plan.target_descriptor.ports.get("rpc").copied(),
         Some(plan),
     ))?);
     Ok(rendered)
@@ -1951,6 +1951,8 @@ pub fn render_cln_component(
         &json!({
             "exec": {"command": ["lightning-cli", "--lightning-dir=/home/cln/.lightning", "--network=regtest", "getinfo"]}
         }),
+        // Its RPC is a Unix socket; the p2p port opens once lightningd runs.
+        plan.target_descriptor.ports.get("p2p").copied(),
         Some(plan),
     ))?);
     Ok(rendered)
@@ -2024,7 +2026,8 @@ pub fn render_cdk_component(
             "env": runtime.env,
             "ports": runtime.ports,
             "securityContext": container_security(),
-            "readinessProbe": {"exec": {"command": ["sh", "-ec", format!("wget -q -T 1 -O /dev/null http://127.0.0.1:{http_port}/v1/info && cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info >/dev/null")]}, "timeoutSeconds": 3, "periodSeconds": 3, "failureThreshold": 40},
+            "startupProbe": startup_probe(&json!({"exec": {"command": ["sh", "-ec", format!("wget -q -T 1 -O /dev/null http://127.0.0.1:{http_port}/v1/info && cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info >/dev/null")]}})),
+            "readinessProbe": tcp_readiness(http_port),
             "volumeMounts": runtime.volume_mounts
         }], "volumes": runtime.volumes
     });
@@ -2710,19 +2713,18 @@ pub fn render_nutshell_mint_component(
                     "ports": [{"name": "http", "containerPort": http_port}],
                     "securityContext": container_security(),
                     // Nutshell excludes loopback from its HTTP rate limiter. An
-                    // exec probe keeps the application-level readiness check
+                    // exec startup check keeps the application-level request
                     // local, so Kubernetes health traffic cannot consume a
-                    // user's global request quota. The separate protocol
-                    // prober checks the Service-DNS path over TCP.
-                    "readinessProbe": {
+                    // user's global request quota; readiness after that is a
+                    // TCP connect, which sends no HTTP request at all. The
+                    // separate protocol prober checks the Service-DNS path.
+                    "startupProbe": startup_probe(&json!({
                         "exec": {"command": [
                             crate::drivers::DRIVER_PATH, "ready", "nutshell",
                             format!("http://127.0.0.1:{http_port}/v1/info")
-                        ]},
-                        "timeoutSeconds": 3,
-                        "periodSeconds": 3,
-                        "failureThreshold": 40
-                    },
+                        ]}
+                    })),
+                    "readinessProbe": tcp_readiness(http_port),
                     "volumeMounts": volume_mounts
                 }], "volumes": volumes
             }
@@ -3238,7 +3240,10 @@ pub fn render_workspace_component(
                     "env":[{"name":"HOME","value":"/workspace"},{"name":"PROOFSTORM_WORKSPACE","value":"/workspace"},{"name":"PROOFSTORM_RUNTIME_IMAGE","value":plan.execution_context.image}],
                     "securityContext": container_security(),
                     "resources":{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"memory":"1Gi"}},
-                    "readinessProbe":{"exec":{"command":[proofstorm_core::workspace::WORKSPACE_RUNNER,"workspace","request","{\"kind\":\"ping\"}"]},"timeoutSeconds":3,"periodSeconds":3},
+                    // `workspace serve` opens its health port only once its control
+                    // socket accepts, so a TCP connect is the same truth as its ping.
+                    "startupProbe":{"tcpSocket":{"port":proofstorm_core::workspace::WORKSPACE_HEALTH_PORT},"periodSeconds":2,"failureThreshold":150},
+                    "readinessProbe":tcp_readiness(proofstorm_core::workspace::WORKSPACE_HEALTH_PORT),
                     "volumeMounts":[{"name":"workspace","mountPath":"/workspace"}]
                 }],"volumes":[{"name":"workspace","persistentVolumeClaim":{"claimName":data_name}}]
             }
@@ -3295,9 +3300,11 @@ pub fn render_cdk_wallet_component(
         .expect("pod spec")
         .containers[0];
     container.command = Some(vec!["/bin/sh".into(), "-c".into(), "umask 077; mkdir -p /wallet/cdk; trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done".into()]);
-    container.readiness_probe = Some(resource(
-        json!({"exec": {"command": ["/bin/sh", "-c", "test -w /wallet/cdk && cdk-cli --version"]}, "timeoutSeconds": 3}),
-    )?);
+    // A sleep loop with no server: once the wallet directory and CLI check out
+    // there is nothing left to watch, so it gets a startup probe and no readiness.
+    container.startup_probe = Some(resource(startup_probe(
+        &json!({"exec": {"command": ["/bin/sh", "-c", "test -w /wallet/cdk && cdk-cli --version"]}}),
+    ))?);
     Ok(rendered)
 }
 
@@ -3337,8 +3344,13 @@ pub fn render_cocod_wallet_component(
         "-c".into(),
         "umask 077; unset COCOD_URL; exec cocod daemon".into(),
     ]);
-    let probe = json!({"exec":{"command":[crate::drivers::DRIVER_PATH,"ready","cocod"]},"timeoutSeconds":3,"periodSeconds":3});
-    container.readiness_probe = Some(resource(probe)?);
+    // The daemon listens on loopback only, so the kubelet can't reach it over
+    // TCP: start fast, then check rarely by exec.
+    let check = json!({"exec":{"command":[crate::drivers::DRIVER_PATH,"ready","cocod"]},"timeoutSeconds":3});
+    container.startup_probe = Some(resource(startup_probe(&check))?);
+    let mut readiness = check;
+    readiness["periodSeconds"] = json!(60);
+    container.readiness_probe = Some(resource(readiness)?);
     Ok(rendered)
 }
 
@@ -3374,6 +3386,29 @@ fn render_cli_wallet_workspace(
     Ok(rendered)
 }
 
+/// The startup probe of a long-running component: its exec `check` (which can use
+/// credentials, TLS or a local socket) proves the application is really up. It
+/// runs every 2 s until it first passes, then never again. A failing startup
+/// probe restarts the container, so the budget is 30 minutes, not readiness's
+/// old 2: a slow bitcoind or LND sync must not be killed.
+pub(crate) fn startup_probe(check: &Value) -> Value {
+    let mut probe = json!({"timeoutSeconds": 3, "periodSeconds": 2, "failureThreshold": 900});
+    probe
+        .as_object_mut()
+        .expect("probe object")
+        .extend(check.as_object().expect("probe object").clone());
+    probe
+}
+
+/// Readiness after startup: the kubelet itself checks that `port` accepts TCP,
+/// which starts no process in the pod. Exec readiness probes every 3 s were
+/// about 167 runc starts a second at 500 pods and took proofnode's load past
+/// 500 (scale-500, 2026-11-09). Ongoing application health is the protocol
+/// prober's job; a dead port still drops the pod from its Service in 30 s.
+pub(crate) fn tcp_readiness(port: u16) -> Value {
+    json!({"tcpSocket": {"port": port}, "periodSeconds": 10, "failureThreshold": 3})
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "uniform adapter resource contract"
@@ -3387,6 +3422,7 @@ fn stateful_set(
     args: &[String],
     data_mount: &str,
     readiness_probe: &Value,
+    ready_port: Option<u16>,
     plan_identity: Option<&ComponentPlanContract>,
 ) -> Value {
     let labels = labels(instance_key, Some(component));
@@ -3396,10 +3432,15 @@ fn stateful_set(
         "readinessProbe": {"periodSeconds": 3, "failureThreshold": 40},
         "volumeMounts": [{"name": "data", "mountPath": data_mount}]
     });
-    container["readinessProbe"]
-        .as_object_mut()
-        .expect("probe object")
-        .extend(readiness_probe.as_object().expect("probe object").clone());
+    if let Some(port) = ready_port {
+        container["startupProbe"] = startup_probe(readiness_probe);
+        container["readinessProbe"] = tcp_readiness(port);
+    } else {
+        container["readinessProbe"]
+            .as_object_mut()
+            .expect("probe object")
+            .extend(readiness_probe.as_object().expect("probe object").clone());
+    }
     if let Some(command) = command {
         container["command"] = json!(command);
     }

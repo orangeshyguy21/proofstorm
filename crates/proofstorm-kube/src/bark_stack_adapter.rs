@@ -62,6 +62,7 @@ pub(super) fn workload(plan: &ComponentPlanContract, command: &str, readiness: &
         &[],
         "/data",
         readiness,
+        None,
         Some(plan),
     )
 }

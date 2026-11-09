@@ -1555,7 +1555,7 @@
       ],
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:e2130bb2f119bbf52cab4972a85364c271832640d52a6cd6b985b6ecb32ddbca",
+      "rollout_digest": "sha256:639e34299693eef062c9435effdc98a1addccac13ccc5248f3617a1fffd0dc0d",
       "storage": [
         {
           "claim_name": "workspace-data"
@@ -1666,16 +1666,11 @@
                     }
                   ],
                   "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "sh",
-                        "-ec",
-                        "wget -q -T 1 -O /dev/null http://127.0.0.1:3338/v1/info && cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info >/dev/null"
-                      ]
-                    },
-                    "failureThreshold": 40,
-                    "periodSeconds": 3,
-                    "timeoutSeconds": 3
+                    "failureThreshold": 3,
+                    "periodSeconds": 10,
+                    "tcpSocket": {
+                      "port": 3338
+                    }
                   },
                   "resources": {
                     "limits": {
@@ -1693,6 +1688,18 @@
                         "ALL"
                       ]
                     }
+                  },
+                  "startupProbe": {
+                    "exec": {
+                      "command": [
+                        "sh",
+                        "-ec",
+                        "wget -q -T 1 -O /dev/null http://127.0.0.1:3338/v1/info && cdk-mint-cli --addr https://127.0.0.1:8086 --work-dir /management-client get-info >/dev/null"
+                      ]
+                    },
+                    "failureThreshold": 900,
+                    "periodSeconds": 2,
+                    "timeoutSeconds": 3
                   },
                   "volumeMounts": [
                     {
@@ -2090,7 +2097,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:e2130bb2f119bbf52cab4972a85364c271832640d52a6cd6b985b6ecb32ddbca"
+                "proofstorm.dev/rollout-digest": "sha256:639e34299693eef062c9435effdc98a1addccac13ccc5248f3617a1fffd0dc0d"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -2126,16 +2133,11 @@
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "/opt/proofstorm/workspace",
-                        "workspace",
-                        "request",
-                        "{\"kind\":\"ping\"}"
-                      ]
-                    },
-                    "periodSeconds": 3,
-                    "timeoutSeconds": 3
+                    "failureThreshold": 3,
+                    "periodSeconds": 10,
+                    "tcpSocket": {
+                      "port": 65531
+                    }
                   },
                   "resources": {
                     "limits": {
@@ -2152,6 +2154,13 @@
                       "drop": [
                         "ALL"
                       ]
+                    }
+                  },
+                  "startupProbe": {
+                    "failureThreshold": 150,
+                    "periodSeconds": 2,
+                    "tcpSocket": {
+                      "port": 65531
                     }
                   },
                   "volumeMounts": [
@@ -2723,17 +2732,11 @@
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "bitcoin-cli",
-                        "-regtest",
-                        "-rpcuser=proofstorm",
-                        "-rpcpassword=proofstorm-regtest-only",
-                        "getblockchaininfo"
-                      ]
-                    },
-                    "failureThreshold": 40,
-                    "periodSeconds": 3
+                    "failureThreshold": 3,
+                    "periodSeconds": 10,
+                    "tcpSocket": {
+                      "port": 18443
+                    }
                   },
                   "resources": {
                     "limits": {
@@ -2751,6 +2754,20 @@
                         "ALL"
                       ]
                     }
+                  },
+                  "startupProbe": {
+                    "exec": {
+                      "command": [
+                        "bitcoin-cli",
+                        "-regtest",
+                        "-rpcuser=proofstorm",
+                        "-rpcpassword=proofstorm-regtest-only",
+                        "getblockchaininfo"
+                      ]
+                    },
+                    "failureThreshold": 900,
+                    "periodSeconds": 2,
+                    "timeoutSeconds": 3
                   },
                   "volumeMounts": [
                     {
@@ -2867,17 +2884,11 @@
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "bitcoin-cli",
-                        "-regtest",
-                        "-rpcuser=proofstorm",
-                        "-rpcpassword=proofstorm-regtest-only",
-                        "getblockchaininfo"
-                      ]
-                    },
-                    "failureThreshold": 40,
-                    "periodSeconds": 3
+                    "failureThreshold": 3,
+                    "periodSeconds": 10,
+                    "tcpSocket": {
+                      "port": 18443
+                    }
                   },
                   "resources": {
                     "limits": {
@@ -2895,6 +2906,20 @@
                         "ALL"
                       ]
                     }
+                  },
+                  "startupProbe": {
+                    "exec": {
+                      "command": [
+                        "bitcoin-cli",
+                        "-regtest",
+                        "-rpcuser=proofstorm",
+                        "-rpcpassword=proofstorm-regtest-only",
+                        "getblockchaininfo"
+                      ]
+                    },
+                    "failureThreshold": 900,
+                    "periodSeconds": 2,
+                    "timeoutSeconds": 3
                   },
                   "volumeMounts": [
                     {
@@ -3015,16 +3040,11 @@
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "lightning-cli",
-                        "--lightning-dir=/home/cln/.lightning",
-                        "--network=regtest",
-                        "getinfo"
-                      ]
-                    },
-                    "failureThreshold": 40,
-                    "periodSeconds": 3
+                    "failureThreshold": 3,
+                    "periodSeconds": 10,
+                    "tcpSocket": {
+                      "port": 9735
+                    }
                   },
                   "resources": {
                     "limits": {
@@ -3042,6 +3062,19 @@
                         "ALL"
                       ]
                     }
+                  },
+                  "startupProbe": {
+                    "exec": {
+                      "command": [
+                        "lightning-cli",
+                        "--lightning-dir=/home/cln/.lightning",
+                        "--network=regtest",
+                        "getinfo"
+                      ]
+                    },
+                    "failureThreshold": 900,
+                    "periodSeconds": 2,
+                    "timeoutSeconds": 3
                   },
                   "volumeMounts": [
                     {
@@ -3163,16 +3196,11 @@
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "lncli",
-                        "--lnddir=/home/lnd/.lnd",
-                        "--network=regtest",
-                        "getinfo"
-                      ]
-                    },
-                    "failureThreshold": 40,
-                    "periodSeconds": 3
+                    "failureThreshold": 3,
+                    "periodSeconds": 10,
+                    "tcpSocket": {
+                      "port": 10009
+                    }
                   },
                   "resources": {
                     "limits": {
@@ -3190,6 +3218,19 @@
                         "ALL"
                       ]
                     }
+                  },
+                  "startupProbe": {
+                    "exec": {
+                      "command": [
+                        "lncli",
+                        "--lnddir=/home/lnd/.lnd",
+                        "--network=regtest",
+                        "getinfo"
+                      ]
+                    },
+                    "failureThreshold": 900,
+                    "periodSeconds": 2,
+                    "timeoutSeconds": 3
                   },
                   "volumeMounts": [
                     {

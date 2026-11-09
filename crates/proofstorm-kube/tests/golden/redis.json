@@ -218,15 +218,11 @@
                     }
                   ],
                   "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "sh",
-                        "-c",
-                        "redis-cli --no-auth-warning -a \"$REDIS_PASSWORD\" ping | grep -qx PONG"
-                      ]
-                    },
-                    "failureThreshold": 40,
-                    "periodSeconds": 3
+                    "failureThreshold": 3,
+                    "periodSeconds": 10,
+                    "tcpSocket": {
+                      "port": 6379
+                    }
                   },
                   "resources": {
                     "limits": {
@@ -240,6 +236,18 @@
                         "ALL"
                       ]
                     }
+                  },
+                  "startupProbe": {
+                    "exec": {
+                      "command": [
+                        "sh",
+                        "-c",
+                        "redis-cli --no-auth-warning -a \"$REDIS_PASSWORD\" ping | grep -qx PONG"
+                      ]
+                    },
+                    "failureThreshold": 900,
+                    "periodSeconds": 2,
+                    "timeoutSeconds": 3
                   }
                 }
               ],

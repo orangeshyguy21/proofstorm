@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:0d72d92a88708ec7e07228574b37ac21cbaa8666c3582d9b0e26b5ecbc622be8",
+  "catalog_digest": "sha256:a6d70fd910040f8b5fbd9737cf0bc4ab38fbd4a737e8678f65c478e0e1fc366c",
   "entries": [
     {
       "implementation": "bark-server",
@@ -2824,7 +2824,7 @@
       "release_channel": "prerelease",
       "support_lifecycle": "preferred",
       "config_version": "workspace/0.1/v1",
-      "config_schema_digest": "sha256:5b0d08ebfc2eb28dbda21d0a609b5efb3278401b851bb8b8650d4dabe98bda9f",
+      "config_schema_digest": "sha256:2d669b1ed536666ea8f2ef2e95022564fbd9f4ae1a77a0def6911b1055822ace",
       "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
       "fields": {
         "runtime_image": {

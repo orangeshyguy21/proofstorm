@@ -275,6 +275,7 @@ pub fn cap_public_streams(mut receipt: serde_json::Value) -> serde_json::Value {
             let cost = match character {
                 '"' | '\\' | '\n' | '\r' | '\t' | '\u{0008}' | '\u{000c}' => 2,
                 '\u{0000}'..='\u{001f}' => 6,
+                character if crate::apply_json::escapes(character) => 6,
                 _ => character.len_utf8(),
             };
             if encoded + cost > 12 * 1024 {
@@ -368,5 +369,20 @@ mod tests {
             assert!(project_receipt(input, &fields).is_err());
         }
         assert!(project_receipt(input, &["payment_preimage".into()]).is_err());
+    }
+
+    #[test]
+    fn capped_streams_fit_their_budget_as_apply_json() {
+        // `grep -a` over a binary: DEL and the C1 controls are escapes too.
+        for unit in ["x", "é", "\u{1}", "\u{7f}", "\u{9f}", "\u{2028}"] {
+            let receipt = cap_public_streams(serde_json::json!({"stdout": unit.repeat(20_000)}));
+            assert_eq!(receipt["output_truncated"], true);
+            let encoded = crate::apply_json::to_vec(&receipt["stdout"]).unwrap();
+            assert!(
+                (12 * 1024 - 6..=12 * 1024).contains(&encoded.len()),
+                "{unit:?} encodes to {} bytes",
+                encoded.len()
+            );
+        }
     }
 }

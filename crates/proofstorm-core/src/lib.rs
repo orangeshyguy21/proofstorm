@@ -113,6 +113,7 @@ pub use runtime_settings::{
 };
 pub use schema::schema_documents;
 pub use validation::{ValidationIssue, ValidationReport, is_cashu_unit, validate_cell};
+pub mod apply_json;
 pub mod native;
 pub mod native_settings;
 pub mod workspace;

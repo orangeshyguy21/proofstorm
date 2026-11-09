@@ -9,7 +9,7 @@ use crate::{NO_LIMIT, ResourceAmount, quantity_value};
 /// The controller's CPU request. The chart's values must match these defaults.
 pub const CONTROLLER_CPU_REQUEST: &str = "250m";
 pub const CONTROLLER_MEMORY_REQUEST: &str = "64Mi";
-pub const CONTROLLER_MEMORY_LIMIT: &str = "1Gi";
+pub const CONTROLLER_MEMORY_LIMIT: &str = "4Gi";
 
 /// How much work the controller runs at once, and how long a one-off action
 /// may wait to start before it fails without running.
@@ -433,19 +433,19 @@ mod tests {
         assert_eq!(settings.get("controller.memory.limit"), None);
 
         let bad: RuntimeSettings = serde_json::from_value(serde_json::json!({"controller": {
-            "memory": {"request": "2Gi", "limit": "1Gi"}
+            "memory": {"request": "8Gi", "limit": "4Gi"}
         }}))
         .unwrap();
         assert!(bad.validate().unwrap_err().contains("must not exceed"));
-        // An unset value is its default: 250m CPU requested, a 1Gi memory limit.
+        // An unset value is its default: 250m CPU requested, a 4Gi memory limit.
         for (setting, message) in [
             (
                 serde_json::json!({"cpu": {"limit": "100m"}}),
                 "controller.cpu.request (250m by default) must not exceed controller.cpu.limit (100m)",
             ),
             (
-                serde_json::json!({"memory": {"request": "2Gi"}}),
-                "controller.memory.request (2Gi) must not exceed controller.memory.limit (1Gi by default)",
+                serde_json::json!({"memory": {"request": "8Gi"}}),
+                "controller.memory.request (8Gi) must not exceed controller.memory.limit (4Gi by default)",
             ),
             (
                 serde_json::json!({"memory": {"limit": "32Mi"}}),

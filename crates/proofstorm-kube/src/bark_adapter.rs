@@ -210,6 +210,7 @@ fn workload(
         &[],
         "/data",
         &json!({"exec":{"command":[crate::drivers::DRIVER_PATH,"processor-settings",format!("https://127.0.0.1:{port}"),"/processor-client/tls",BARK_PROCESSOR,methods]},"timeoutSeconds":3}),
+        None,
         Some(plan),
     );
     let pod = &mut workload["spec"]["template"]["spec"];

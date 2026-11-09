@@ -210,16 +210,6 @@
                   "image": "proofstorm-registry.localhost:5000/cdk-cli-wallet@sha256:a48b427d28f1291a88e280bc35ca1f45c1ad133f2afe713eff208ecc1ac56242",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
-                  "readinessProbe": {
-                    "exec": {
-                      "command": [
-                        "/bin/sh",
-                        "-c",
-                        "test -w /wallet/cdk && cdk-cli --version"
-                      ]
-                    },
-                    "timeoutSeconds": 3
-                  },
                   "securityContext": {
                     "allowPrivilegeEscalation": false,
                     "capabilities": {
@@ -227,6 +217,18 @@
                         "ALL"
                       ]
                     }
+                  },
+                  "startupProbe": {
+                    "exec": {
+                      "command": [
+                        "/bin/sh",
+                        "-c",
+                        "test -w /wallet/cdk && cdk-cli --version"
+                      ]
+                    },
+                    "failureThreshold": 900,
+                    "periodSeconds": 2,
+                    "timeoutSeconds": 3
                   },
                   "volumeMounts": [
                     {
