@@ -44,7 +44,6 @@ use kube::{
 };
 use proofstorm_core::CandidateBuildPhase;
 use proofstorm_core::WorkloadControllerKind;
-use proofstorm_kube::CANDIDATE_BUILD_LABEL;
 use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionAdmissionError, ActionPhase, ActionRenderError, AdapterError,
     AuthenticationConformanceResult, AuthenticationProtectedSpendResult,
@@ -59,6 +58,7 @@ use proofstorm_kube::{
     render_candidate_build_job, render_cell, render_cell_action_job, render_cell_network_policy,
     render_component_network_policy, render_security_spine,
 };
+use proofstorm_kube::{CANDIDATE_BUILD_LABEL, apply_patch};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -478,7 +478,7 @@ async fn reconcile_candidate_build(
         jobs.patch(
             &job_name,
             &PatchParams::apply(FIELD_MANAGER).force(),
-            &Patch::Apply(&job),
+            &apply_patch(&job),
         )
         .await?;
         patch_candidate_status(
@@ -702,7 +702,7 @@ async fn patch_candidate_status(
         .patch_status(
             &build.name_any(),
             &PatchParams::apply(FIELD_MANAGER).force(),
-            &Patch::Apply(serde_json::json!({
+            &apply_patch(serde_json::json!({
                 "apiVersion": "proofstorm.dev/v1alpha1",
                 "kind": "ProofstormCandidateBuild",
                 "status": status,
@@ -909,7 +909,7 @@ async fn reconcile_action(
         jobs.patch(
             &name,
             &PatchParams::apply(FIELD_MANAGER).force(),
-            &Patch::Apply(&job),
+            &apply_patch(&job),
         )
         .await?;
         patch_action_status(
@@ -1450,7 +1450,7 @@ async fn write_policy(
         .patch(
             &desired.name_any(),
             &PatchParams::apply(FIELD_MANAGER).force(),
-            &Patch::Apply(&desired),
+            &apply_patch(&desired),
         )
         .await?;
     Ok(())
@@ -1813,7 +1813,7 @@ async fn patch_action_status(
         .patch_status(
             &action.name_any(),
             &PatchParams::apply(FIELD_MANAGER).force(),
-            &Patch::Apply(patch),
+            &apply_patch(patch),
         )
         .await?;
     Ok(())
@@ -2028,12 +2028,12 @@ async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error
     let patch = PatchParams::apply(FIELD_MANAGER).force();
 
     Api::<Namespace>::all(client.clone())
-        .patch(&namespace_name, &patch, &Patch::Apply(&rendered.namespace))
+        .patch(&namespace_name, &patch, &apply_patch(&rendered.namespace))
         .await?;
     let quotas = Api::<ResourceQuota>::namespaced(client.clone(), &namespace_name);
     if let Some(quota) = &rendered.quota {
         quotas
-            .patch("proofstorm-instance-quota", &patch, &Patch::Apply(quota))
+            .patch("proofstorm-instance-quota", &patch, &apply_patch(quota))
             .await?;
     } else {
         // A quota is the user's choice; remove one an earlier revision or version set.
@@ -2047,21 +2047,21 @@ async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error
         .patch(
             "proofstorm-container-limits",
             &patch,
-            &Patch::Apply(&rendered.limits),
+            &apply_patch(&rendered.limits),
         )
         .await?;
     Api::<NetworkPolicy>::namespaced(client.clone(), &namespace_name)
         .patch(
             "default-deny-all",
             &patch,
-            &Patch::Apply(&rendered.default_deny),
+            &apply_patch(&rendered.default_deny),
         )
         .await?;
     Api::<ServiceAccount>::namespaced(client.clone(), &namespace_name)
         .patch(
             "proofstorm-workload",
             &patch,
-            &Patch::Apply(&rendered.service_account),
+            &apply_patch(&rendered.service_account),
         )
         .await?;
     let client = context.client.clone();
@@ -2101,7 +2101,7 @@ async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error
             .patch(
                 resource.metadata.name.as_deref().unwrap_or_default(),
                 &patch,
-                &Patch::Apply(resource),
+                &apply_patch(resource),
             )
             .await?;
     }
@@ -2114,7 +2114,7 @@ async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error
             .patch(
                 resource.metadata.name.as_deref().unwrap_or_default(),
                 &patch,
-                &Patch::Apply(resource),
+                &apply_patch(resource),
             )
             .await?;
     }
@@ -2127,7 +2127,7 @@ async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error
             .patch(
                 resource.metadata.name.as_deref().unwrap_or_default(),
                 &patch,
-                &Patch::Apply(resource),
+                &apply_patch(resource),
             )
             .await?;
     }
@@ -2156,7 +2156,7 @@ async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error
             .patch(
                 resource.metadata.name.as_deref().unwrap_or_default(),
                 &patch,
-                &Patch::Apply(&resource),
+                &apply_patch(&resource),
             )
             .await?;
     }
@@ -2191,7 +2191,7 @@ async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error
             .patch(
                 name,
                 &patch,
-                &Patch::Apply(deployment_apply_document(&resource)),
+                &apply_patch(deployment_apply_document(&resource)),
             )
             .await?;
     }
@@ -2208,7 +2208,7 @@ async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error
             .patch(
                 resource.metadata.name.as_deref().unwrap_or_default(),
                 &patch,
-                &Patch::Apply(resource),
+                &apply_patch(resource),
             )
             .await?;
     }
@@ -2250,7 +2250,7 @@ async fn apply(cell: Arc<LoadedCell>, context: &Context) -> Result<Action, Error
     }
     if !inventory_unchanged {
         configs
-            .patch(&inventory_name, &patch, &Patch::Apply(inventory_resource))
+            .patch(&inventory_name, &patch, &apply_patch(inventory_resource))
             .await?;
     }
 
@@ -2657,7 +2657,7 @@ async fn patch_status(
             .patch_status(
                 &cell.name_any(),
                 &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(patch),
+                &apply_patch(patch),
             )
             .await?;
     }
@@ -2671,7 +2671,7 @@ async fn patch_status(
             .patch_status(
                 &cell.name_any(),
                 &PatchParams::apply(HEARTBEAT_FIELD_MANAGER).force(),
-                &Patch::Apply(serde_json::json!({"apiVersion": "proofstorm.dev/v1alpha1", "kind": "ProofstormCell", "status": status})),
+                &apply_patch(serde_json::json!({"apiVersion": "proofstorm.dev/v1alpha1", "kind": "ProofstormCell", "status": status})),
             )
             .await?;
     }
@@ -2720,9 +2720,9 @@ async fn write_component_objects(
                 let name = object.name_any();
                 let params = PatchParams::apply(FIELD_MANAGER).force();
                 if !exists {
-                    api.patch(&name, &params, &Patch::Apply(&object)).await?;
+                    api.patch(&name, &params, &apply_patch(&object)).await?;
                 }
-                api.patch_status(&name, &params, &Patch::Apply(status_patch))
+                api.patch_status(&name, &params, &apply_patch(status_patch))
                     .await?;
                 Ok::<_, Error>(())
             }
@@ -2767,7 +2767,8 @@ fn enforce_status_budget<T: serde::Serialize>(
     status: &T,
     maximum: usize,
 ) -> Result<(), Error> {
-    let actual = serde_json::to_vec(status)
+    // Measure the bytes the apply sends, escapes included.
+    let actual = proofstorm_core::apply_json::to_vec(status)
         .map_err(|_| Error::ControllerInvariant("typed status did not serialize"))?
         .len();
     if actual <= maximum {
@@ -2823,7 +2824,7 @@ async fn write_teardown_receipt(
         .patch(
             &name,
             &PatchParams::apply(FIELD_MANAGER).force(),
-            &Patch::Apply(receipt),
+            &apply_patch(receipt),
         )
         .await?;
     Ok(())
@@ -3241,7 +3242,7 @@ async fn persist_authentication_session(
         .patch(
             &name,
             &PatchParams::apply(FIELD_MANAGER).force(),
-            &Patch::Apply(secret),
+            &apply_patch(secret),
         )
         .await?;
     Ok(())

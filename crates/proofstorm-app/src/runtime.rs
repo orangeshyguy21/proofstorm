@@ -16,6 +16,7 @@ use proofstorm_kube::{
     ACTION_CANCEL_ANNOTATION, ActionPhase, CellAction, CellPhase,
     FINISHED_ACTION_RETENTION_SECONDS, INSTANCE_LABEL, LoadedCell, ProofstormCell,
     ProofstormCellAction, ProofstormCellActionSpec, ProofstormCellSpec, ProofstormComponent,
+    apply_patch,
 };
 use std::collections::BTreeMap;
 
@@ -242,7 +243,7 @@ impl Runtime {
             .patch(
                 name,
                 &PatchParams::apply("proofstorm-mcp"),
-                &Patch::Apply(action),
+                &apply_patch(action),
             )
             .await
             .map_err(kube_error)?;

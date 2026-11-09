@@ -92,7 +92,9 @@ fn pod_ready(pod: &Pod) -> bool {
 fn bound_artifact(artifact: &mut BTreeMap<String, Value>) {
     // JSON escaping can multiply the byte count. Bound the encoded body, not
     // just the raw API log, so diagnostics cannot stall action reconciliation.
-    while serde_json::to_vec(artifact).is_ok_and(|bytes| bytes.len() > ARTIFACT_TARGET_BYTES) {
+    while proofstorm_core::apply_json::to_vec(artifact)
+        .is_ok_and(|bytes| bytes.len() > ARTIFACT_TARGET_BYTES)
+    {
         let field = ["log", "previous_log"]
             .into_iter()
             .max_by_key(|field| {
@@ -447,12 +449,22 @@ mod tests {
 
     #[test]
     fn fuzz_log_content_stays_within_encoded_artifact_budget() {
-        for text in ["\0", "🦀", "\"", "\\", "\n", "ordinary log line\n"] {
+        for text in [
+            "\0",
+            "\u{7f}",
+            "\u{9f}",
+            "🦀",
+            "\"",
+            "\\",
+            "\n",
+            "ordinary log line\n",
+        ] {
             for length in [0, 1, 12_288, 40_000] {
                 let mut artifact = super::super::status_object(json!({"log": text.repeat(length),
                     "previous_log": text.repeat(length), "container_state": {"reason": "Error"}}));
                 bound_artifact(&mut artifact);
-                assert!(serde_json::to_vec(&artifact).unwrap().len() <= ARTIFACT_TARGET_BYTES);
+                let encoded = proofstorm_core::apply_json::to_vec(&artifact).unwrap();
+                assert!(encoded.len() <= ARTIFACT_TARGET_BYTES);
                 assert_eq!(artifact["container_state"]["reason"], "Error");
             }
         }
