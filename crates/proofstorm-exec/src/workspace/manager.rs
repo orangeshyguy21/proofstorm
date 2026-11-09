@@ -14,6 +14,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
+    net::TcpListener,
     os::unix::{fs::PermissionsExt, net::UnixListener},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -66,8 +67,13 @@ pub(super) fn serve(root: &Path) -> Result<()> {
     let listener = UnixListener::bind(&socket)?;
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
+    // Open only once the control socket accepts, so a connect means "ready".
+    let health = TcpListener::bind(("0.0.0.0", proofstorm_core::workspace::WORKSPACE_HEALTH_PORT))?;
+    health.set_nonblocking(true)?;
     while !stopped.load(Ordering::SeqCst) {
         manager.reap()?;
+        // The kubelet's TCP probe only needs the handshake; close each connection.
+        while health.accept().is_ok() {}
         match listener.accept() {
             Ok((mut stream, _)) => {
                 stream.set_read_timeout(Some(Duration::from_secs(2)))?;

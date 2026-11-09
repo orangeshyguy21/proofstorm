@@ -15,6 +15,10 @@ pub mod wire;
 
 pub const WORKSPACE_PATH: &str = "/workspace";
 pub const WORKSPACE_RUNNER: &str = "/opt/proofstorm/workspace";
+/// TCP port `workspace serve` opens once its control socket is bound, so the
+/// kubelet can check readiness without starting a process in the pod. It
+/// accepts and closes; it is never part of the workspace's Service.
+pub const WORKSPACE_HEALTH_PORT: u16 = 65_531;
 pub const MAX_TASKS: usize = 128;
 pub const MAX_ACTIVE_TASKS: usize = 16;
 pub const MAX_SOURCE_BYTES: u64 = 16 * 1024 * 1024;

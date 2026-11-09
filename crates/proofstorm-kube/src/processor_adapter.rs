@@ -130,6 +130,7 @@ pub fn render_node(plan: &ComponentPlanContract) -> Result<RenderedComponent, Ad
         &["/config/config.toml".into()],
         "/data",
         &json!({"exec":{"command":["ldk-server-cli","--config","/config/config.toml","--base-url",format!("127.0.0.1:{grpc}"),"get-node-info"]},"timeoutSeconds":3}),
+        Some(grpc),
         Some(plan),
     );
     let pod = &mut workload["spec"]["template"]["spec"];
@@ -224,7 +225,8 @@ pub fn render_processor(plan: &ComponentPlanContract) -> Result<RenderedComponen
             "serviceAccountName":"proofstorm-workload","automountServiceAccountToken":false,"enableServiceLinks":false,"securityContext":pod_security(1000),
             "containers":[{"name":"component","image":plan.execution_context.image,"imagePullPolicy":"IfNotPresent","command":[crate::drivers::DRIVER_PATH,"exec-ldk-processor"],"env":env,"securityContext":container_security(),
                 "ports":[{"name":"grpc","containerPort":port}],
-                "readinessProbe":{"exec":{"command":[crate::drivers::DRIVER_PATH,"processor-settings",format!("https://127.0.0.1:{port}"),"/processor-client/tls",plan.target_descriptor.backend_id]},"timeoutSeconds":3,"periodSeconds":3},
+                "startupProbe":crate::adapter::startup_probe(&json!({"exec":{"command":[crate::drivers::DRIVER_PATH,"processor-settings",format!("https://127.0.0.1:{port}"),"/processor-client/tls",plan.target_descriptor.backend_id]}})),
+                "readinessProbe":crate::adapter::tcp_readiness(port),
                 "volumeMounts":[{"name":"ldk-server","mountPath":"/ldk-server","readOnly":true},tls_mount("processor-server","/processor-server/tls"),tls_mount("processor-client","/processor-client/tls")]}],
             "initContainers":[{"name":"wait-for-ldk-server","image":plan.execution_context.image,"command":["sh","-ec",wait],"securityContext":container_security(),"volumeMounts":[{"name":"ldk-server","mountPath":"/ldk-server","readOnly":true},{"name":"proofstorm-driver","mountPath":"/opt/proofstorm","readOnly":true}]}],
             "volumes":[{"name":"ldk-server","persistentVolumeClaim":{"claimName":credentials.claim_name}},tls_volume("processor-server",id,"server"),tls_volume("processor-client",id,"client")]

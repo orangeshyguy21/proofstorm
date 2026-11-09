@@ -2031,7 +2031,8 @@ fn workspace_config_fields() -> BTreeMap<String, ConfigFieldContract> {
         ConfigDefault::Literal(json!(0)),
     );
     port.minimum = Some(0.0);
-    port.maximum = Some(65535.0);
+    // The top ports are the runner's own health port.
+    port.maximum = Some(f64::from(crate::workspace::WORKSPACE_HEALTH_PORT - 1));
     BTreeMap::from([
         (
             "runtime_image".into(),

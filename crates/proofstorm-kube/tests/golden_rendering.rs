@@ -776,7 +776,7 @@ fn keycloak_waits_for_its_actual_database_service_without_database_credentials()
             .as_ref()
             .unwrap()
             .containers[0]
-            .readiness_probe
+            .startup_probe
             .as_ref()
             .unwrap()
             .exec
@@ -924,7 +924,7 @@ fn every_cdk_backend_waits_for_its_linked_postgres_before_initialization() {
                         .as_ref()
                         .unwrap();
                     let probe = pod.containers[0]
-                        .readiness_probe
+                        .startup_probe
                         .as_ref()
                         .unwrap()
                         .exec
@@ -1091,12 +1091,15 @@ fn nutshell_probes_preserve_strict_application_limits() {
             .find(|d| d.metadata.name.as_deref() == Some(mint_id))
             .unwrap();
         let deployment = serde_json::to_value(deployment).unwrap();
-        let readiness = &deployment["spec"]["template"]["spec"]["containers"][0]["readinessProbe"];
+        let container = &deployment["spec"]["template"]["spec"]["containers"][0];
+        let startup = &container["startupProbe"];
         assert_eq!(
-            readiness["exec"]["command"][3],
+            startup["exec"]["command"][3],
             "http://127.0.0.1:3338/v1/info"
         );
-        assert!(readiness.get("httpGet").is_none());
+        // Readiness is a TCP connect: no HTTP request, so no rate-limit quota spent.
+        assert_eq!(container["readinessProbe"]["tcpSocket"]["port"], 3338);
+        assert!(container["readinessProbe"].get("httpGet").is_none());
     }
 }
 
@@ -1407,9 +1410,9 @@ fn nutshell_keycloak_link_derives_oidc_topology_and_keeps_provider_credentials_p
         Some(&json!(["mint"]))
     );
     assert_eq!(
-        mint.pointer("/spec/template/spec/containers/0/readinessProbe/exec/command/3"),
+        mint.pointer("/spec/template/spec/containers/0/startupProbe/exec/command/3"),
         Some(&json!("http://127.0.0.1:3338/v1/info")),
-        "Nutshell readiness must use its rate-limit-exempt loopback path"
+        "Nutshell's startup check must use its rate-limit-exempt loopback path"
     );
     assert!(
         mint.pointer("/spec/template/spec/containers/0/readinessProbe/httpGet")
@@ -1605,7 +1608,7 @@ fn management_is_authenticated_loopback_with_separate_certificate_projections() 
         let config = serde_json::to_string(&resources["configMaps"]).unwrap();
         assert!(config.contains("127.0.0.1"));
         assert!(config.contains("/management-server/tls"));
-        let probe = pod["containers"][0]["readinessProbe"].to_string();
+        let probe = pod["containers"][0]["startupProbe"].to_string();
         if backend == "nutshell" {
             assert!(probe.contains("/opt/proofstorm/driver"));
             assert!(probe.contains("nutshell"));
