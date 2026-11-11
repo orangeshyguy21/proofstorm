@@ -1,12 +1,14 @@
 //! Logs follow the container blocking startup, while retaining rollout context.
 use std::{collections::BTreeMap, future::Future};
 
+use futures::AsyncBufReadExt;
 use k8s_openapi::api::core::v1::{ContainerState, ContainerStatus, Pod};
 use kube::{Api, ResourceExt, api::LogParams};
 use serde_json::{Value, json};
 
-const LOG_LIMIT_BYTES: i64 = 12 * 1024;
 const ARTIFACT_TARGET_BYTES: usize = 30 * 1024;
+/// `bound_artifact` cannot keep more than this of either log.
+const LOG_TAIL_BYTES: usize = ARTIFACT_TARGET_BYTES;
 
 pub(super) async fn component_log_artifact(
     pods: &Api<Pod>,
@@ -15,9 +17,53 @@ pub(super) async fn component_log_artifact(
     observed: Vec<Pod>,
 ) -> Result<BTreeMap<String, Value>, kube::Error> {
     collect_logs(component, tail_lines, observed, |name, params| async move {
-        pods.logs(&name, &params).await
+        read_log_tail(pods, &name, &params, LOG_TAIL_BYTES).await
     })
     .await
+}
+
+/// Reads a pod log and keeps its newest `max_bytes`, returning the log and
+/// whether older bytes were dropped. Never set `limitBytes` with `tailLines`:
+/// the kubelet copies forward from the start of the tail, so its cut drops
+/// the newest lines.
+pub(super) async fn read_log_tail(
+    pods: &Api<Pod>,
+    name: &str,
+    params: &LogParams,
+    max_bytes: usize,
+) -> Result<(String, bool), kube::Error> {
+    let stream = pods.log_stream(name, params).await?;
+    let mut stream = std::pin::pin!(stream);
+    let (mut log, mut dropped) = (Vec::new(), false);
+    loop {
+        // Read from the stream's own buffer: a local one would sit in every
+        // caller's future.
+        let chunk = stream.fill_buf().await.map_err(kube::Error::ReadEvents)?;
+        if chunk.is_empty() {
+            break;
+        }
+        let read = chunk.len();
+        log.extend_from_slice(chunk);
+        stream.consume_unpin(read);
+        // Trim in batches so memory stays bounded without a copy per chunk.
+        if log.len() > 2 * max_bytes {
+            dropped |= keep_newest(&mut log, max_bytes);
+        }
+    }
+    dropped |= keep_newest(&mut log, max_bytes);
+    Ok((String::from_utf8_lossy(&log).into_owned(), dropped))
+}
+
+/// Drops all but the newest `max_bytes`, starting on a UTF-8 character.
+fn keep_newest(log: &mut Vec<u8>, max_bytes: usize) -> bool {
+    let Some(mut start) = log.len().checked_sub(max_bytes).filter(|start| *start > 0) else {
+        return false;
+    };
+    while log.get(start).is_some_and(|byte| byte & 0xC0 == 0x80) {
+        start += 1;
+    }
+    log.drain(..start);
+    true
 }
 
 fn state_summary(state: Option<&ContainerState>) -> Value {
@@ -145,38 +191,40 @@ async fn read_log<F, Fut>(
     container: Option<&str>,
     tail_lines: u32,
     previous: bool,
-) -> Result<(String, Option<Value>), kube::Error>
+) -> Result<(String, bool, Option<Value>), kube::Error>
 where
     F: FnMut(String, LogParams) -> Fut,
-    Fut: Future<Output = Result<String, kube::Error>>,
+    Fut: Future<Output = Result<(String, bool), kube::Error>>,
 {
     match fetch(
         name.to_owned(),
         LogParams {
             container: container.map(str::to_owned),
             tail_lines: Some(i64::from(tail_lines)),
-            limit_bytes: Some(LOG_LIMIT_BYTES),
             previous,
             ..LogParams::default()
         },
     )
     .await
     {
-        Ok(log) if runtime_log_error(&log) => Ok((
+        Ok((log, _)) if runtime_log_error(&log) => Ok((
             String::new(),
+            false,
             Some(json!({
                 "code": "log_unavailable", "reason": "ContainerLogsUnavailable",
                 "message": bounded_message(&log), "http_status": 200
             })),
         )),
-        Ok(log) => Ok((log, None)),
+        Ok((log, dropped)) => Ok((log, dropped, None)),
         Err(kube::Error::Api(error)) => Ok((
             String::new(),
+            false,
             Some(json!({"code": "log_unavailable", "http_status": error.code,
                 "reason": bounded_message(&error.reason), "message": bounded_message(&error.message)})),
         )),
         Err(error) => Ok((
             String::new(),
+            false,
             Some(json!({"code": "log_unavailable",
             "message": bounded_message(&error.to_string())})),
         )),
@@ -191,7 +239,7 @@ async fn collect_logs<F, Fut>(
 ) -> Result<BTreeMap<String, Value>, kube::Error>
 where
     F: FnMut(String, LogParams) -> Fut,
-    Fut: Future<Output = Result<String, kube::Error>>,
+    Fut: Future<Output = Result<(String, bool), kube::Error>>,
 {
     observed.sort_by(|left, right| {
         // Prefer a current rollout target to a newer pod being deleted.
@@ -210,7 +258,7 @@ where
         ));
     };
     let (container, status, init) = selected_container(pod);
-    let (log, unavailable) = read_log(
+    let (log, log_dropped, unavailable) = read_log(
         &mut fetch,
         &pod.name_any(),
         container.as_deref(),
@@ -225,7 +273,7 @@ where
                 .as_ref()
                 .is_some_and(|state| state.terminated.is_some())
     });
-    let (previous, previous_unavailable) = if has_previous {
+    let (previous, previous_dropped, previous_unavailable) = if has_previous {
         read_log(
             &mut fetch,
             &pod.name_any(),
@@ -235,7 +283,7 @@ where
         )
         .await?
     } else {
-        (String::new(), None)
+        (String::new(), false, None)
     };
     let summaries: Vec<_> = observed
         .iter()
@@ -254,10 +302,10 @@ where
         "restart_count": status.map(|status| status.restart_count),
         "container_state": state_summary(status.and_then(|status| status.state.as_ref())),
         "previous_container_state": state_summary(status.and_then(|status| status.last_state.as_ref())),
-        "tail_lines": tail_lines, "log_truncated": log.len() >= usize::try_from(LOG_LIMIT_BYTES).unwrap_or(usize::MAX),
+        "tail_lines": tail_lines, "log_truncated": log_dropped,
         "log": log, "log_available": unavailable.is_none(), "log_diagnostic": unavailable,
         "previous_log": previous, "previous_log_requested": has_previous,
-        "previous_log_truncated": previous.len() >= usize::try_from(LOG_LIMIT_BYTES).unwrap_or(usize::MAX),
+        "previous_log_truncated": previous_dropped,
         "previous_log_available": has_previous && previous_unavailable.is_none(),
         "previous_log_diagnostic": previous_unavailable,
         "observed_pods": summaries, "observed_pod_count": observed.len(),
@@ -270,7 +318,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use std::{
+        fmt::Write as _,
+        sync::{Arc, Mutex},
+    };
 
     fn pod(name: &str, timestamp: &str, init: Value, main: Value) -> Pod {
         let mut document = json!({"metadata": {"name": name, "creationTimestamp": timestamp},
@@ -315,13 +366,17 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((name, params.container.clone(), params.previous));
+            assert_eq!(
+                params.limit_bytes, None,
+                "a byte limit would drop the newest lines"
+            );
             async move {
-                Ok(if params.previous {
+                let log = if params.previous {
                     "config rejected"
                 } else {
                     ""
-                }
-                .to_owned())
+                };
+                Ok((log.to_owned(), false))
             }
         })
         .await
@@ -389,7 +444,7 @@ mod tests {
             vec![pod("new", "2026-09-07T00:00:01Z", json!([]), json!([]))],
             move |_, _| {
                 let message = captured.clone();
-                async move { Ok(message) }
+                async move { Ok((message, false)) }
             },
         )
         .await
@@ -445,6 +500,68 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result["diagnostic"], "no_pod");
+    }
+
+    fn log_server(body: Vec<u8>, queries: Arc<Mutex<Vec<String>>>) -> Api<Pod> {
+        let client = kube::Client::new(
+            tower::service_fn(move |request: http::Request<kube::client::Body>| {
+                queries
+                    .lock()
+                    .unwrap()
+                    .push(request.uri().query().unwrap_or_default().to_owned());
+                let body = body.clone();
+                async move {
+                    Ok::<_, std::convert::Infallible>(
+                        http::Response::builder()
+                            .header("content-type", "text/plain")
+                            .body(kube::client::Body::from(body))
+                            .unwrap(),
+                    )
+                }
+            }),
+            "system",
+        );
+        Api::namespaced(client, "system")
+    }
+
+    #[tokio::test]
+    async fn a_tail_bigger_than_the_budget_keeps_its_newest_lines() {
+        let mut log = String::new();
+        for line in 0..2000 {
+            writeln!(log, "{line:04} {}", "x".repeat(95)).unwrap();
+        }
+        let queries = Arc::new(Mutex::new(Vec::new()));
+        let pods = log_server(log.clone().into_bytes(), queries.clone());
+        let observed = vec![pod("mint-0", "2026-09-07T00:00:01Z", json!([]), json!([]))];
+        let result = component_log_artifact(&pods, "mint", 2000, observed)
+            .await
+            .unwrap();
+        let kept = result["log"].as_str().unwrap();
+        assert!(kept.ends_with(&format!("1999 {}\n", "x".repeat(95))));
+        assert!(log.ends_with(kept));
+        assert!(kept.len() < log.len());
+        assert_eq!(result["log_truncated"], true);
+        let queries = queries.lock().unwrap();
+        assert!(queries[0].contains("tailLines=2000"), "{}", queries[0]);
+        assert!(!queries[0].contains("limitBytes"), "{}", queries[0]);
+    }
+
+    #[tokio::test]
+    async fn a_tail_within_the_budget_is_whole_and_not_truncated() {
+        let pods = log_server(b"one\ntwo\n".to_vec(), Arc::default());
+        let (log, dropped) = read_log_tail(&pods, "mint-0", &LogParams::default(), 1024)
+            .await
+            .unwrap();
+        assert_eq!((log.as_str(), dropped), ("one\ntwo\n", false));
+    }
+
+    #[test]
+    fn keep_newest_starts_on_a_character() {
+        let mut log = "🦀🦀".as_bytes().to_vec();
+        assert!(keep_newest(&mut log, 5));
+        assert_eq!(log, "🦀".as_bytes());
+        assert!(!keep_newest(&mut log, 4));
+        assert_eq!(log, "🦀".as_bytes());
     }
 
     #[test]

@@ -26,7 +26,8 @@ pub struct ComponentLogsRequest {
     pub operation_id: String,
     pub component: String,
     /// Lines to read from the end of the component's current container log,
-    /// between 1 and 2000. The artifact is additionally byte-bounded.
+    /// between 1 and 2000. The artifact is additionally byte-bounded: it keeps
+    /// the newest lines, and `log_truncated` means older ones were dropped.
     pub tail_lines: u32,
     #[serde(skip)]
     pub idempotency_key: String,

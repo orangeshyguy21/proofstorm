@@ -137,7 +137,8 @@ async fn candidate_failure_archives_bounded_diagnostics_before_cleanup_and_retri
             event.starts_with("log:")
                 && event.contains(&format!("container={container}"))
                 && event.contains("tailLines=128")
-                && event.contains("limitBytes=32769")
+                // The kubelet's byte cut would drop the newest lines.
+                && !event.contains("limitBytes")
         }));
     }
     assert!(
