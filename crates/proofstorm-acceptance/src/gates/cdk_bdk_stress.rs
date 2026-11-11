@@ -40,7 +40,7 @@ fn cell_document(postgres_enabled: bool) -> Value {
                     "tos_url": "https://proofstorm.invalid/terms",
                     "enable_info_page": true,
                     "input_fee_ppk": 321,
-                    "use_keyset_v2": false,
+                    "keyset_version": "00",
                     "mint_quote_ttl_seconds": 900,
                     "melt_quote_ttl_seconds": 180,
                     "http_cache_ttl_seconds": 75,

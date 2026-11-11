@@ -124,7 +124,7 @@ const CDK_TOML: &[(&str, &str)] = &[
     ("info.signatory_certs", "mint_mnemonic"),
     ("info.enable_info_page", "enable_info_page"),
     ("info.input_fee_ppk", "input_fee_ppk"),
-    ("info.use_keyset_v2", "use_keyset_v2"),
+    ("info.use_keyset_v2", "keyset_version"),
     ("info.quote_ttl.mint_ttl", "mint_quote_ttl_seconds"),
     ("info.quote_ttl.melt_ttl", "melt_quote_ttl_seconds"),
     ("info.http_cache.backend", ""),
@@ -333,6 +333,23 @@ pub(crate) fn validate(cell: &CellSpec, issues: &mut Vec<ValidationIssue>) {
             continue;
         }
         for key in override_keys(component) {
+            // CDK refuses to start with both; /config/keyset_version writes use_keyset_v2.
+            if component.implementation == "cdk"
+                && key == "info.keyset_version"
+                && component
+                    .config
+                    .get("keyset_version")
+                    .and_then(Value::as_str)
+                    .is_some_and(|version| !version.is_empty())
+            {
+                crate::validation::issue(
+                    issues,
+                    "native_config_override_conflict",
+                    format!("{path}/info/keyset_version"),
+                    "CDK refuses keyset_version beside use_keyset_v2, which /config/keyset_version writes; leave /config/keyset_version empty",
+                );
+                continue;
+            }
             let Some(source) = reserved(&component.implementation, &key) else {
                 continue;
             };
@@ -439,6 +456,33 @@ mod tests {
             ]
         );
         assert!(issues(&cell(&env, &toml, &json!([ALLOW]))).is_empty());
+    }
+
+    #[test]
+    fn a_native_keyset_version_needs_the_modelled_one_empty() {
+        let pinned = json!({"native_toml": {"info": {"keyset_version": "02"}}});
+        assert!(issues(&cell(&json!({}), &pinned, &json!([ALLOW]))).is_empty());
+        let mut both = pinned.clone();
+        both["keyset_version"] = json!("01");
+        let refused = issues(&cell(&json!({}), &both, &json!([ALLOW])));
+        assert_eq!(
+            refused
+                .iter()
+                .map(|(code, path, _)| (code.as_str(), path.as_str()))
+                .collect::<Vec<_>>(),
+            [(
+                "native_config_override_conflict",
+                "/components/1/config/native_toml/info/keyset_version"
+            )]
+        );
+        let mut legacy = json!({"native_toml": {"info": {"use_keyset_v2": true}}});
+        let refused = issues(&cell(&json!({}), &legacy, &json!([ALLOW])));
+        assert_eq!(
+            refused[0].2,
+            "Proofstorm sets this from /config/keyset_version"
+        );
+        legacy["keyset_version"] = json!("");
+        assert_eq!(issues(&cell(&json!({}), &legacy, &json!([ALLOW]))).len(), 1);
     }
 
     #[test]

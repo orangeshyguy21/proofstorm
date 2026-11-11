@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:a6d70fd910040f8b5fbd9737cf0bc4ab38fbd4a737e8678f65c478e0e1fc366c",
+  "catalog_digest": "sha256:73529a563b018b7a89b28cdc005152bc97ba481168f639edd79fe3c63c67896e",
   "entries": [
     {
       "implementation": "bark-server",
@@ -173,7 +173,7 @@
       "release_channel": "stable",
       "support_lifecycle": "preferred",
       "config_version": "cdk-mintd/0.18/v1",
-      "config_schema_digest": "sha256:e0b735ab33b6396e36e6b286fcc5df50dd0a027540042d99c4be34fdafbd2193",
+      "config_schema_digest": "sha256:7c820ddaf93ce73c904d557ba8eb959198de7bb156748725e0285ca87ac60fc0",
       "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
       "fields": {
         "allow_mint_quote_payment_override": {
@@ -265,6 +265,10 @@
           "required": true
         },
         "input_fee_ppk": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "keyset_version": {
           "classification": "agent_authorable",
           "required": true
         },
@@ -386,10 +390,6 @@
         },
         "unit": {
           "classification": "topology_derived",
-          "required": true
-        },
-        "use_keyset_v2": {
-          "classification": "agent_authorable",
           "required": true
         },
         "work_directory": {

@@ -94,6 +94,7 @@
         "http_cache_ttl_seconds": 60,
         "icon_url": "",
         "input_fee_ppk": 0,
+        "keyset_version": "",
         "max_inputs": 1000,
         "max_melt": 500000,
         "max_mint": 500000,
@@ -108,8 +109,7 @@
         "onchain_max_mint_sat": 1000000,
         "onchain_min_melt_sat": 1000,
         "onchain_min_mint_sat": 1000,
-        "tos_url": "",
-        "use_keyset_v2": true
+        "tos_url": ""
       },
       "implementation": "cdk"
     },
@@ -238,7 +238,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:5a8eae36aa308509aeb2e85d97f8c83a6eb9a0e9f97b0e2f8e8f68dc789395d6",
+    "rollout_digest": "sha256:a48bfe7222dd9795d9083d1ab655e56bd21c9b7b5cc7931b38cd6bd36a501755",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -264,7 +264,7 @@
       {
         "apiVersion": "v1",
         "data": {
-          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 0\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n[payment_backend]\nbackend = \"grpcprocessor\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[grpc_processor]\nsupported_units = [\"sat\"]\naddress = \"processor\"\nport = 50051\ntls_dir = \"/payment-processor/tls\"\nallow_insecure = false\n\n[database]\nengine = \"sqlite\"\n"
+          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 0\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n[payment_backend]\nbackend = \"grpcprocessor\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[grpc_processor]\nsupported_units = [\"sat\"]\naddress = \"processor\"\nport = 50051\ntls_dir = \"/payment-processor/tls\"\nallow_insecure = false\n\n[database]\nengine = \"sqlite\"\n"
         },
         "kind": "ConfigMap",
         "metadata": {
@@ -314,7 +314,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:5a8eae36aa308509aeb2e85d97f8c83a6eb9a0e9f97b0e2f8e8f68dc789395d6"
+                "proofstorm.dev/rollout-digest": "sha256:a48bfe7222dd9795d9083d1ab655e56bd21c9b7b5cc7931b38cd6bd36a501755"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

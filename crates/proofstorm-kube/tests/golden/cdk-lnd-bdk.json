@@ -104,6 +104,7 @@
         "http_cache_ttl_seconds": 60,
         "icon_url": "",
         "input_fee_ppk": 100,
+        "keyset_version": "",
         "max_inputs": 1000,
         "max_melt": 500000,
         "max_mint": 500000,
@@ -118,8 +119,7 @@
         "onchain_max_mint_sat": 1000000,
         "onchain_min_melt_sat": 1000,
         "onchain_min_mint_sat": 1000,
-        "tos_url": "",
-        "use_keyset_v2": true
+        "tos_url": ""
       },
       "implementation": "cdk"
     },
@@ -261,7 +261,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:c7eebe853f16c302c1e8a8998f07c9ce6d7b7d54108d2f2298bacdbe9fa02b72",
+    "rollout_digest": "sha256:171f4b91a62866b665f0716ab35be68be3233af2821ba8d272157d0c90de7ba2",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -287,7 +287,7 @@
       {
         "apiVersion": "v1",
         "data": {
-          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n[payment_backend]\nbackend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://lightning:10009\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[onchain]\nonchain_backend = \"bdk\"\nmin_mint = 1000\nmax_mint = 1000000\nmin_melt = 1000\nmax_melt = 1000000\n\n[bdk]\nmnemonic = \"file:/mint-secrets/bdk-mnemonic\"\nnetwork = \"regtest\"\nnum_confs = 1\nmin_receive_amount_sat = 1000\nmin_send_amount_sat = 546\nsync_interval_secs = 1\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"chain\"\nbitcoind_rpc_port = 18443\nbitcoind_rpc_user = \"proofstorm\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\n\n[database]\nengine = \"sqlite\"\n"
+          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 100\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n[payment_backend]\nbackend = \"lnd\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[lnd]\naddress = \"https://lightning:10009\"\ncert_file = \"/lnd/tls.cert\"\nmacaroon_file = \"/lnd/data/chain/bitcoin/regtest/admin.macaroon\"\n\n[onchain]\nonchain_backend = \"bdk\"\nmin_mint = 1000\nmax_mint = 1000000\nmin_melt = 1000\nmax_melt = 1000000\n\n[bdk]\nmnemonic = \"file:/mint-secrets/bdk-mnemonic\"\nnetwork = \"regtest\"\nnum_confs = 1\nmin_receive_amount_sat = 1000\nmin_send_amount_sat = 546\nsync_interval_secs = 1\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"chain\"\nbitcoind_rpc_port = 18443\nbitcoind_rpc_user = \"proofstorm\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\n\n[database]\nengine = \"sqlite\"\n"
         },
         "kind": "ConfigMap",
         "metadata": {
@@ -337,7 +337,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:c7eebe853f16c302c1e8a8998f07c9ce6d7b7d54108d2f2298bacdbe9fa02b72"
+                "proofstorm.dev/rollout-digest": "sha256:171f4b91a62866b665f0716ab35be68be3233af2821ba8d272157d0c90de7ba2"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

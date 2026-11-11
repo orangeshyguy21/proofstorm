@@ -3891,12 +3891,24 @@ fn bdk_onchain_config(
     )
 }
 
+/// Every released CDK reads `use_keyset_v2`; validation allows only these
+/// values. Empty writes nothing: the build's default applies, and the mint
+/// never rotates back to a pinned version on start. A v3 build's
+/// `keyset_version` is left to native overrides until CDK releases it.
+fn keyset_version_setting(version: &str) -> &'static str {
+    match version {
+        "00" => "use_keyset_v2 = false\n",
+        "01" => "use_keyset_v2 = true\n",
+        _ => "",
+    }
+}
+
 fn mint_common_config(component: &str, http_port: u16, config: &CdkMintConfig) -> String {
     let mut rendered = format!(
-        "[info]\nurl = \"http://{component}:{http_port}\"\nlisten_host = \"0.0.0.0\"\nlisten_port = {http_port}\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = {}\ninput_fee_ppk = {}\nuse_keyset_v2 = {}\n\n[info.quote_ttl]\nmint_ttl = {}\nmelt_ttl = {}\n\n[info.http_cache]\nbackend = \"memory\"\nttl = {}\ntti = {}\n\n[mint_info]\nname = {:?}\ndescription = {:?}\n",
+        "[info]\nurl = \"http://{component}:{http_port}\"\nlisten_host = \"0.0.0.0\"\nlisten_port = {http_port}\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = {}\ninput_fee_ppk = {}\n{}\n[info.quote_ttl]\nmint_ttl = {}\nmelt_ttl = {}\n\n[info.http_cache]\nbackend = \"memory\"\nttl = {}\ntti = {}\n\n[mint_info]\nname = {:?}\ndescription = {:?}\n",
         config.enable_info_page,
         config.input_fee_ppk,
-        config.use_keyset_v2,
+        keyset_version_setting(&config.keyset_version),
         config.mint_quote_ttl_seconds,
         config.melt_quote_ttl_seconds,
         config.http_cache_ttl_seconds,
@@ -5239,6 +5251,13 @@ mod tests {
     }
 
     #[test]
+    fn keyset_version_writes_the_setting_each_cdk_build_reads() {
+        assert_eq!(keyset_version_setting(""), "");
+        assert_eq!(keyset_version_setting("00"), "use_keyset_v2 = false\n");
+        assert_eq!(keyset_version_setting("01"), "use_keyset_v2 = true\n");
+    }
+
+    #[test]
     fn cdk_ldk_plan_uses_embedded_state_and_direct_chain_binding() {
         let mut cell = cdk_ldk_cell();
         let authored = cell
@@ -5247,7 +5266,7 @@ mod tests {
             .find(|component| component.id == "mint")
             .expect("mint component");
         authored.config.insert("input_fee_ppk".into(), json!(321));
-        authored.config.insert("use_keyset_v2".into(), json!(false));
+        authored.config.insert("keyset_version".into(), json!("00"));
         authored
             .config
             .insert("description_long".into(), json!("Long-form cell metadata"));
