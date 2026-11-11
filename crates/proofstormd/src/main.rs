@@ -601,16 +601,16 @@ async fn archive_candidate_logs(
     let mut logs = std::collections::BTreeMap::new();
     for container in ["source", "buildkit"] {
         let result = if let Some(pod) = observed.items.first() {
-            pods.logs(
+            component_logs::read_log_tail(
+                &pods,
                 &pod.name_any(),
                 &kube::api::LogParams {
                     container: Some(container.into()),
-                    // A byte limit alone reads the beginning of a long build.
-                    // Request recent lines so terminal diagnostics survive cleanup.
+                    // Recent lines, so terminal diagnostics survive cleanup.
                     tail_lines: Some(128),
-                    limit_bytes: Some(32_769),
                     ..Default::default()
                 },
+                32_768,
             )
             .await
             .map_err(|e| e.to_string())
@@ -618,15 +618,8 @@ async fn archive_candidate_logs(
             Err("Build Pod is unavailable; no log was captured".into())
         };
         let log = match result {
-            Ok(mut text) => {
-                let truncated = text.len() > 32_768 || text.lines().count() >= 128;
-                if text.len() > 32_768 {
-                    let mut start = text.len() - 32_768;
-                    while !text.is_char_boundary(start) {
-                        start += 1;
-                    }
-                    text.drain(..start);
-                }
+            Ok((text, dropped)) => {
+                let truncated = dropped || text.lines().count() >= 128;
                 proofstorm_core::CandidateLog {
                     text,
                     truncated,
