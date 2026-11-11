@@ -48,3 +48,29 @@ fn candidate_mint_recipe_builds_both_binaries_like_cdk_releases() {
         "RUN cdk-mintd --version && cdk-mint-cli --version && command -v wget >/dev/null"
     ));
 }
+
+const WALLET_RECIPE: &str =
+    include_str!("../../proofstorm-core/src/candidate_profiles/cdk-wallet-v2.Dockerfile");
+
+#[test]
+fn candidate_wallet_prepare_writes_the_exact_bounded_recipe() {
+    let profile = proofstorm_core::candidate_build_profile("cdk-cli-wallet").unwrap();
+    assert_eq!(profile.version, 4);
+    assert_eq!(profile.id, "cdk-cli-wallet-source");
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = format!("{}/", directory.path().display());
+    let output = Command::new("sh")
+        .args(["-c", &profile.prepare.replace("/workspace/", &workspace)])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let written = fs::read_to_string(directory.path().join(&profile.dockerfile)).unwrap();
+    assert_eq!(written.trim_end(), WALLET_RECIPE.trim_end());
+    // An unbounded build missed the one-hour deadline; match the mint's bounds.
+    assert!(WALLET_RECIPE.contains("cargo build --locked --release --jobs 2 --bin cdk-cli"));
+    assert!(WALLET_RECIPE.contains("export RUSTUP_TOOLCHAIN="));
+}
