@@ -147,6 +147,18 @@ pub(super) const ADDED_VERSIONS: &[(&str, &str, &str, &str)] = &[
         "Bitcoin Core daemon version v31.2.0 bitcoind\n",
     ),
     (
+        "bitcoin-core",
+        "30.4",
+        "docker/bitcoin/bitcoin-30.4-provenance.json",
+        "Bitcoin Core daemon version v30.4.0 bitcoind\n",
+    ),
+    (
+        "bitcoin-core",
+        "32.1",
+        "docker/bitcoin/bitcoin-32.1-provenance.json",
+        "Bitcoin Core daemon version v32.1.0 bitcoind\n",
+    ),
+    (
         "nutshell-mint",
         "0.21.0",
         "docker/mint/nutshell-0.21.0-provenance.json",

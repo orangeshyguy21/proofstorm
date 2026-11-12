@@ -78,7 +78,9 @@ fn legacy_version(name: &str) -> Result<&'static str> {
 const VERSIONED_RECIPES: &[(&str, &str, &str)] = &[
     ("bitcoin-core", "29.4", "docker/bitcoin/Dockerfile.29.4"),
     ("bitcoin-core", "30.3", "docker/bitcoin/Dockerfile.30.3"),
+    ("bitcoin-core", "30.4", "docker/bitcoin/Dockerfile.30.4"),
     ("bitcoin-core", "31.2", "docker/bitcoin/Dockerfile.31.2"),
+    ("bitcoin-core", "32.1", "docker/bitcoin/Dockerfile.32.1"),
     (
         "nutshell-mint",
         "0.21.0",
