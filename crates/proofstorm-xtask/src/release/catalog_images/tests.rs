@@ -117,6 +117,18 @@ pub(super) const ADDED_VERSIONS: &[(&str, &str, &str, &str)] = &[
         "cdk-cli 0.18.2\n",
     ),
     (
+        "cdk-mint",
+        "0.18.3",
+        "docker/mint/cdk-0.18.3-provenance.json",
+        "cdk-mint-rpc 0.18.3\ncdk-mintd 0.18.3\n",
+    ),
+    (
+        "cdk-cli-wallet",
+        "0.18.3",
+        "docker/wallet/cdk-cli-0.18.3-provenance.json",
+        "cdk-cli 0.18.3\n",
+    ),
+    (
         "bitcoin-core",
         "29.4",
         "docker/bitcoin/bitcoin-29.4-provenance.json",
@@ -127,6 +139,12 @@ pub(super) const ADDED_VERSIONS: &[(&str, &str, &str, &str)] = &[
         "30.3",
         "docker/bitcoin/bitcoin-30.3-provenance.json",
         "Bitcoin Core daemon version v30.3.0 bitcoind\n",
+    ),
+    (
+        "bitcoin-core",
+        "31.2",
+        "docker/bitcoin/bitcoin-31.2-provenance.json",
+        "Bitcoin Core daemon version v31.2.0 bitcoind\n",
     ),
     (
         "nutshell-mint",
