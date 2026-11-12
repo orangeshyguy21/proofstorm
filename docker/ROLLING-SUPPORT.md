@@ -40,11 +40,11 @@ receipts without a version retain their original recipe/probe interpretation.
 The clean-source and publication checks described in [README.md](README.md) still
 apply. Build both architectures and retain their receipts.
 
-The added preparation recipes are Bitcoin Core 29.4/30.3 and Nutshell 0.21.0.
+The added preparation recipes are Bitcoin Core 29.4/30.3/31.2 and Nutshell 0.21.0.
 Their checksums, source identities, and recipe digests
 are recorded beside the recipes. LND and CLN use upstream immutable images.
 Preparation recipes are intentionally separate from the installed support list.
-CDK adds versioned 0.18.1 and 0.18.2 mint and CLI wallet recipes. The 0.18.0
+CDK adds versioned 0.18.1, 0.18.2 and 0.18.3 mint and CLI wallet recipes. The 0.18.0
 recipes and existing unversioned receipt interpretation remain unchanged.
 
 The release inventory reviewed on 2026-09-16, with CDK refreshed on 2026-09-18,
@@ -53,18 +53,19 @@ CDK support floor applied:
 
 | Implementation | Release families to qualify/retain |
 | --- | --- |
-| Bitcoin Core | 31.1, 30.3, 29.4 |
+| Bitcoin Core | 31.2, 30.3, 29.4 |
 | Core Lightning | 26.06.10, 26.04.1, 25.12.1 |
 | LND | 0.21.8-beta, 0.20.8-beta, 0.19.3-beta |
 | Nutshell mint and wallet | 0.21.0, 0.20.3 |
-| CDK mint presets and CLI wallet | 0.18.2; add a second family when 0.19 qualifies |
+| CDK mint presets and CLI wallet | 0.18.3; add a second family when 0.19 qualifies |
 
-The catalog selects CLN 26.06.10 and LND 0.21.8-beta and 0.20.8-beta. CLN 26.06.8,
-26.06.9 and 26.06.10 are upstream security point releases. LND 0.21.6-beta and
-0.20.7-beta disable MPTCP listeners by default as a mitigation for CVE-2026-98432;
-the LND patches have no database migrations. CLN 26.06.9 and 26.06.7, LND
-0.21.4-beta, 0.21.3-beta, 0.20.5-beta and 0.20.4-beta, and Redis 8.10.2 and 8.10.1
-are deprecated and retained for existing locks. Mint compatibility lists are qualification
+The catalog selects Bitcoin Core 31.2, CLN 26.06.10, and LND 0.21.8-beta and
+0.20.8-beta. CLN 26.06.8, 26.06.9 and 26.06.10 are upstream security point
+releases. LND 0.21.6-beta and 0.20.7-beta disable MPTCP listeners by default as a
+mitigation for CVE-2026-98432; the LND patches have no database migrations.
+Bitcoin Core 31.1, CLN 26.06.9 and 26.06.7, LND 0.21.4-beta, 0.21.3-beta,
+0.20.5-beta and 0.20.4-beta, and Redis 8.10.2 and 8.10.1 are deprecated and
+retained for existing locks. Mint compatibility lists are qualification
 claims, so they name only the new patches. Editing an existing cell re-resolves its
 lock, so a cell on a deprecated patch must be recreated before it can be edited.
 The CLN 26.06.10 multi-platform digest is
@@ -126,8 +127,10 @@ Record evidence for each claimed edge. Emulated tests are useful preparation,
 but do not establish native AMD64 qualification. Fresh-version support also does
 not establish an in-place database migration or downgrade path.
 
-The catalog selects CDK 0.18.2 for all three mint presets and the CLI wallet.
-CDK 0.18.1 and 0.18.0 entries are deprecated and retained for existing locks. Nutshell
+The catalog selects CDK 0.18.3 for all three mint presets and the CLI wallet.
+The CDK 0.18.2 mint and the 0.18.2, 0.18.1 and 0.18.0 CLI wallet entries are
+deprecated and retained for existing locks. CDK 0.18.3 fixes SQL transaction
+cleanup and stops a lost SQLite in-memory database from silently reopening empty. Nutshell
 0.21.0 is preferred for both mint and wallet, with 0.20.3 still supported.
 Both Nutshell releases share the configuration schema; the 0.21 mint selects
 its versioned action contract for native version checking and CLN `xpay`.

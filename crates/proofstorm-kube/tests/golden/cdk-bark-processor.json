@@ -126,7 +126,7 @@
         "ports": {
           "rpc": 18443
         },
-        "version": "31.1"
+        "version": "31.2"
       }
     },
     "operation_admission": [

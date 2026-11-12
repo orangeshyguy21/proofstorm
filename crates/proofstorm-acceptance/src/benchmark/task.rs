@@ -90,13 +90,43 @@ pub fn o1() -> &'static Task {
     TASK.get_or_init(|| {
         component_patches(
             o1_v09(),
+            "0.11",
+            &[
+                ("lnd", "0.21.8-beta"),
+                ("cdk", "0.18.3"),
+                ("bitcoin-core", "31.2"),
+            ],
+        )
+    })
+}
+
+pub fn o5() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| {
+        component_patches(
+            o5_v05(),
+            "0.7",
+            &[
+                ("lnd", "0.21.8-beta"),
+                ("cdk", "0.18.3"),
+                ("bitcoin-core", "31.2"),
+            ],
+        )
+    })
+}
+
+fn o1_v010() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| {
+        component_patches(
+            o1_v09(),
             "0.10",
             &[("lnd", "0.21.4-beta"), ("cdk", "0.18.2")],
         )
     })
 }
 
-pub fn o5() -> &'static Task {
+fn o5_v06() -> &'static Task {
     static TASK: OnceLock<Task> = OnceLock::new();
     TASK.get_or_init(|| {
         component_patches(
@@ -276,10 +306,14 @@ pub fn lookup(id: &str, version: &str) -> Option<&'static Task> {
         o5_v02(),
         o1_v07(),
         o5_v03(),
+        o1_v010(),
+        o5_v06(),
         o1_v09(),
         o5_v05(),
         o1_v08(),
         o5_v04(),
+        o1_v010_diagnostic(),
+        o5_v06_diagnostic(),
         o1_v09_diagnostic(),
         o5_v05_diagnostic(),
         o1_v08_diagnostic(),
@@ -335,6 +369,16 @@ fn o1_v07_diagnostic() -> &'static Task {
 fn o5_v03_diagnostic() -> &'static Task {
     static TASK: OnceLock<Task> = OnceLock::new();
     TASK.get_or_init(|| extended(o5_v03()))
+}
+
+fn o1_v010_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o1_v010()))
+}
+
+fn o5_v06_diagnostic() -> &'static Task {
+    static TASK: OnceLock<Task> = OnceLock::new();
+    TASK.get_or_init(|| extended(o5_v06()))
 }
 
 fn o1_v09_diagnostic() -> &'static Task {
@@ -596,7 +640,12 @@ mod tests {
             proofstorm_core::digest_json(o5_v05()),
             "sha256:8103b31f3469d720d5657c3c0fbcf4f9da68cb762e37afafa4e677584acb7a35"
         );
-        for (previous, current, version) in [(o1_v09(), o1(), "0.10"), (o5_v05(), o5(), "0.6")] {
+        for (previous, current, version, lnd, cdk, bitcoin) in [
+            (o1_v09(), o1(), "0.11", "0.21.8-beta", "0.18.3", "31.2"),
+            (o5_v05(), o5(), "0.7", "0.21.8-beta", "0.18.3", "31.2"),
+            (o1_v09(), o1_v010(), "0.10", "0.21.4-beta", "0.18.2", "31.1"),
+            (o5_v05(), o5_v06(), "0.6", "0.21.4-beta", "0.18.2", "31.1"),
+        ] {
             assert_eq!(current.version, version);
             assert_eq!(
                 current.target_seconds.to_bits(),
@@ -607,8 +656,9 @@ mod tests {
             assert!(lookup(&previous.id, &previous.version).is_some());
             for component in &current.components {
                 match component["implementation"].as_str().unwrap() {
-                    "lnd" => assert_eq!(component["version"], "0.21.4-beta"),
-                    "cdk" => assert_eq!(component["version"], "0.18.2"),
+                    "lnd" => assert_eq!(component["version"], lnd),
+                    "cdk" => assert_eq!(component["version"], cdk),
+                    "bitcoin-core" => assert_eq!(component["version"], bitcoin),
                     _ => {}
                 }
             }

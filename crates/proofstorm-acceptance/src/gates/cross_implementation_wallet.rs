@@ -20,7 +20,7 @@ fn cell_document() -> Value {
         "api_version": "proofstorm/v1alpha1",
         "name": "cross-mint-wallet-live-cell",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.2", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
             {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": proofstorm_core::LND_VERSION, "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cross-mint"}},
             {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": proofstorm_core::LND_VERSION, "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cross-payer"}},
             {"id": "cache", "kind": "database", "implementation": "redis", "version": "8.10.3", "config_version": "redis/8.10/v1", "control": "cell", "config": {"maxmemory_mb": 64}},

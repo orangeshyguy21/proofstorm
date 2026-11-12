@@ -274,7 +274,7 @@ mod tests {
         for cap in [Capability::CellOperate, Capability::ExperimentRead] {
             store.grant("alpha", "designer", cap).unwrap();
         }
-        let spec = serde_json::from_value(json!({"api_version":"proofstorm/v1alpha1","name":"directory","links":[],"components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]})).unwrap();
+        let spec = serde_json::from_value(json!({"api_version":"proofstorm/v1alpha1","name":"directory","links":[],"components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.2","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]})).unwrap();
         store
             .create_draft("alpha", "designer", "directory", &spec, "draft")
             .unwrap();

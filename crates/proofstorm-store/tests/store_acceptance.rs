@@ -218,7 +218,7 @@ fn publication_keeps_requested_draft_and_persists_effective_configuration() {
         id: "chain".into(),
         kind: ComponentKind::Bitcoin,
         implementation: "bitcoin-core".into(),
-        version: Some("31.1".into()),
+        version: Some("31.2".into()),
         config_version: "bitcoin-core/31/v1".into(),
         control: ControlClass::Cell,
         config: BTreeMap::new(),
@@ -797,7 +797,7 @@ fn simultaneous_identical_admission_across_connections_keeps_one_operation() {
     }
     let spec = serde_json::from_value(serde_json::json!({
         "api_version":"proofstorm/v1alpha1","name":"race","links":[],
-        "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]
+        "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.2","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]
     })).unwrap();
     store
         .create_draft("alpha", "designer", "race", &spec, "draft")

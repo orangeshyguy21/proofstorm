@@ -97,7 +97,11 @@ pub(super) fn extend(
         &images.operators,
         BTreeSet::from([CatalogFeature::Regtest, CatalogFeature::Postgres]),
         vec![
-            dependency(LinkKind::ChainBackend, "bitcoin-core", &["31.1"]),
+            dependency(
+                LinkKind::ChainBackend,
+                "bitcoin-core",
+                &[crate::BITCOIN_VERSION],
+            ),
             dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
         ],
         support_matrix(&[StorageBackend::Postgres], &[], &[], &[], &[], &[], vec![]),

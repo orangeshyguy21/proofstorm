@@ -31,7 +31,7 @@ fn cell_document() -> Value {
         "api_version": "proofstorm/v1alpha1",
         "name": "failed-melt-live-cell",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.2", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
             {"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": proofstorm_core::LND_VERSION, "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-funder"}},
             {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": proofstorm_core::LND_VERSION, "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-payer"}},
             // Deliberately channel-less: nothing can route to it, so every

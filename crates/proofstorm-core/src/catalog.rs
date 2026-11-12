@@ -1,10 +1,15 @@
 // Current releases; acceptance gates and candidate baselines read these too.
-pub const CDK_VERSION: &str = "0.18.2";
+pub const BITCOIN_VERSION: &str = "31.2";
+pub const CDK_VERSION: &str = "0.18.3";
 pub const LND_VERSION: &str = "0.21.8-beta";
 pub const CLN_VERSION: &str = "26.06.10";
 
 // Shared CDK daemon with LDK, BDK and PostgreSQL support.
-pub const CDK_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10";
+pub const CDK_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:ad3a895cd2faeb41d8251f874dde164c1a75afc6a4adda1517aae3f520a69bd9";
+// Bitcoin Core release packaging; the catalog promotes the 31.1 base entry to it.
+const BITCOIN_IMAGE: &str = "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0";
+// Superseded 0.18.2 daemon, kept for existing cell locks.
+const CDK_0182_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10";
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -546,9 +551,9 @@ fn build_catalog_with_spark(amd64: bool, spark_images: Option<&spark::Images>) -
             ComponentKind::Mint,
             "CDK Cashu mint: linked LND/CLN or embedded LDK Node Lightning, optional embedded BDK on-chain, optional NUT-21/22 auth",
             adapter_version,
-            CDK_VERSION,
+            "0.18.2",
             ReleaseChannel::Stable,
-            CDK_MINT_IMAGE,
+            CDK_0182_MINT_IMAGE,
             BTreeSet::from([
                 CatalogFeature::NativeCli,
                 CatalogFeature::Regtest,
@@ -564,7 +569,7 @@ fn build_catalog_with_spark(amd64: bool, spark_images: Option<&spark::Images>) -
             vec![
                 dependency(LinkKind::PaymentBackend, "lnd", LND_VERSIONS),
                 dependency(LinkKind::PaymentBackend, "cln", CLN_VERSIONS),
-                dependency(LinkKind::ChainBackend, "bitcoin-core", &["31.1"]),
+                dependency(LinkKind::ChainBackend, "bitcoin-core", &[BITCOIN_VERSION]),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
                 dependency(LinkKind::AuthenticationBackend, "keycloak", &["25.0.6"]),
             ],
@@ -795,6 +800,9 @@ fn build_catalog_with_spark(amd64: bool, spark_images: Option<&spark::Images>) -
 fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
     let (cdk_0181, cdk_0181_provenance) = crate::wallet_builds::cdk_0181(amd64);
     let (cdk_0182, cdk_0182_provenance) = crate::wallet_builds::cdk_0182(amd64);
+    let (cdk_0183, cdk_0183_provenance) = crate::wallet_builds::cdk_0183(amd64);
+    let cdk_mint_provenance = include_str!("../../../docker/mint/cdk-0.18.3-provenance.json");
+    let bitcoin_provenance = include_str!("../../../docker/bitcoin/bitcoin-31.2-provenance.json");
     let nutshell = crate::wallet_builds::nutshell_021(amd64);
     let nutshell_provenance = include_str!("../../../docker/mint/nutshell-0.21.0-provenance.json");
     // (implementation, new version, image, provenance, lifecycle of the replaced entry)
@@ -808,9 +816,30 @@ fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
         ),
         (
             "cdk-cli-wallet",
-            CDK_VERSION,
+            "0.18.2",
             cdk_0182,
             cdk_0182_provenance,
+            SupportLifecycle::Deprecated,
+        ),
+        (
+            "cdk-cli-wallet",
+            CDK_VERSION,
+            cdk_0183,
+            cdk_0183_provenance,
+            SupportLifecycle::Deprecated,
+        ),
+        (
+            "cdk",
+            CDK_VERSION,
+            CDK_MINT_IMAGE,
+            cdk_mint_provenance,
+            SupportLifecycle::Deprecated,
+        ),
+        (
+            "bitcoin-core",
+            BITCOIN_VERSION,
+            BITCOIN_IMAGE,
+            bitcoin_provenance,
             SupportLifecycle::Deprecated,
         ),
         (
@@ -1354,7 +1383,7 @@ fn lightning_entry(
         vec![dependency(
             LinkKind::ChainBackend,
             "bitcoin-core",
-            &["31.1"],
+            &[BITCOIN_VERSION],
         )],
         support_matrix(
             &[StorageBackend::PersistentVolume],
@@ -1435,7 +1464,7 @@ fn ldk_server_entry(
         vec![dependency(
             LinkKind::ChainBackend,
             "bitcoin-core",
-            &["31.1"],
+            &[BITCOIN_VERSION],
         )],
         support_matrix(
             &[StorageBackend::PersistentVolume],
@@ -2030,10 +2059,10 @@ mod tests {
                 .iter()
                 .find(|entry| entry.implementation == implementation)
                 .unwrap();
-            assert_eq!(support.minimum_supported.as_deref(), Some("0.18.2"));
+            assert_eq!(support.minimum_supported.as_deref(), Some("0.18.3"));
             assert_eq!(
                 support.supported_versions,
-                BTreeSet::from(["0.18.2".into()])
+                BTreeSet::from(["0.18.3".into()])
             );
         }
     }
@@ -2154,14 +2183,14 @@ mod tests {
             .build_provenance
             .as_ref()
             .expect("Bitcoin release provenance");
-        assert_eq!(bitcoin.version, "31.1");
+        assert_eq!(bitcoin.version, "31.2");
         assert_eq!(bitcoin.config_version, "bitcoin-core/31/v1");
         assert_eq!(provenance.platform, "linux/amd64,linux/arm64");
         assert_eq!(
             provenance.recipe_digest,
             format!(
                 "sha256:{:x}",
-                Sha256::digest(include_bytes!("../../../docker/bitcoin/Dockerfile"))
+                Sha256::digest(include_bytes!("../../../docker/bitcoin/Dockerfile.31.2"))
             )
         );
         for entry in &catalog.entries {
@@ -2182,7 +2211,7 @@ mod tests {
     #[test]
     fn management_clients_have_matching_build_provenance() {
         use sha2::{Digest, Sha256};
-        let recipe = include_bytes!("../../../docker/mint/Dockerfile.cdk-0.18.2");
+        let recipe = include_bytes!("../../../docker/mint/Dockerfile.cdk-0.18.3");
         {
             let entry = default_catalog()
                 .entries
@@ -2197,7 +2226,7 @@ mod tests {
             assert!(entry.features.contains(&CatalogFeature::MintManagementRpc));
             assert_eq!(
                 provenance.commit_sha,
-                "9f6d3a3734d7223d10b5553e3591d3f9d5c6c904"
+                "b2035a3525c98b22226926bdc20fa128a1351ae5"
             );
         }
     }
@@ -2236,14 +2265,14 @@ mod tests {
             .find(|entry| entry.id == "cdk-cli-wallet")
             .expect("CDK wallet");
         let provenance = entry.build_provenance.as_ref().expect("release provenance");
-        let recipe = include_bytes!("../../../docker/wallet/Dockerfile.cdk-0.18.2");
+        let recipe = include_bytes!("../../../docker/wallet/Dockerfile.cdk-0.18.3");
         assert_eq!(
             provenance.recipe_digest,
             format!("sha256:{:x}", Sha256::digest(recipe))
         );
         assert_eq!(
             provenance.commit_sha,
-            "9f6d3a3734d7223d10b5553e3591d3f9d5c6c904"
+            "b2035a3525c98b22226926bdc20fa128a1351ae5"
         );
         assert_eq!(
             provenance.platform,
@@ -2308,7 +2337,7 @@ mod tests {
     )]
     fn catalog_support_summary_is_exact_and_invariants_fail_closed() {
         let catalog = catalog_for_platform(CatalogPlatform::LinuxArm64);
-        assert_eq!(catalog.entries.len(), 34);
+        assert_eq!(catalog.entries.len(), 37);
         assert_eq!(catalog.implementations.len(), 20);
         let lnd = catalog
             .implementations
@@ -2439,15 +2468,18 @@ mod tests {
     fn promoted_releases_keep_exact_historical_entries_and_current_defaults() {
         for platform in [CatalogPlatform::LinuxArm64, CatalogPlatform::LinuxAmd64] {
             let catalog = catalog_for_platform(platform);
-            let cdk_versions = catalog
+            let cdk_lifecycles = catalog
                 .entries
                 .iter()
                 .filter(|entry| entry.id == "cdk")
-                .map(|entry| entry.version.as_str())
-                .collect::<Vec<_>>();
+                .map(|entry| (entry.version.as_str(), entry.support_lifecycle))
+                .collect::<BTreeMap<_, _>>();
             assert_eq!(
-                cdk_versions,
-                ["0.18.2"],
+                cdk_lifecycles,
+                BTreeMap::from([
+                    ("0.18.2", SupportLifecycle::Deprecated),
+                    ("0.18.3", SupportLifecycle::Preferred),
+                ]),
                 "the CDK mint has one current entry"
             );
             let wallet_lifecycles = catalog
@@ -2461,13 +2493,14 @@ mod tests {
                 BTreeMap::from([
                     ("0.18.0", SupportLifecycle::Deprecated),
                     ("0.18.1", SupportLifecycle::Deprecated),
-                    ("0.18.2", SupportLifecycle::Preferred),
+                    ("0.18.2", SupportLifecycle::Deprecated),
+                    ("0.18.3", SupportLifecycle::Preferred),
                 ])
             );
             for id in ["cdk-cli-wallet", "nutshell", "nutshell-wallet"] {
                 let cdk = id.starts_with("cdk");
                 let old_version = if cdk { "0.18.0" } else { "0.20.3" };
-                let version = if cdk { "0.18.2" } else { "0.21.0" };
+                let version = if cdk { "0.18.3" } else { "0.21.0" };
                 let support = catalog
                     .implementations
                     .iter()
@@ -2499,7 +2532,7 @@ mod tests {
                 assert_eq!(
                     current.build_provenance.as_ref().unwrap().commit_sha,
                     if cdk {
-                        "9f6d3a3734d7223d10b5553e3591d3f9d5c6c904"
+                        "b2035a3525c98b22226926bdc20fa128a1351ae5"
                     } else {
                         "a9749146c6bd7f9ab75375a050e9ba795cee301c"
                     }

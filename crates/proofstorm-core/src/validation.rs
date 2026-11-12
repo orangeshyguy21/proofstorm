@@ -590,7 +590,7 @@ mod tests {
                     id: "chain".into(),
                     kind: ComponentKind::Bitcoin,
                     implementation: "bitcoin-core".into(),
-                    version: Some("31.1".into()),
+                    version: Some("31.2".into()),
                     config_version: "bitcoin-core/31/v1".into(),
                     control: ControlClass::Cell,
                     config: BTreeMap::new(),

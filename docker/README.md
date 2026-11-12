@@ -8,7 +8,7 @@ The `upstream/<registry>/<repository>` path records their original source.
 
 | Component | Source |
 | --- | --- |
-| Bitcoin Core 31.1 | Proofstorm packaging of verified bitcoincore.org release binaries |
+| Bitcoin Core 31.2 | Proofstorm packaging of verified bitcoincore.org release binaries |
 | LND 0.21.8-beta (preferred), 0.20.8-beta | docker.io/lightninglabs/lnd |
 | Core Lightning | docker.io/elementsproject/lightningd |
 | CDK and Nutshell | docker.io/cashubtc images, with the existing management-client wrappers |
@@ -26,8 +26,8 @@ without creating a cluster.
 
 ## Bitcoin packaging
 
-`bitcoin/Dockerfile` downloads unmodified Bitcoin Core 31.1 release binaries
-for Linux amd64 and arm64. It checks the pinned SHA-256 of the release checksum
+`bitcoin/Dockerfile.31.2` downloads unmodified Bitcoin Core 31.2 release binaries
+for Linux amd64 and arm64 (`bitcoin/Dockerfile` is the retained 31.1 recipe). It checks the pinned SHA-256 of the release checksum
 document, requires a valid Michael Ford signature with pinned primary and signing
 key fingerprints, and verifies each architecture's archive against that signed
 document. The signer key is fetched from an immutable bitcoin-core/guix.sigs
@@ -52,7 +52,7 @@ reviewed recipes; it does not change versions, catalog pins, or provenance.
 ```sh
 just catalog-image list
 scratch="$(mktemp -d)"
-just catalog-image build cdk-cli-wallet@0.18.2 linux/arm64 "$scratch/wallet"
+just catalog-image build cdk-cli-wallet@0.18.3 linux/arm64 "$scratch/wallet"
 # Inspect image.json and probe.stdout before authorizing a push:
 just catalog-image publish "$scratch/wallet" \
   --confirm-namespace ghcr.io/osygy/proofstorm

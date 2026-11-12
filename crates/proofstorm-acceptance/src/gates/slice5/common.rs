@@ -14,7 +14,7 @@ pub(super) const EXPERIMENT: &str = "slice5-experiment";
 
 pub(super) fn components(scenario: Scenario) -> Vec<Value> {
     let mut components = vec![
-        json!({"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}}),
+        json!({"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.2", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}}),
         json!({"id": "mint-lnd", "kind": "lightning", "implementation": "lnd", "version": proofstorm_core::LND_VERSION, "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-mint"}}),
         json!({"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": proofstorm_core::LND_VERSION, "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-payer"}}),
         json!({"id": "workspace-cln", "kind": "lightning", "implementation": "cln", "version": proofstorm_core::CLN_VERSION, "config_version": "cln/26.06/v1", "control": "workspace", "config": {"alias": "proofstorm-workspace"}}),

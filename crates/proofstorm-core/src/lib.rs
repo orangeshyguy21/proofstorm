@@ -58,14 +58,15 @@ pub use candidate::{
 pub use catalog::catalog_with_spark_test_images;
 pub use catalog::{
     AuthenticationMode, BARK_CLN_HOLD_VERSION, BARK_PROCESSOR_VERSION, BARK_SERVER_VERSION,
-    BuildProvenance, CDK_MINT_IMAGE, CDK_VERSION, CLN_VERSION, CatalogDependencySupport,
-    CatalogEndpointCondition, CatalogEntry, CatalogFeature, CatalogImplementationSupport,
-    CatalogOrigin, CatalogPaymentBindingSupport, CatalogPlatform, CatalogResponse,
-    CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport, LND_VERSION,
-    ReleaseChannel, SPARK_LDK_SERVER_VERSION, SPARK_OPERATORS_VERSION, SPARK_PROCESSOR_VERSION,
-    SPARK_SSP_VERSION, StorageBackend, SupportLifecycle, catalog_for_platform,
-    catalog_image_source, default_catalog, distributed_catalog, distributed_catalog_for_platform,
-    validate_catalog_component, validate_component_config, validate_new_cell_versions,
+    BITCOIN_VERSION, BuildProvenance, CDK_MINT_IMAGE, CDK_VERSION, CLN_VERSION,
+    CatalogDependencySupport, CatalogEndpointCondition, CatalogEntry, CatalogFeature,
+    CatalogImplementationSupport, CatalogOrigin, CatalogPaymentBindingSupport, CatalogPlatform,
+    CatalogResponse, CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport,
+    LND_VERSION, ReleaseChannel, SPARK_LDK_SERVER_VERSION, SPARK_OPERATORS_VERSION,
+    SPARK_PROCESSOR_VERSION, SPARK_SSP_VERSION, StorageBackend, SupportLifecycle,
+    catalog_for_platform, catalog_image_source, default_catalog, distributed_catalog,
+    distributed_catalog_for_platform, validate_catalog_component, validate_component_config,
+    validate_new_cell_versions,
 };
 pub use coverage::{
     CONFIGURATION_COVERAGE_API_VERSION, ConfigurationCoverageEntry, ConfigurationCoverageManifest,

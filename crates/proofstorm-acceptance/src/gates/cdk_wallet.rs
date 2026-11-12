@@ -19,7 +19,7 @@ pub(super) fn document(input_fee_ppk: u64) -> Value {
     json!({
         "api_version":"proofstorm/v1alpha1", "name":"cdk-wallet-checkpoint",
         "components":[
-            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
+            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.2","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
             {"id":"mint-lnd","kind":"lightning","implementation":"lnd","version": proofstorm_core::LND_VERSION,"config_version":"lnd/0.20/v1","control":"cell","config":{}},
             {"id":"payer-lnd","kind":"lightning","implementation":"lnd","version": proofstorm_core::LND_VERSION,"config_version":"lnd/0.20/v1","control":"cell","config":{}},
             {"id":"mint","kind":"mint","implementation":"cdk","version": proofstorm_core::CDK_VERSION,"config_version":"cdk-mintd/0.18/v1","control":"target","config":{"input_fee_ppk":input_fee_ppk}},

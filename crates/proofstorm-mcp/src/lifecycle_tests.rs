@@ -151,7 +151,7 @@ async fn environment_directory_handler_has_bounded_matching_text_and_structured_
     let service = ProofstormMcp::new(store, "alpha", "designer")
         .unwrap()
         .with_kubernetes(cluster_client(), "system");
-    let request:SubmissionRequest=serde_json::from_value(serde_json::json!({"name":"directory-cell","request_id":"directory-create","cell":{"api_version":"proofstorm/v1alpha1","name":"directory","links":[],"components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]}})).unwrap();
+    let request:SubmissionRequest=serde_json::from_value(serde_json::json!({"name":"directory-cell","request_id":"directory-create","cell":{"api_version":"proofstorm/v1alpha1","name":"directory","links":[],"components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.2","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]}})).unwrap();
     service
         .proofstorm_cell_up(Parameters(request))
         .await
@@ -192,7 +192,7 @@ async fn named_up_receipt_stays_small_after_history_grows_and_fences_edits() {
     let mcp = ProofstormMcp::new(store.clone(), "alpha", "designer")
         .unwrap()
         .with_kubernetes(cluster_client(), "system");
-    let spec = serde_json::json!({"api_version":"proofstorm/v1alpha1","name":"retries","links":[],"components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]});
+    let spec = serde_json::json!({"api_version":"proofstorm/v1alpha1","name":"retries","links":[],"components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.2","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]});
     let mut request: SubmissionRequest = serde_json::from_value(
         serde_json::json!({"name":"alpha-retries","request_id":"retries-create","cell":spec}),
     )

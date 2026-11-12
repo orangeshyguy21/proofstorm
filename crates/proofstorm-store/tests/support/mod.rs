@@ -30,7 +30,7 @@ pub(super) fn seed(store: &Store) {
     }
 }
 pub(super) fn cell(ids: &[&str]) -> CellSpec {
-    serde_json::from_value(json!({"api_version":"proofstorm/v1alpha1","name":"edit-test","components":ids.iter().map(|id|json!({"id":id,"kind":"bitcoin","implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}})).collect::<Vec<_>>(),"links":[]})).unwrap()
+    serde_json::from_value(json!({"api_version":"proofstorm/v1alpha1","name":"edit-test","components":ids.iter().map(|id|json!({"id":id,"kind":"bitcoin","implementation":"bitcoin-core","version":"31.2","config_version":"bitcoin-core/31/v1","control":"cell","config":{}})).collect::<Vec<_>>(),"links":[]})).unwrap()
 }
 pub(super) fn publish(store: &Store, id: &str, spec: &CellSpec) -> PublishedRevision {
     store

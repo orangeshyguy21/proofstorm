@@ -1,0 +1,66 @@
+{
+  "format_version": 1,
+  "date": "2026-11-12",
+  "versions": {
+    "cdk": "0.18.3"
+  },
+  "source": {
+    "repository": "https://github.com/cashubtc/cdk",
+    "tag": "v0.18.3",
+    "commit_sha": "b2035a3525c98b22226926bdc20fa128a1351ae5"
+  },
+  "build_note": "Built from component-refresh commit ad4c729 (recipe digests are in the provenance records); arm64 natively, amd64 under emulation on an arm64 host. Published to ghcr.io/osygy/proofstorm after the GitHub owner rename. Native AMD64 behavior is qualified by CI, not by this build.",
+  "images": [
+    {
+      "repository": "cdk-cli-wallet",
+      "platform": "linux/arm64",
+      "recipe": "docker/wallet/Dockerfile.cdk-0.18.3",
+      "source_revision": "ad4c729e4ffabb9c03a1e6b07f789bf6ac9a8f5d",
+      "image": "ghcr.io/osygy/proofstorm/cdk-cli-wallet@sha256:a76ebae6bd338ba7e538a23fb8e0b8a6fea15ad95beda18f4b9c13873f1a5f3a",
+      "probe": "cdk-cli 0.18.3",
+      "publication": "verified",
+      "anonymous_verified": true
+    },
+    {
+      "repository": "cdk-cli-wallet",
+      "platform": "linux/amd64",
+      "recipe": "docker/wallet/Dockerfile.cdk-0.18.3",
+      "source_revision": "ad4c729e4ffabb9c03a1e6b07f789bf6ac9a8f5d",
+      "image": "ghcr.io/osygy/proofstorm/cdk-cli-wallet@sha256:40a12e1389a1c581b1b1effc473649a09001e3ad48b5168ed4440dfe02610d9f",
+      "probe": "cdk-cli 0.18.3",
+      "publication": "verified",
+      "anonymous_verified": true
+    },
+    {
+      "repository": "cdk-mint",
+      "platform": "linux/arm64",
+      "recipe": "docker/mint/Dockerfile.cdk-0.18.3",
+      "source_revision": "ad4c729e4ffabb9c03a1e6b07f789bf6ac9a8f5d",
+      "image": "ghcr.io/osygy/proofstorm/cdk-mint@sha256:42f3a30fd2fae6cda44b8aa86485c5ed8196faadc15a032cb01a2bc49210373c",
+      "probe": "cdk-mint-rpc 0.18.3\ncdk-mintd 0.18.3",
+      "publication": "verified"
+    },
+    {
+      "repository": "cdk-mint",
+      "platform": "linux/amd64",
+      "recipe": "docker/mint/Dockerfile.cdk-0.18.3",
+      "source_revision": "ad4c729e4ffabb9c03a1e6b07f789bf6ac9a8f5d",
+      "image": "ghcr.io/osygy/proofstorm/cdk-mint@sha256:730ad0adcc91450c81f9d8b3ff1e937d06c9c7d828a992fda87a280ca3a0df81",
+      "probe": "cdk-mint-rpc 0.18.3\ncdk-mintd 0.18.3",
+      "publication": "verified"
+    }
+  ],
+  "mint_index": {
+    "image": "ghcr.io/osygy/proofstorm/cdk-mint@sha256:ad3a895cd2faeb41d8251f874dde164c1a75afc6a4adda1517aae3f520a69bd9",
+    "media_type": "application/vnd.oci.image.index.v1+json",
+    "manifests": {
+      "linux/arm64": "sha256:42f3a30fd2fae6cda44b8aa86485c5ed8196faadc15a032cb01a2bc49210373c",
+      "linux/amd64": "sha256:730ad0adcc91450c81f9d8b3ff1e937d06c9c7d828a992fda87a280ca3a0df81"
+    },
+    "anonymous_verified": {
+      "linux/arm64": true,
+      "linux/amd64": true
+    }
+  },
+  "release_ready": false
+}

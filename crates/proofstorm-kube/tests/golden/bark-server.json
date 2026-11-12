@@ -110,7 +110,7 @@
           "zmq_block": 28334,
           "zmq_tx": 28335
         },
-        "version": "31.1"
+        "version": "31.2"
       },
       "ark-database": {
         "backend_id": "postgresql",

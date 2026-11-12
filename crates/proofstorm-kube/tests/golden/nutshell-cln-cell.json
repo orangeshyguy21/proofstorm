@@ -152,7 +152,7 @@
         "environment": {
           "HOME": "/home/bitcoin"
         },
-        "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
+        "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
         "mounts": [
           {
             "mount_path": "/home/bitcoin/.bitcoin",
@@ -220,7 +220,7 @@
       },
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:b6806f3bbe1134cecfc9f6686e7c393babbbe36f0ce925109d8b2556566e04ec",
+      "rollout_digest": "sha256:8afe38d1dcb56aa92790fcb332c144bf08a2a2e1d45e30820d40b515d15d0d62",
       "storage": [
         {
           "claim_name": "data-chain-0"
@@ -236,7 +236,7 @@
           "zmq_block": 28334,
           "zmq_tx": 28335
         },
-        "version": "31.1"
+        "version": "31.2"
       },
       "workload": {
         "desired_replicas": 1,
@@ -613,7 +613,7 @@
             "zmq_block": 28334,
             "zmq_tx": 28335
           },
-          "version": "31.1"
+          "version": "31.2"
         }
       },
       "operation_admission": [
@@ -1354,7 +1354,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:b6806f3bbe1134cecfc9f6686e7c393babbbe36f0ce925109d8b2556566e04ec"
+                "proofstorm.dev/rollout-digest": "sha256:8afe38d1dcb56aa92790fcb332c144bf08a2a2e1d45e30820d40b515d15d0d62"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -1385,7 +1385,7 @@
                   "command": [
                     "bitcoind"
                   ],
-                  "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
+                  "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {

@@ -16,7 +16,7 @@ fn cell_document() -> Value {
         "api_version": "proofstorm/v1alpha1",
         "name": "nutshell-cln-live-cell",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.2", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
             {"id": "seed-lnd", "kind": "lightning", "implementation": "lnd", "version": proofstorm_core::LND_VERSION, "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cln-seed"}},
             {"id": "payer-lnd", "kind": "lightning", "implementation": "lnd", "version": proofstorm_core::LND_VERSION, "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cln-payer"}},
             {"id": "mint-cln", "kind": "lightning", "implementation": "cln", "version": proofstorm_core::CLN_VERSION, "config_version": "cln/26.06/v1", "control": "cell", "config": {"alias": "proofstorm-cln-mint"}},

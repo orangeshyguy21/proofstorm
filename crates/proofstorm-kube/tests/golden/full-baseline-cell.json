@@ -107,7 +107,7 @@
                   "value": "proofstorm-regtest-only"
                 }
               ],
-              "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
+              "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
               "imagePullPolicy": "IfNotPresent",
               "name": "exec",
               "resources": {
@@ -363,7 +363,7 @@
         "environment": {
           "HOME": "/home/bitcoin"
         },
-        "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
+        "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
         "mounts": [
           {
             "mount_path": "/home/bitcoin/.bitcoin",
@@ -431,7 +431,7 @@
       },
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:b6806f3bbe1134cecfc9f6686e7c393babbbe36f0ce925109d8b2556566e04ec",
+      "rollout_digest": "sha256:8afe38d1dcb56aa92790fcb332c144bf08a2a2e1d45e30820d40b515d15d0d62",
       "storage": [
         {
           "claim_name": "data-chain-a-0"
@@ -447,7 +447,7 @@
           "zmq_block": 28334,
           "zmq_tx": 28335
         },
-        "version": "31.1"
+        "version": "31.2"
       },
       "workload": {
         "desired_replicas": 1,
@@ -533,7 +533,7 @@
         "environment": {
           "HOME": "/home/bitcoin"
         },
-        "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
+        "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
         "mounts": [
           {
             "mount_path": "/home/bitcoin/.bitcoin",
@@ -601,7 +601,7 @@
       },
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:b6806f3bbe1134cecfc9f6686e7c393babbbe36f0ce925109d8b2556566e04ec",
+      "rollout_digest": "sha256:8afe38d1dcb56aa92790fcb332c144bf08a2a2e1d45e30820d40b515d15d0d62",
       "storage": [
         {
           "claim_name": "data-chain-b-0"
@@ -617,7 +617,7 @@
           "zmq_block": 28334,
           "zmq_tx": 28335
         },
-        "version": "31.1"
+        "version": "31.2"
       },
       "workload": {
         "desired_replicas": 1,
@@ -735,7 +735,7 @@
             "zmq_block": 28334,
             "zmq_tx": 28335
           },
-          "version": "31.1"
+          "version": "31.2"
         }
       },
       "operation_admission": [
@@ -933,7 +933,7 @@
             "zmq_block": 28334,
             "zmq_tx": 28335
           },
-          "version": "31.1"
+          "version": "31.2"
         }
       },
       "operation_admission": [
@@ -1152,7 +1152,7 @@
           "CDK_MINTD_WORK_DIR": "/app/data",
           "HOME": "/app/data"
         },
-        "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
+        "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:ad3a895cd2faeb41d8251f874dde164c1a75afc6a4adda1517aae3f520a69bd9",
         "mounts": [
           {
             "mount_path": "/config",
@@ -1262,7 +1262,7 @@
         }
       ],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:4726b0c2ba5116c66c939982eb9a47657c65cc9975af6e479ad2ccd18f6337bb",
+      "rollout_digest": "sha256:4273e4ab125cda7d90e898afee235a74adf7893c976f97e665b1d5f013d8c47c",
       "storage": [
         {
           "claim_name": "mint-data"
@@ -1275,7 +1275,7 @@
         "ports": {
           "http": 3338
         },
-        "version": "0.18.2"
+        "version": "0.18.3"
       },
       "workload": {
         "desired_replicas": 1,
@@ -1630,7 +1630,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:4726b0c2ba5116c66c939982eb9a47657c65cc9975af6e479ad2ccd18f6337bb"
+                "proofstorm.dev/rollout-digest": "sha256:4273e4ab125cda7d90e898afee235a74adf7893c976f97e665b1d5f013d8c47c"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -1656,7 +1656,7 @@
                       "value": "sqlite"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:ad3a895cd2faeb41d8251f874dde164c1a75afc6a4adda1517aae3f520a69bd9",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [
@@ -1782,7 +1782,7 @@
                       "value": "sqlite"
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10",
+                  "image": "proofstorm-registry.localhost:5000/cdk-mint@sha256:ad3a895cd2faeb41d8251f874dde164c1a75afc6a4adda1517aae3f520a69bd9",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "initialize-config",
                   "resources": {
@@ -2697,7 +2697,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:b6806f3bbe1134cecfc9f6686e7c393babbbe36f0ce925109d8b2556566e04ec"
+                "proofstorm.dev/rollout-digest": "sha256:8afe38d1dcb56aa92790fcb332c144bf08a2a2e1d45e30820d40b515d15d0d62"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -2728,7 +2728,7 @@
                   "command": [
                     "bitcoind"
                   ],
-                  "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
+                  "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {
@@ -2849,7 +2849,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:b6806f3bbe1134cecfc9f6686e7c393babbbe36f0ce925109d8b2556566e04ec"
+                "proofstorm.dev/rollout-digest": "sha256:8afe38d1dcb56aa92790fcb332c144bf08a2a2e1d45e30820d40b515d15d0d62"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -2880,7 +2880,7 @@
                   "command": [
                     "bitcoind"
                   ],
-                  "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
+                  "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {

@@ -277,7 +277,7 @@ async fn ordered_patch_keeps_flat_request_identity_and_immutable_preview() {
     // Independent fingerprint of the existing flat, ordered wire representation.
     assert_eq!(
         digest_json(&input.patch),
-        "sha256:65054f2227357690934e35096bdeae421ffdbacdcefdea92c676a5c9ac56fe39"
+        "sha256:eddb5c2462c71368282768a8fd3a7a4edb343df2f2eb9075f007836bf3e146bc"
     );
     assert_eq!(
         preview.request_digest,

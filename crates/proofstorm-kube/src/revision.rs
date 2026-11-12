@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn the_cache_drops_the_least_recently_used_and_weighs_large_cells() {
         let component: proofstorm_core::ComponentSpec = serde_json::from_value(serde_json::json!({
-            "id":"c","kind":"bitcoin","implementation":"bitcoin-core","version":"31.1",
+            "id":"c","kind":"bitcoin","implementation":"bitcoin-core","version":"31.2",
             "config_version":"bitcoin-core/31/v1","control":"cell","config":{}}))
         .unwrap();
         let sized = |components: usize| {

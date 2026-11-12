@@ -1,0 +1,48 @@
+{
+  "format_version": 1,
+  "date": "2026-11-12",
+  "versions": {
+    "bitcoin-core": "31.2"
+  },
+  "source": {
+    "repository": "https://github.com/bitcoin/bitcoin",
+    "tag": "v31.2",
+    "commit_sha": "241537a697561d1748909744069f1382aa15827f",
+    "checksums": "https://bitcoincore.org/bin/bitcoin-core-31.2/SHA256SUMS",
+    "checksums_sha256": "18c62c92217759b2c10f456b526a86022039ebb85b5a7b245e299edb3793c044"
+  },
+  "build_note": "Built from component-refresh commit ad4c729 (the recipe digest is in the provenance record); arm64 natively, amd64 under emulation on an arm64 host. Published to ghcr.io/osygy/proofstorm. Native AMD64 behavior is qualified by CI, not by this build.",
+  "images": [
+    {
+      "repository": "bitcoin-core",
+      "platform": "linux/arm64",
+      "recipe": "docker/bitcoin/Dockerfile.31.2",
+      "source_revision": "ad4c729e4ffabb9c03a1e6b07f789bf6ac9a8f5d",
+      "image": "ghcr.io/osygy/proofstorm/bitcoin-core@sha256:c5b3858c49c057780a3de672868a70b4d26d5429393392a99c625fe094baacac",
+      "probe": "Bitcoin Core daemon version v31.2.0 bitcoind",
+      "publication": "verified"
+    },
+    {
+      "repository": "bitcoin-core",
+      "platform": "linux/amd64",
+      "recipe": "docker/bitcoin/Dockerfile.31.2",
+      "source_revision": "ad4c729e4ffabb9c03a1e6b07f789bf6ac9a8f5d",
+      "image": "ghcr.io/osygy/proofstorm/bitcoin-core@sha256:f35b977dd14728efd8af786ea4716f5ac3b95d963c94583b0c6bc9b0cdbb29a5",
+      "probe": "Bitcoin Core daemon version v31.2.0 bitcoind",
+      "publication": "verified"
+    }
+  ],
+  "index": {
+    "image": "ghcr.io/osygy/proofstorm/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
+    "media_type": "application/vnd.oci.image.index.v1+json",
+    "manifests": {
+      "linux/arm64": "sha256:c5b3858c49c057780a3de672868a70b4d26d5429393392a99c625fe094baacac",
+      "linux/amd64": "sha256:f35b977dd14728efd8af786ea4716f5ac3b95d963c94583b0c6bc9b0cdbb29a5"
+    },
+    "anonymous_verified": {
+      "linux/arm64": true,
+      "linux/amd64": true
+    }
+  },
+  "release_ready": false
+}

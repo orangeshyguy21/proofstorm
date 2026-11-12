@@ -19,7 +19,7 @@ fn cell_document() -> Value {
         "api_version": "proofstorm/v1alpha1",
         "name": "cdk-oidc-live-cell",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.2", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {}},
             {"id": "lightning", "kind": "lightning", "implementation": "lnd", "version": proofstorm_core::LND_VERSION, "config_version": "lnd/0.20/v1", "control": "cell", "config": {"alias": "proofstorm-cdk-oidc"}},
             {"id": "database", "kind": "database", "implementation": "postgresql", "version": "17.11", "config_version": "postgresql/17/v1", "control": "cell", "config": {"storage_size": "2Gi"}},
             {"id": "identity", "kind": "identity_provider", "implementation": "keycloak", "version": "25.0.6", "config_version": "keycloak/25/v1", "control": "cell", "config": {"access_token_lifespan_seconds": 600}},

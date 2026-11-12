@@ -229,7 +229,7 @@ mod tests {
         serde_json::from_value(serde_json::json!({"id":"fleet","workspace_id":"alpha","version":1,
             "cell":{"api_version":"proofstorm/v1alpha1","name":"fleet","links":[],
                 "components":(0..25).map(|i| serde_json::json!({"id":format!("node-{i:02}"),"kind":"bitcoin",
-                    "implementation":"bitcoin-core","version":"31.1","config_version":"bitcoin-core/31/v1",
+                    "implementation":"bitcoin-core","version":"31.2","config_version":"bitcoin-core/31/v1",
                     "control":"cell","config":{"txindex":i%2==0}})).collect::<Vec<_>>()}})).unwrap()
     }
 

@@ -859,7 +859,7 @@ mod tests {
                         .count(),
                     4
                 );
-                let claim = "cdk@0.18.2:payment:[\"bolt11\",\"sat\",\"cdk-spark-processor\",\"0.1.0-d7244e2\"]";
+                let claim = "cdk@0.18.3:payment:[\"bolt11\",\"sat\",\"cdk-spark-processor\",\"0.1.0-d7244e2\"]";
                 assert!(gate.claims.contains(claim), "{claim}");
                 // Every Spark obligation is covered by the gate or its image case.
                 let claims = &plan.obligations[platform];

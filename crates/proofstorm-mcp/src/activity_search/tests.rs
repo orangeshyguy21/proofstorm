@@ -20,7 +20,7 @@ fn cell(store: &Store, name: &str) -> String {
     let spec: CellSpec = serde_json::from_value(json!({
         "api_version":"proofstorm/v1alpha1", "name":name, "links":[],
         "components":[{"id":"chain","kind":"bitcoin","implementation":"bitcoin-core",
-            "version":"31.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]
+            "version":"31.2","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}]
     }))
     .unwrap();
     let handle = store
