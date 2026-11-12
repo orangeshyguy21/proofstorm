@@ -421,7 +421,9 @@ pub struct CdkMintConfig {
     pub tos_url: String,
     pub enable_info_page: bool,
     pub input_fee_ppk: u64,
-    pub use_keyset_v2: bool,
+    /// Issuance keyset version, "00" or "01", or empty for the build's own
+    /// default.
+    pub keyset_version: String,
     pub mint_quote_ttl_seconds: u64,
     pub melt_quote_ttl_seconds: u64,
     pub http_cache_ttl_seconds: u64,
@@ -953,9 +955,7 @@ impl EffectiveComponentConfig {
                     .as_bool()
                     .ok_or_else(|| typed_config_error(component, "enable_info_page"))?,
                 input_fee_ppk: integer("input_fee_ppk")?,
-                use_keyset_v2: required_config_value(component, "use_keyset_v2")?
-                    .as_bool()
-                    .ok_or_else(|| typed_config_error(component, "use_keyset_v2"))?,
+                keyset_version: string("keyset_version")?,
                 mint_quote_ttl_seconds: integer("mint_quote_ttl_seconds")?,
                 melt_quote_ttl_seconds: integer("melt_quote_ttl_seconds")?,
                 http_cache_ttl_seconds: integer("http_cache_ttl_seconds")?,
@@ -2139,12 +2139,13 @@ fn cdk_config_fields() -> BTreeMap<String, ConfigFieldContract> {
             integer("Mint quote lifetime", 600, 1, 86_400),
         ),
         (
-            "use_keyset_v2".into(),
+            "keyset_version".into(),
             config_field(
-                "Create new keysets using CDK keyset version 2",
-                ConfigValueKind::Boolean,
-                ConfigDefault::Literal(json!(true)),
-            ),
+                "Keyset version for new keysets: \"00\" (keyset v1) or \"01\" (keyset v2), written as use_keyset_v2. Empty keeps the build's own default: v2 on releases, v3 on builds with BLS keysets, which can pin a version with native_toml info.keyset_version. A set version also rotates the active keyset back to it on every start",
+                ConfigValueKind::String,
+                ConfigDefault::Literal(json!("")),
+            )
+            .with_enum_values(&["", "00", "01"]),
         ),
     ]));
     fields.extend(cdk_lightning_limit_fields(default_minimum, default_maximum));
@@ -3719,7 +3720,7 @@ mod tests {
             .resolve_effective_component(&component("mint", "cdk", ComponentKind::Mint))
             .expect("default CDK policy");
         assert_eq!(cdk.config["input_fee_ppk"], json!(100));
-        assert_eq!(cdk.config["use_keyset_v2"], json!(true));
+        assert_eq!(cdk.config["keyset_version"], json!(""));
         assert_eq!(cdk.config["mint_quote_ttl_seconds"], json!(600));
         assert_eq!(cdk.config["melt_quote_ttl_seconds"], json!(120));
         assert_eq!(cdk.config["description_long"], json!(""));

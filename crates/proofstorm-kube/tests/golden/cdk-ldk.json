@@ -94,6 +94,7 @@
         "http_cache_ttl_seconds": 60,
         "icon_url": "",
         "input_fee_ppk": 100,
+        "keyset_version": "",
         "max_inputs": 1000,
         "max_melt": 500000,
         "max_mint": 500000,
@@ -108,8 +109,7 @@
         "onchain_max_mint_sat": 1000000,
         "onchain_min_melt_sat": 1000,
         "onchain_min_mint_sat": 1000,
-        "tos_url": "",
-        "use_keyset_v2": true
+        "tos_url": ""
       },
       "implementation": "cdk"
     },
@@ -220,7 +220,7 @@
       }
     ],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:1d42ef8eee810a5f7d8b3bf49edd9f71f2ee43b542c31ee58bb407f7ff726206",
+    "rollout_digest": "sha256:e4e18571b931da8f119edb8c3b9b1119edbf0227d0d28074bea5b99931576afa",
     "storage": [
       {
         "claim_name": "mint-data"
@@ -247,7 +247,7 @@
       {
         "apiVersion": "v1",
         "data": {
-          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 100\nuse_keyset_v2 = true\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n[payment_backend]\nbackend = \"ldk-node\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[ldk_node]\nfee_percent = 0.04\nreserve_fee_min = 4\nbitcoin_network = \"regtest\"\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"chain\"\nbitcoind_rpc_port = 18443\nbitcoind_rpc_user = \"proofstorm\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\nstorage_dir_path = \"/app/data/ldk-node\"\nldk_node_host = \"0.0.0.0\"\nldk_node_port = 9735\ngossip_source_type = \"p2p\"\nwebserver_host = \"127.0.0.1\"\nwebserver_port = 8091\nldk_node_mnemonic = \"file:/mint-secrets/ldk-mnemonic\"\n\n[database]\nengine = \"sqlite\"\n"
+          "config.toml": "[info]\nurl = \"http://mint:3338\"\nlisten_host = \"0.0.0.0\"\nlisten_port = 3338\nmnemonic = \"file:/mint-secrets/mint-mnemonic\"\nenable_info_page = false\ninput_fee_ppk = 100\n\n[info.quote_ttl]\nmint_ttl = 600\nmelt_ttl = 120\n\n[info.http_cache]\nbackend = \"memory\"\nttl = 60\ntti = 60\n\n[mint_info]\nname = \"Proofstorm CDK mint\"\ndescription = \"Proofstorm regtest CDK mint\"\n\n[limits]\nmax_inputs = 1000\nmax_outputs = 1000\n\n[mint_management_rpc]\nenabled = true\naddress = \"127.0.0.1\"\nport = 8086\ntls_dir = \"/management-server/tls\"\nallow_insecure = false\nallow_mint_quote_payment_override = false\n\n[payment_backend]\nbackend = \"ldk-node\"\nunit = \"sat\"\nmin_mint = 1\nmax_mint = 500000\nmin_melt = 1\nmax_melt = 500000\n\n[ldk_node]\nfee_percent = 0.04\nreserve_fee_min = 4\nbitcoin_network = \"regtest\"\nchain_source_type = \"bitcoinrpc\"\nbitcoind_rpc_host = \"chain\"\nbitcoind_rpc_port = 18443\nbitcoind_rpc_user = \"proofstorm\"\nbitcoind_rpc_password = \"file:/mint-secrets/bitcoin-rpc-password\"\nstorage_dir_path = \"/app/data/ldk-node\"\nldk_node_host = \"0.0.0.0\"\nldk_node_port = 9735\ngossip_source_type = \"p2p\"\nwebserver_host = \"127.0.0.1\"\nwebserver_port = 8091\nldk_node_mnemonic = \"file:/mint-secrets/ldk-mnemonic\"\n\n[database]\nengine = \"sqlite\"\n"
         },
         "kind": "ConfigMap",
         "metadata": {
@@ -297,7 +297,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:1d42ef8eee810a5f7d8b3bf49edd9f71f2ee43b542c31ee58bb407f7ff726206"
+                "proofstorm.dev/rollout-digest": "sha256:e4e18571b931da8f119edb8c3b9b1119edbf0227d0d28074bea5b99931576afa"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",

@@ -68,8 +68,8 @@ pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildPro
     }
     let (prepare, notes) = match implementation {
         "cdk-cli-wallet" | "cocod-wallet" => {
-            let recipe = if implementation == "cdk-cli-wallet" { include_str!("candidate_profiles/cdk-wallet-v1.Dockerfile") } else { include_str!("candidate_profiles/coco-wallet-v1.Dockerfile") };
-            (format!("cat > /workspace/{dockerfile} <<'PROOFSTORM_RECIPE_EOF'\n{recipe}\nPROOFSTORM_RECIPE_EOF\n"), vec!["Compiles the native wallet from the frozen source with its lockfile; checks command version and help. Build success does not establish runtime compatibility.".into()])
+            let (recipe, toolchain) = if implementation == "cdk-cli-wallet" { (include_str!("candidate_profiles/cdk-wallet-v2.Dockerfile"), " Compiles with the Rust version pinned in the source's rust-toolchain.toml, without its extra targets, and two Cargo jobs within the 4 GiB build limit.") } else { (include_str!("candidate_profiles/coco-wallet-v1.Dockerfile"), "") };
+            (format!("cat > /workspace/{dockerfile} <<'PROOFSTORM_RECIPE_EOF'\n{recipe}\nPROOFSTORM_RECIPE_EOF\n"), vec![format!("Compiles the native wallet from the frozen source with its lockfile; checks command version and help.{toolchain} Build success does not establish runtime compatibility.")])
         }
         // Nutshell imports the Spark backend unconditionally, so some Breez SDK
         // must install. PyPI deleted every 0.17.x release that 0.21.0-era locks pin.
@@ -104,7 +104,8 @@ pub fn candidate_build_profile(implementation: &str) -> Option<CandidateBuildPro
         },
         version: match implementation {
             "cdk" => 11,
-            "cdk-cli-wallet" | "nutshell" | "nutshell-wallet" => 3,
+            "cdk-cli-wallet" => 4,
+            "nutshell" | "nutshell-wallet" => 3,
             _ => 1,
         },
         repository: repository.into(),

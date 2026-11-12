@@ -643,7 +643,7 @@ mod tests {
                 "tos_url",
                 serde_json::json!("https://proofstorm.invalid/terms"),
             ),
-            ("use_keyset_v2", serde_json::json!(false)),
+            ("keyset_version", serde_json::json!("00")),
         ]);
 
         for (field, value) in cases {

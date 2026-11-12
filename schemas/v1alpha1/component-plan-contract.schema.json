@@ -132,6 +132,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "keyset_version": {
+          "description": "Issuance keyset version, \"00\" or \"01\", or empty for the build's own\ndefault.",
+          "type": "string"
+        },
         "max_inputs": {
           "format": "uint64",
           "minimum": 0,
@@ -206,9 +210,6 @@
         },
         "tos_url": {
           "type": "string"
-        },
-        "use_keyset_v2": {
-          "type": "boolean"
         }
       },
       "required": [
@@ -222,7 +223,7 @@
         "tos_url",
         "enable_info_page",
         "input_fee_ppk",
-        "use_keyset_v2",
+        "keyset_version",
         "mint_quote_ttl_seconds",
         "melt_quote_ttl_seconds",
         "http_cache_ttl_seconds",
