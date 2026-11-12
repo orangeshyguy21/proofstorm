@@ -10,7 +10,7 @@ usage() {
     '       just catalog-image audit' \
     '       just catalog-image build RECIPE@VERSION linux/amd64|linux/arm64 NEW_EXTERNAL_WORK' \
     '       just catalog-image prepare-copy PINNED_SOURCE PLATFORM NEW_EXTERNAL_WORK' \
-    '       just catalog-image publish WORK --confirm-namespace ghcr.io/orangeshyguy21/proofstorm' \
+    '       just catalog-image publish WORK --confirm-namespace ghcr.io/osygy/proofstorm' \
     '       just catalog-image verify-local WORK' \
     '       just catalog-image verify-work WORK' \
     '       just catalog-image verify PUBLISHED_IMAGE PLATFORM NEW_REPORT'
@@ -19,7 +19,7 @@ case "$mode" in
   help|-h|--help) usage; exit 0 ;;
   list|audit) [[ $# == 0 ]] || exit 2 ;;
   build|prepare-copy|verify) [[ $# == 3 ]] || { usage >&2; exit 2; } ;;
-  publish) [[ $# == 3 && "$2" == --confirm-namespace && "$3" == ghcr.io/orangeshyguy21/proofstorm ]] || { usage >&2; exit 2; } ;;
+  publish) [[ $# == 3 && "$2" == --confirm-namespace && "$3" == ghcr.io/osygy/proofstorm ]] || { usage >&2; exit 2; } ;;
   verify-local|verify-work) [[ $# == 1 ]] || exit 2 ;;
   *) usage >&2; exit 2 ;;
 esac

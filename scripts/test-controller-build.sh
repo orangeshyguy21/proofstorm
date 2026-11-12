@@ -100,11 +100,11 @@ if [[ " $* " == *' --head '* ]]; then [[ "$*" != *--max-filesize* ]] || exit 97;
 [[ "$*" != *must-not-leak* ]] || exit 97
 url=${!#}
 case "$url" in
-  'https://ghcr.io/token?service=ghcr.io&scope=repository:orangeshyguy21/proofstorm/proofstormd:pull')
+  'https://ghcr.io/token?service=ghcr.io&scope=repository:osygy/proofstorm/proofstormd:pull')
     [[ "$*" != *Authorization* ]] || exit 97
     [[ ${CONTROLLER_TEST_FAIL:-none} != private ]] || exit 22
     printf '{"token":"anonymous-fixture-token"}\n' ;;
-  https://ghcr.io/v2/orangeshyguy21/proofstorm/proofstormd/*)
+  https://ghcr.io/v2/osygy/proofstorm/proofstormd/*)
     [[ "$*" == *'Authorization: Bearer anonymous-fixture-token'* ]] || exit 97
     case "${url##*/}" in
       "$CONTROLLER_TEST_INDEX") cat "$CONTROLLER_TEST_REGISTRY/index" ;;
@@ -129,7 +129,7 @@ for identity in config manifest index; do
   : > "$CONTROLLER_TEST_TRACE"
   run build --work-dir "$work" || fail 'Build checks failed'
   if grep -q '^docker push' "$CONTROLLER_TEST_TRACE"; then fail 'Build published an image'; fi
-  run publish --work-dir "$work" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm || fail 'Publication checks failed'
+  run publish --work-dir "$work" --confirm-namespace ghcr.io/osygy/proofstorm || fail 'Publication checks failed'
   [[ -f "$work/controller.json" ]] || fail 'Missing published receipt'
 done
 # The generated receipt crosses both host/container boundaries without dirtying source.
@@ -148,18 +148,18 @@ done
 for failure in push private digest layer; do
   work="$scratch/fail-$failure"
   run build --work-dir "$work" || fail 'Fixture build failed'
-  if CONTROLLER_TEST_FAIL=$failure run publish --work-dir "$work" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm; then fail "Accepted $failure"; fi
+  if CONTROLLER_TEST_FAIL=$failure run publish --work-dir "$work" --confirm-namespace ghcr.io/osygy/proofstorm; then fail "Accepted $failure"; fi
   [[ ! -f "$work/controller.json" ]] || fail 'Failed publication produced a usable receipt'
 done
 if run publish --work-dir "$work" --confirm-namespace ghcr.io/wrong; then fail 'Accepted unconfirmed namespace'; fi
 export CONTROLLER_TEST_ID=unrelated
 run build --work-dir "$scratch/unrelated" || fail 'Fixture build failed'
-if run publish --work-dir "$scratch/unrelated" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm; then fail 'Accepted a different registry image'; fi
+if run publish --work-dir "$scratch/unrelated" --confirm-namespace ghcr.io/osygy/proofstorm; then fail 'Accepted a different registry image'; fi
 export CONTROLLER_TEST_ID=config
 run build --work-dir "$scratch/changed-source" || fail 'Fixture build failed'
 printf 'changed source\n' > "$scratch/changed-source/source/Dockerfile.proofstormd"
 : > "$CONTROLLER_TEST_TRACE"
-if run publish --work-dir "$scratch/changed-source" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm; then fail 'Published changed source'; fi
+if run publish --work-dir "$scratch/changed-source" --confirm-namespace ghcr.io/osygy/proofstorm; then fail 'Published changed source'; fi
 if grep -q '^docker push' "$CONTROLLER_TEST_TRACE"; then fail 'Source mismatch reached publication'; fi
 export CONTROLLER_TEST_ARCH=arm64
 registry arm64
@@ -170,19 +170,19 @@ for identity in config manifest index; do
   run build --platform linux/arm64 --work-dir "$work" || fail 'ARM64 build failed'
   if grep -q '^docker push' "$CONTROLLER_TEST_TRACE"; then fail 'ARM64 build published'; fi
   [[ $("$helper" release-controller platform "$work") == linux/arm64 ]] || fail 'Lost ARM64 platform'
-  run publish --work-dir "$work" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm || fail 'ARM64 publication failed'
+  run publish --work-dir "$work" --confirm-namespace ghcr.io/osygy/proofstorm || fail 'ARM64 publication failed'
   "$helper" release-controller stage "$work/controller.json" "$work/source" "$scratch/linux/input/source.json" "$scratch/mac-staged.json" aarch64-apple-darwin
   cmp "$work/controller.json" "$scratch/mac-staged.json"
 done
 # A matching source still cannot carry an ARM controller into a Linux AMD64 bundle.
 if "$helper" linux-build-prepare "$fixture" "$scratch/linux-wrong-arch" false false "$work/controller.json" > "$scratch/output" 2>&1; then fail 'Linux transport accepted ARM64'; fi
-if run publish --work-dir "$work" --platform linux/amd64 --confirm-namespace ghcr.io/orangeshyguy21/proofstorm; then fail 'Publication allowed a platform override'; fi
+if run publish --work-dir "$work" --platform linux/amd64 --confirm-namespace ghcr.io/osygy/proofstorm; then fail 'Publication allowed a platform override'; fi
 for mismatch in index config; do
   if [[ "$mismatch" == index ]]; then registry arm64 amd64; else registry amd64 arm64; fi
   work="$scratch/wrong-$mismatch-platform"
   export CONTROLLER_TEST_ID=config
   run build --platform linux/arm64 --work-dir "$work" || fail 'Mismatch fixture build failed'
-  if run publish --work-dir "$work" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm; then fail "Accepted wrong $mismatch platform"; fi
+  if run publish --work-dir "$work" --confirm-namespace ghcr.io/osygy/proofstorm; then fail "Accepted wrong $mismatch platform"; fi
   [[ ! -f "$work/controller.json" ]] || fail 'Wrong platform produced a usable receipt'
 done
 : > "$CONTROLLER_TEST_TRACE"

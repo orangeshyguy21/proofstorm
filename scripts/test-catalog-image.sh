@@ -101,7 +101,7 @@ SH
 chmod +x "$scratch/bin/"*
 export PATH="$scratch/bin:$PATH"
 run() { bash "$fixture/scripts/catalog-image.sh" "$@" > "$scratch/output" 2>&1; }
-namespace=ghcr.io/orangeshyguy21/proofstorm
+namespace=ghcr.io/osygy/proofstorm
 for arch in amd64 arm64; do
   registry "$arch"
   : > "$IMAGE_TEST_TRACE"

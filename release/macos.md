@@ -51,7 +51,7 @@ cluster. Publication is a separate, authenticated action when authorized:
 
 ```sh
 just release-controller-publish --work-dir "$mac_work/controller" \
-  --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
+  --confirm-namespace ghcr.io/osygy/proofstorm
 just release-ci-macos --work-dir "$mac_work/bundle" \
   --controller-receipt "$mac_work/controller/controller.json"
 ```

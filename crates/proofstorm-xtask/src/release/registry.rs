@@ -319,10 +319,8 @@ pub(super) fn verify(
 
 #[cfg(test)]
 pub(super) fn test_url(digest: &str) -> Result<String> {
-    Reference::parse(&format!(
-        "ghcr.io/orangeshyguy21/proofstorm/proofstormd@{digest}"
-    ))?
-    .url("manifests", digest)
+    Reference::parse(&format!("ghcr.io/osygy/proofstorm/proofstormd@{digest}"))?
+        .url("manifests", digest)
 }
 
 #[cfg(test)]

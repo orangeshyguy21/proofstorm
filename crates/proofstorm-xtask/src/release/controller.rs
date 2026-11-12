@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use std::{ffi::OsString, fs, io::Write, path::Path};
 
-const REPOSITORY: &str = "ghcr.io/orangeshyguy21/proofstorm/proofstormd";
+const REPOSITORY: &str = "ghcr.io/osygy/proofstorm/proofstormd";
 
 fn architecture(platform: &str) -> Result<&str> {
     match platform {

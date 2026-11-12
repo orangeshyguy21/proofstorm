@@ -132,7 +132,7 @@ fn published_bark_images_are_downloadable_on_demand_and_prefetched() {
             assert!(
                 download_source(image, &runtime, &distributed)
                     .unwrap()
-                    .starts_with(&format!("ghcr.io/orangeshyguy21/proofstorm/{id}@sha256:"))
+                    .starts_with(&format!("ghcr.io/osygy/proofstorm/{id}@sha256:"))
             );
         }
     }
@@ -216,7 +216,7 @@ fn renamed_mint_repositories_preserve_saved_locks_only_for_shipped_digests() {
             source(&previous_image).unwrap(),
             previous_image.replace(
                 "proofstorm-registry.localhost:5000",
-                "ghcr.io/orangeshyguy21/proofstorm"
+                "ghcr.io/osygy/proofstorm"
             )
         );
 
@@ -314,7 +314,7 @@ fn bootstrap_pins_are_complete_and_immutable() {
 
 #[test]
 fn published_controller_requires_the_compiled_version_and_contract() {
-    let mut info = serde_json::json!({"image":format!("ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:{}","a".repeat(64)),"metadata":{"version":env!("CARGO_PKG_VERSION"),"runtime_contract_sha256":crate::release::runtime_contract_sha256()}});
+    let mut info = serde_json::json!({"image":format!("ghcr.io/osygy/proofstorm/proofstormd@sha256:{}","a".repeat(64)),"metadata":{"version":env!("CARGO_PKG_VERSION"),"runtime_contract_sha256":crate::release::runtime_contract_sha256()}});
     validate_controller(&info).unwrap();
     info["metadata"]["version"] = serde_json::json!("stale");
     assert!(validate_controller(&info).is_err());

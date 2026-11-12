@@ -6,7 +6,7 @@ trap 'printf "Controller stopped during %s (line %s, status %s). Published image
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 mode=${1:-help}; [[ $# == 0 ]] || shift
 work='' namespace='' platform=''
-usage() { printf 'Usage: bash scripts/controller-build.sh build --work-dir NEW_EXTERNAL_DIRECTORY [--platform linux/amd64|linux/arm64]\n       bash scripts/controller-build.sh publish --work-dir DIRECTORY --confirm-namespace ghcr.io/orangeshyguy21/proofstorm\nBuild defaults to linux/amd64. Publication uses the recorded build platform.\n'; }
+usage() { printf 'Usage: bash scripts/controller-build.sh build --work-dir NEW_EXTERNAL_DIRECTORY [--platform linux/amd64|linux/arm64]\n       bash scripts/controller-build.sh publish --work-dir DIRECTORY --confirm-namespace ghcr.io/osygy/proofstorm\nBuild defaults to linux/amd64. Publication uses the recorded build platform.\n'; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --work-dir|--confirm-namespace|--platform)
@@ -19,7 +19,7 @@ done
 case "$mode" in
   help|--help|-h) usage; exit 0 ;;
   build) [[ -n "$work" && -z "$namespace" ]] || { usage >&2; exit 2; }; platform=${platform:-linux/amd64}; [[ "$platform" == linux/amd64 || "$platform" == linux/arm64 ]] || { usage >&2; exit 2; } ;;
-  publish) [[ -n "$work" && -z "$platform" && "$namespace" == ghcr.io/orangeshyguy21/proofstorm ]] || { usage >&2; exit 2; } ;;
+  publish) [[ -n "$work" && -z "$platform" && "$namespace" == ghcr.io/osygy/proofstorm ]] || { usage >&2; exit 2; } ;;
   *) usage >&2; exit 2 ;;
 esac
 for tool in cargo docker curl; do command -v "$tool" >/dev/null || { printf 'Missing prerequisite: %s\n' "$tool" >&2; exit 1; }; done

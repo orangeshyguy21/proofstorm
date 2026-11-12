@@ -124,7 +124,7 @@ pub(crate) fn fixture_with_info(root: &Path, info: &Value) -> PathBuf {
 pub(crate) fn alpha_info() -> Value {
     let mut info = crate::release::describe();
     // Explicit synthetic image evidence, not a relabelled checked-in release.
-    info["controller"] = json!({"image":format!("ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:{}", "a".repeat(64)),"platform":crate::platform::container_platform().unwrap(),"release_ready":false,"metadata":{"version":info["version"],"runtime_contract_sha256":info["runtime_contract_sha256"]}});
+    info["controller"] = json!({"image":format!("ghcr.io/osygy/proofstorm/proofstormd@sha256:{}", "a".repeat(64)),"platform":crate::platform::container_platform().unwrap(),"release_ready":false,"metadata":{"version":info["version"],"runtime_contract_sha256":info["runtime_contract_sha256"]}});
     info
 }
 

@@ -54,7 +54,7 @@ offline verification first, then publish the frozen work directory:
 ```sh
 just catalog-image verify-local /absolute/path/to/restored/work
 just catalog-image publish /absolute/path/to/restored/work \
-  --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
+  --confirm-namespace ghcr.io/osygy/proofstorm
 ```
 
 Publication needs GHCR write access for `proofstorm/bark-server`,

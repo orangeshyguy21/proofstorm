@@ -244,7 +244,7 @@ qualification runner. For each of the eight images:
 2. Push the archive's OCI layout, byte for byte, to a throwaway `127.0.0.1` registry.
    The manifest digest stays the archive's own.
 3. Run `just catalog-image prepare-copy 127.0.0.1:PORT/…/REPOSITORY@DIGEST PLATFORM WORK`,
-   then `just catalog-image publish WORK --confirm-namespace ghcr.io/orangeshyguy21/proofstorm`.
+   then `just catalog-image publish WORK --confirm-namespace ghcr.io/osygy/proofstorm`.
    The copy is not rebuilt or executed.
 
 `spark-operator`, `open-ssp` and `cdk-spark-processor` must be **Public** GHCR packages.

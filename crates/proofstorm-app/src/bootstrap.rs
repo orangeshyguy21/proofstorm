@@ -37,7 +37,7 @@ fn validate_controller(value: &Value) -> Result<()> {
     })?;
     ensure!(
         image
-            .strip_prefix("ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:")
+            .strip_prefix("ghcr.io/osygy/proofstorm/proofstormd@sha256:")
             .is_some_and(digest),
         "controller must be pinned to the confirmed registry"
     );

@@ -182,7 +182,7 @@ packaging and relocation execute the selected CLI/MCP binaries.
 | `just release-ci-linux --work-dir NEW_DIRECTORY --controller-receipt FILE` | Matching Linux build + installer artifact lane |
 | `just release-ci-macos --work-dir NEW_DIRECTORY --controller-receipt FILE` | Matching Mac build + installer artifact lane |
 | `just release-controller-build --platform linux/amd64 --work-dir NEW_DIRECTORY` | Source-bound local controller build/probe; also supports `linux/arm64` |
-| `just release-controller-publish --work-dir DIRECTORY --confirm-namespace ghcr.io/orangeshyguy21/proofstorm` | Explicit authenticated publication + anonymous verification |
+| `just release-controller-publish --work-dir DIRECTORY --confirm-namespace ghcr.io/osygy/proofstorm` | Explicit authenticated publication + anonymous verification |
 | `just catalog-image list` | [Catalog image maintenance](../docker/README.md); publication requires explicit namespace confirmation |
 | `just tool-pins TARGET NEW_OUTPUT` | Resolve official checksum-verified candidate pins; review before editing shipped manifests |
 

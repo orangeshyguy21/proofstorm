@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.repository == 'orangeshyguy21/proofstorm'
+    if: github.repository == 'osygy/proofstorm'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:

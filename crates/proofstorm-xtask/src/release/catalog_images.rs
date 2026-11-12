@@ -15,7 +15,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const NAMESPACE: &str = "ghcr.io/orangeshyguy21/proofstorm";
+const NAMESPACE: &str = "ghcr.io/osygy/proofstorm";
 const RECIPES: &[&str] = &[
     "bitcoin-core",
     "cdk-mint",

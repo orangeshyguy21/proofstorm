@@ -51,7 +51,7 @@ this validation pass corrected test fixtures and documentation only.
 All six component images were rebuilt from clean commit
 `fc827752bc834a7fa50a9fad317143209d6f4baf`, source fingerprint
 `e497fa8565b6b6b15b6a1c67466d6577536ddc9ae5f4cf03b34b60debdc12df0`,
-and published to `ghcr.io/orangeshyguy21/proofstorm`. The existing publisher's
+and published to `ghcr.io/osygy/proofstorm`. The existing publisher's
 read-only `verify-work` command rechecked every image after publication. It
 verified manifest/config hashes, platform, the local image identity, and anonymous
 layer availability. All six receipts remain `publication: verified`.

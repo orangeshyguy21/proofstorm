@@ -26,7 +26,7 @@ chmod +x "$scratch/bin/docker"
 export PATH="$scratch/bin:$PATH"
 bash "$fixture/tests/cdk18-config-contract.sh" > "$scratch/output"
 [[ $(grep -c '^CALL$' "$CONFIG_TRACE") == 8 ]]
-[[ $(grep -c '<ghcr.io/orangeshyguy21/proofstorm/cdk' "$CONFIG_TRACE") == 8 ]]
+[[ $(grep -c '<ghcr.io/osygy/proofstorm/cdk' "$CONFIG_TRACE") == 8 ]]
 if grep -q 'localhost:5111\|mintd.regtest.toml\|docker/mint/mintd.toml' "$CONFIG_TRACE"; then
   echo 'CDK check still depends on a retired fixture' >&2; exit 1
 fi

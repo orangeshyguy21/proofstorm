@@ -108,7 +108,7 @@ jobs:
     name: Linux bundle and installer
     needs: rust
     # Only trusted main may publish controller images. PR/branch checks stay read-only.
-    if: github.repository == 'orangeshyguy21/proofstorm' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: github.repository == 'osygy/proofstorm' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions:
@@ -140,7 +140,7 @@ jobs:
           chmod 700 "$DOCKER_CONFIG"
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
       - name: Publish and anonymously verify exact controller image
-        run: bash scripts/controller-build.sh publish --work-dir "$RUNNER_TEMP/$BUNDLE_WORK_NAME-controller" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
+        run: bash scripts/controller-build.sh publish --work-dir "$RUNNER_TEMP/$BUNDLE_WORK_NAME-controller" --confirm-namespace ghcr.io/osygy/proofstorm
       - name: Remove publication credentials before building host binaries
         if: always()
         run: docker logout ghcr.io
@@ -178,7 +178,7 @@ jobs:
   arm64-controller:
     name: ARM64 controller
     needs: rust
-    if: github.repository == 'orangeshyguy21/proofstorm' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: github.repository == 'osygy/proofstorm' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     permissions:
@@ -209,7 +209,7 @@ jobs:
           chmod 700 "$DOCKER_CONFIG"
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
       - name: Publish and anonymously verify exact ARM64 image
-        run: bash scripts/controller-build.sh publish --work-dir "$RUNNER_TEMP/$CONTROLLER_WORK_NAME" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
+        run: bash scripts/controller-build.sh publish --work-dir "$RUNNER_TEMP/$CONTROLLER_WORK_NAME" --confirm-namespace ghcr.io/osygy/proofstorm
       - name: Remove publication credentials
         if: always()
         run: docker logout ghcr.io
@@ -233,7 +233,7 @@ jobs:
   macos-bundle:
     name: Mac bundle and installer
     needs: [arm64-controller, macos-installer-contract]
-    if: github.repository == 'orangeshyguy21/proofstorm' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: github.repository == 'osygy/proofstorm' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: macos-15
     timeout-minutes: 120
     env:

@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "generated_at": "2026-10-06T20:57:37Z",
-  "namespace": "ghcr.io/orangeshyguy21/proofstorm",
+  "namespace": "ghcr.io/osygy/proofstorm",
   "publication_method": "Immutable copy of retained OCI image archives; no rebuild or emulated execution",
   "manifest_note": "Native Linux qualification used compressed Docker manifests. Publication preserves the original saved OCI manifests and uncompressed layers. Config bytes and ordered rootfs diff IDs match native qualification exactly.",
   "qualification_revision": "eec0c1b52f685be829ca7ba066ffefd63f348600",
@@ -10,7 +10,7 @@
       "repository": "cdk-bark-processor",
       "version": "0.1.0-fe468ca",
       "platform": "linux/amd64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-bark-processor@sha256:0d42619e268a902d7fe7058ce8c575d9efb6046d18f3762773669713c578e8f3",
+      "image": "ghcr.io/osygy/proofstorm/cdk-bark-processor@sha256:0d42619e268a902d7fe7058ce8c575d9efb6046d18f3762773669713c578e8f3",
       "config_digest": "sha256:3326bf4c171dbeb70a2371473392f13046d41e2809e15037f5ed5634659804d4",
       "rootfs_diff_ids": [
         "sha256:34467cc93912af891dfee8a3902adf9b4f355a9bca4eaa46f658d1181a21de0d",
@@ -33,7 +33,7 @@
       "repository": "bark-server",
       "version": "0.7.0-6188e2d",
       "platform": "linux/amd64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/bark-server@sha256:d05afa9fc60b8c0436cc9742fac9f61fbf8a9061fdbb197e981c751d6ab63973",
+      "image": "ghcr.io/osygy/proofstorm/bark-server@sha256:d05afa9fc60b8c0436cc9742fac9f61fbf8a9061fdbb197e981c751d6ab63973",
       "config_digest": "sha256:cf3e4aef571f01726f185805e80879112df354553a897e27258550d851c945ff",
       "rootfs_diff_ids": [
         "sha256:34467cc93912af891dfee8a3902adf9b4f355a9bca4eaa46f658d1181a21de0d",
@@ -58,7 +58,7 @@
       "repository": "cln-hold",
       "version": "26.06.7-hold.0.3.3",
       "platform": "linux/amd64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/cln-hold@sha256:2190679589650073085fd19391f9d0da0bd0130c1b6434f8ac0b055b1f5426a7",
+      "image": "ghcr.io/osygy/proofstorm/cln-hold@sha256:2190679589650073085fd19391f9d0da0bd0130c1b6434f8ac0b055b1f5426a7",
       "config_digest": "sha256:8810210f691304d2dc4e9707423255c1b0d380f4f4a8f3ab59c17bbfa233ff2f",
       "rootfs_diff_ids": [
         "sha256:1d69a5fd31932841d7825ef4780c06f008eea65aaa9f3110fe09d5832ed5c7d8",
@@ -87,7 +87,7 @@
       "repository": "cdk-bark-processor",
       "version": "0.1.0-fe468ca",
       "platform": "linux/arm64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-bark-processor@sha256:15b049c976cbe949a87d433d2fea0d5096f842610e5cf96a4fdc840d52179f09",
+      "image": "ghcr.io/osygy/proofstorm/cdk-bark-processor@sha256:15b049c976cbe949a87d433d2fea0d5096f842610e5cf96a4fdc840d52179f09",
       "config_digest": "sha256:2a6d70eb01f2972851abcfe2cecfdd0be9f51f0bdf078e957d4afd30484bc3d6",
       "rootfs_diff_ids": [
         "sha256:055ab12bd547e17a0630037f06a186cf405e3f61bb03a614562ca8f5ab52a8be",
@@ -110,7 +110,7 @@
       "repository": "bark-server",
       "version": "0.7.0-6188e2d",
       "platform": "linux/arm64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/bark-server@sha256:28f4d77cf99c94f70ca82d3f4e7660ffed7e8156010216761cb6b60123ef5205",
+      "image": "ghcr.io/osygy/proofstorm/bark-server@sha256:28f4d77cf99c94f70ca82d3f4e7660ffed7e8156010216761cb6b60123ef5205",
       "config_digest": "sha256:a0be0f121706e6c6b6bd52004efd2f058f2c095ddf39bfbbbb957d0be0824518",
       "rootfs_diff_ids": [
         "sha256:055ab12bd547e17a0630037f06a186cf405e3f61bb03a614562ca8f5ab52a8be",
@@ -135,7 +135,7 @@
       "repository": "cln-hold",
       "version": "26.06.7-hold.0.3.3",
       "platform": "linux/arm64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/cln-hold@sha256:695257c9caf510a870a57be0f1d47097baf2ca69fa6e1c6849a6d09b35eb463f",
+      "image": "ghcr.io/osygy/proofstorm/cln-hold@sha256:695257c9caf510a870a57be0f1d47097baf2ca69fa6e1c6849a6d09b35eb463f",
       "config_digest": "sha256:a49c6bb36a533f2564c2ee860d48a60e9d1275afc526016874815a331980d5e9",
       "rootfs_diff_ids": [
         "sha256:13a56b6535801be2adde694dabaf1c2df1d862a390661907dac821c42cd565cc",

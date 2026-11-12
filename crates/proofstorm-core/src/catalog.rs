@@ -377,7 +377,7 @@ pub fn catalog_image_source(image: &str) -> Result<String, String> {
         repository.to_owned()
     } else if let Some(repository) = repository.strip_prefix("proofstorm-registry.localhost:5000/")
     {
-        format!("ghcr.io/orangeshyguy21/proofstorm/{repository}")
+        format!("ghcr.io/osygy/proofstorm/{repository}")
     } else {
         repository.to_owned()
     };

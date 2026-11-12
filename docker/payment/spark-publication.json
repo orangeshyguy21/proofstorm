@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "generated_at": "2026-11-03T18:35:44Z",
-  "namespace": "ghcr.io/orangeshyguy21/proofstorm",
+  "namespace": "ghcr.io/osygy/proofstorm",
   "publication_method": "Immutable copy of retained OCI image archives; no rebuild or emulated execution",
   "manifest_note": "Native Linux qualification used compressed Docker manifests. Publication preserves the original saved OCI manifests and uncompressed layers. Config bytes and ordered rootfs diff IDs match native qualification exactly.",
   "qualification_revision": "0c4e28947829d100c6f665df33a7144da068343c",
@@ -10,7 +10,7 @@
       "repository": "spark-operator",
       "version": "0.0.0-5e0c879",
       "platform": "linux/amd64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/spark-operator@sha256:36bbda523377e1b2a9c19f0c74baed8c8572aa301bb785396dda979783b867b1",
+      "image": "ghcr.io/osygy/proofstorm/spark-operator@sha256:36bbda523377e1b2a9c19f0c74baed8c8572aa301bb785396dda979783b867b1",
       "config_digest": "sha256:8818cdd75917abac2622e9ca9ceb340b185a447181fd0aa923a8a3c1a33d8a1c",
       "rootfs_diff_ids": [
         "sha256:34467cc93912af891dfee8a3902adf9b4f355a9bca4eaa46f658d1181a21de0d",
@@ -38,7 +38,7 @@
       "repository": "open-ssp",
       "version": "0.1.0-9c25f69",
       "platform": "linux/amd64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/open-ssp@sha256:98715af7b7847225186a7d031419e9255dcd1628f30f8cf6c444dc2fdfaa1cc8",
+      "image": "ghcr.io/osygy/proofstorm/open-ssp@sha256:98715af7b7847225186a7d031419e9255dcd1628f30f8cf6c444dc2fdfaa1cc8",
       "config_digest": "sha256:991603e660e22a4d7647cb3570c36063c4fc151b244b70ea545f565e19be2b47",
       "rootfs_diff_ids": [
         "sha256:34467cc93912af891dfee8a3902adf9b4f355a9bca4eaa46f658d1181a21de0d",
@@ -61,7 +61,7 @@
       "repository": "cdk-spark-processor",
       "version": "0.1.0-d7244e2",
       "platform": "linux/amd64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-spark-processor@sha256:5038e39e53c23e5cbe05195c83a74585a531b2861d722dbec255c822e74a2bc5",
+      "image": "ghcr.io/osygy/proofstorm/cdk-spark-processor@sha256:5038e39e53c23e5cbe05195c83a74585a531b2861d722dbec255c822e74a2bc5",
       "config_digest": "sha256:4c5cafbc1fbafad8ad623b395f6ffa60509e40226ad61c21ac4995b571ddb093",
       "rootfs_diff_ids": [
         "sha256:34467cc93912af891dfee8a3902adf9b4f355a9bca4eaa46f658d1181a21de0d",
@@ -84,7 +84,7 @@
       "repository": "ldk-server",
       "version": "0.1.0-762bc47",
       "platform": "linux/amd64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/ldk-server@sha256:b7de700705608fe801360459b3c510790190c2f9dfcb9c24f0c24017ea27ca8d",
+      "image": "ghcr.io/osygy/proofstorm/ldk-server@sha256:b7de700705608fe801360459b3c510790190c2f9dfcb9c24f0c24017ea27ca8d",
       "config_digest": "sha256:9976dd463a718e8fbc9bc2e216d5bb0d9fde1bbb7ab839d999ee169b1e10b94b",
       "rootfs_diff_ids": [
         "sha256:34467cc93912af891dfee8a3902adf9b4f355a9bca4eaa46f658d1181a21de0d",
@@ -107,7 +107,7 @@
       "repository": "spark-operator",
       "version": "0.0.0-5e0c879",
       "platform": "linux/arm64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/spark-operator@sha256:d5684f6fe8c6cf42fea3c052283206ecd6cb188c43baa2f3e0f19016165d7df4",
+      "image": "ghcr.io/osygy/proofstorm/spark-operator@sha256:d5684f6fe8c6cf42fea3c052283206ecd6cb188c43baa2f3e0f19016165d7df4",
       "config_digest": "sha256:72b527847e254553a12b55e3e70770d6e05873da8867af897c084910cfb7130a",
       "rootfs_diff_ids": [
         "sha256:055ab12bd547e17a0630037f06a186cf405e3f61bb03a614562ca8f5ab52a8be",
@@ -135,7 +135,7 @@
       "repository": "open-ssp",
       "version": "0.1.0-9c25f69",
       "platform": "linux/arm64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/open-ssp@sha256:38c3ea9addf07141375de19a08333ec7f62e0e982b6aad86af615c724c162845",
+      "image": "ghcr.io/osygy/proofstorm/open-ssp@sha256:38c3ea9addf07141375de19a08333ec7f62e0e982b6aad86af615c724c162845",
       "config_digest": "sha256:123e6c5c9fd6286483e2c4263b65b7c80cabedf8b04c0d22ee0eb064f6381474",
       "rootfs_diff_ids": [
         "sha256:055ab12bd547e17a0630037f06a186cf405e3f61bb03a614562ca8f5ab52a8be",
@@ -158,7 +158,7 @@
       "repository": "cdk-spark-processor",
       "version": "0.1.0-d7244e2",
       "platform": "linux/arm64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/cdk-spark-processor@sha256:26739d760b67a0bd6814232cb0e18b488397c01a6b330e053aabf7ae786454c4",
+      "image": "ghcr.io/osygy/proofstorm/cdk-spark-processor@sha256:26739d760b67a0bd6814232cb0e18b488397c01a6b330e053aabf7ae786454c4",
       "config_digest": "sha256:e5fa5452380d3dc81a451800a20a2af1ecf1e8802167255da6a6ec14e736bf73",
       "rootfs_diff_ids": [
         "sha256:055ab12bd547e17a0630037f06a186cf405e3f61bb03a614562ca8f5ab52a8be",
@@ -181,7 +181,7 @@
       "repository": "ldk-server",
       "version": "0.1.0-762bc47",
       "platform": "linux/arm64",
-      "image": "ghcr.io/orangeshyguy21/proofstorm/ldk-server@sha256:aad2ad69c1a92cb4e7343a098ee6974ada50a464da123ad72a5937e2e2a335ee",
+      "image": "ghcr.io/osygy/proofstorm/ldk-server@sha256:aad2ad69c1a92cb4e7343a098ee6974ada50a464da123ad72a5937e2e2a335ee",
       "config_digest": "sha256:4c617da88d31c6c2ceb5bd6b68344c2d03b4adc9f815b8ba4a7651bb04674be5",
       "rootfs_diff_ids": [
         "sha256:055ab12bd547e17a0630037f06a186cf405e3f61bb03a614562ca8f5ab52a8be",

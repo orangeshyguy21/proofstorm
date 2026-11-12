@@ -1,7 +1,7 @@
 {
   "anonymous_verified": true,
   "format_version": 1,
-  "image": "ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:062ab1929d67632daf58184bd5119d5363651613aadd944d5754dc14dc5abbe4",
+  "image": "ghcr.io/osygy/proofstorm/proofstormd@sha256:062ab1929d67632daf58184bd5119d5363651613aadd944d5754dc14dc5abbe4",
   "local_image_id": "sha256:062ab1929d67632daf58184bd5119d5363651613aadd944d5754dc14dc5abbe4",
   "metadata": {
     "format_version": 1,
@@ -16,7 +16,7 @@
     "revision": "9c75d6893f891bc4636896068412a03804b28636",
     "sha256": "7e0c9e37922c2318b313fe88ec4b25faf42cddab83aeb43b58fb21f4a5822d10"
   },
-  "tag": "ghcr.io/orangeshyguy21/proofstorm/proofstormd:development-a2a8ac70d647467e838e409a6052a232",
+  "tag": "ghcr.io/osygy/proofstorm/proofstormd:development-a2a8ac70d647467e838e409a6052a232",
   "verification": {
     "cluster_reconciliation": false,
     "helper_startup": true,

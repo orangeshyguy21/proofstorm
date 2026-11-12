@@ -169,8 +169,8 @@ run release-prepare "$tricky"
 expect release.sh "$fixture" unset unset prepare "$tricky"
 run release-controller-build --work-dir "$tricky"
 expect controller-build.sh "$fixture" unset unset build --work-dir "$tricky"
-run release-controller-publish --work-dir "$tricky" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
-expect controller-build.sh "$fixture" unset unset publish --work-dir "$tricky" --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
+run release-controller-publish --work-dir "$tricky" --confirm-namespace ghcr.io/osygy/proofstorm
+expect controller-build.sh "$fixture" unset unset publish --work-dir "$tricky" --confirm-namespace ghcr.io/osygy/proofstorm
 run release-build-linux --source "$tricky" --work-dir output --development --debug
 expect linux-build.sh "$fixture" unset unset --source "$tricky" --work-dir output --development --debug
 for recipe in release-package release-pack release-extract; do

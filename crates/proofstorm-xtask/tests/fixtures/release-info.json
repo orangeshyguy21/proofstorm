@@ -15,10 +15,10 @@
     "proofstorm-registry.localhost:5000/upstream/docker.io/library/busybox@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "ghcr.io/example/direct@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
   ],
-  "image_publication": "{\"namespace\":\"ghcr.io/orangeshyguy21/proofstorm\"}",
+  "image_publication": "{\"namespace\":\"ghcr.io/osygy/proofstorm\"}",
   "bootstrap_tools": {"target": "x86_64-unknown-linux-gnu", "tools": [{"name": "fixture"}]},
   "controller": {
-    "image": "ghcr.io/orangeshyguy21/proofstorm/proofstormd@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "image": "ghcr.io/osygy/proofstorm/proofstormd@sha256:2222222222222222222222222222222222222222222222222222222222222222",
     "platform": "linux/amd64",
     "release_ready": false,
     "metadata": {

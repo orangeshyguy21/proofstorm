@@ -37,10 +37,7 @@ fn publication_mapping_preserves_digests_and_unverified_status() {
     let images = image_inventory(&fixture()).unwrap();
     assert_eq!(
         images[0]["published_source"],
-        format!(
-            "ghcr.io/orangeshyguy21/proofstorm/custom@sha256:{}",
-            "d".repeat(64)
-        )
+        format!("ghcr.io/osygy/proofstorm/custom@sha256:{}", "d".repeat(64))
     );
     assert_eq!(
         images[1]["published_source"],

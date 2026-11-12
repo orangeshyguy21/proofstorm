@@ -55,7 +55,7 @@ scratch="$(mktemp -d)"
 just catalog-image build cdk-cli-wallet@0.18.2 linux/arm64 "$scratch/wallet"
 # Inspect image.json and probe.stdout before authorizing a push:
 just catalog-image publish "$scratch/wallet" \
-  --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
+  --confirm-namespace ghcr.io/osygy/proofstorm
 ```
 
 Select `linux/amd64` or `linux/arm64` explicitly. Buildx must support that platform
@@ -92,7 +92,7 @@ To copy an existing reviewed image instead of rebuilding it:
 just catalog-image prepare-copy \
   '127.0.0.1:PORT/cdk-cli-wallet@sha256:DIGEST' linux/amd64 "$scratch/copy"
 just catalog-image publish "$scratch/copy" \
-  --confirm-namespace ghcr.io/orangeshyguy21/proofstorm
+  --confirm-namespace ghcr.io/osygy/proofstorm
 ```
 
 Replace `PORT` and `DIGEST` with the explicit source registry and reviewed digest;
@@ -121,7 +121,7 @@ For an independent anonymous check:
 
 ```sh
 just catalog-image verify \
-  'ghcr.io/orangeshyguy21/proofstorm/cdk-cli-wallet@sha256:DIGEST' \
+  'ghcr.io/osygy/proofstorm/cdk-cli-wallet@sha256:DIGEST' \
   linux/amd64 "$scratch/verification.json"
 ```
 
