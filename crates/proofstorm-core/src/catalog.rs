@@ -1,7 +1,7 @@
 // Current releases; acceptance gates and candidate baselines read these too.
 pub const CDK_VERSION: &str = "0.18.2";
-pub const LND_VERSION: &str = "0.21.4-beta";
-pub const CLN_VERSION: &str = "26.06.9";
+pub const LND_VERSION: &str = "0.21.8-beta";
+pub const CLN_VERSION: &str = "26.06.10";
 
 // Shared CDK daemon with LDK, BDK and PostgreSQL support.
 pub const CDK_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10";
@@ -408,7 +408,7 @@ pub fn distributed_catalog_for_platform(platform: CatalogPlatform) -> CatalogRes
 }
 
 // Mint backend support names only qualified releases.
-const LND_VERSIONS: &[&str] = &["0.20.5-beta", LND_VERSION];
+const LND_VERSIONS: &[&str] = &["0.20.8-beta", LND_VERSION];
 const CLN_VERSIONS: &[&str] = &[CLN_VERSION];
 
 fn build_catalog(amd64: bool) -> CatalogResponse {
@@ -462,9 +462,9 @@ fn build_catalog_with_spark(amd64: bool, spark_images: Option<&spark::Images>) -
             backends,
             adapter_version,
             "lnd",
-            "0.20.5-beta",
+            "0.20.8-beta",
             SupportLifecycle::Supported,
-            "docker.io/lightninglabs/lnd@sha256:2108a19d7569489a734f6b0862ddd1c07b1701fb2d65d554ec463706eeb68a98",
+            "docker.io/lightninglabs/lnd@sha256:d23faa661edebdcb0c633ce6bc33a7abdcdb82283bc53620463bf2b00a30c8cb",
         ),
         lightning_entry(
             amd64,
@@ -473,7 +473,7 @@ fn build_catalog_with_spark(amd64: bool, spark_images: Option<&spark::Images>) -
             "lnd",
             LND_VERSION,
             SupportLifecycle::Preferred,
-            "docker.io/lightninglabs/lnd@sha256:04d06edcc0f6e99a5e797ea34959f330add222226f840cd86afbc31f8f29627d",
+            "docker.io/lightninglabs/lnd@sha256:f17b2944b1b76396cccbe58feac469b6cefb5f407557ac77f0880f136fb935f9",
         ),
         lightning_entry(
             amd64,
@@ -482,9 +482,36 @@ fn build_catalog_with_spark(amd64: bool, spark_images: Option<&spark::Images>) -
             "cln",
             CLN_VERSION,
             SupportLifecycle::Preferred,
-            "docker.io/elementsproject/lightningd@sha256:de74289ddcccb68cd60543b08b2b8594002d819125d200492e17a95166d56577",
+            "docker.io/elementsproject/lightningd@sha256:59f10c4c7429bb80791481c906859f6de1aa58ef224758aa25d50b7d47fc0c04",
         ),
         // Superseded patches stay resolvable for existing cell locks; new cells are refused them.
+        lightning_entry(
+            amd64,
+            backends,
+            adapter_version,
+            "lnd",
+            "0.20.5-beta",
+            SupportLifecycle::Deprecated,
+            "docker.io/lightninglabs/lnd@sha256:2108a19d7569489a734f6b0862ddd1c07b1701fb2d65d554ec463706eeb68a98",
+        ),
+        lightning_entry(
+            amd64,
+            backends,
+            adapter_version,
+            "lnd",
+            "0.21.4-beta",
+            SupportLifecycle::Deprecated,
+            "docker.io/lightninglabs/lnd@sha256:04d06edcc0f6e99a5e797ea34959f330add222226f840cd86afbc31f8f29627d",
+        ),
+        lightning_entry(
+            amd64,
+            backends,
+            adapter_version,
+            "cln",
+            "26.06.9",
+            SupportLifecycle::Deprecated,
+            "docker.io/elementsproject/lightningd@sha256:de74289ddcccb68cd60543b08b2b8594002d819125d200492e17a95166d56577",
+        ),
         lightning_entry(
             amd64,
             backends,
@@ -593,7 +620,7 @@ fn build_catalog_with_spark(amd64: bool, spark_images: Option<&spark::Images>) -
                 dependency(LinkKind::PaymentBackend, "lnd", LND_VERSIONS),
                 dependency(LinkKind::PaymentBackend, "cln", CLN_VERSIONS),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
-                dependency(LinkKind::DatabaseBackend, "redis", &["8.10.2"]),
+                dependency(LinkKind::DatabaseBackend, "redis", &["8.10.3"]),
             ],
             support_matrix(
                 &[StorageBackend::Sqlite, StorageBackend::Postgres],
@@ -634,11 +661,19 @@ fn build_catalog_with_spark(amd64: bool, spark_images: Option<&spark::Images>) -
             amd64,
             backends,
             adapter_version,
-            "8.10.2",
+            "8.10.3",
             SupportLifecycle::Preferred,
+            "docker.io/library/redis@sha256:1f88291b4c57bdf249f02eb085a8669889b2d2954e91d4de5118a5da6b78dd53",
+        ),
+        // Superseded patches stay resolvable for existing cell locks; new cells are refused them.
+        redis_entry(
+            amd64,
+            backends,
+            adapter_version,
+            "8.10.2",
+            SupportLifecycle::Deprecated,
             "docker.io/library/redis@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6",
         ),
-        // Superseded patch stays resolvable for existing cell locks; new cells are refused it.
         redis_entry(
             amd64,
             backends,
@@ -2273,18 +2308,18 @@ mod tests {
     )]
     fn catalog_support_summary_is_exact_and_invariants_fail_closed() {
         let catalog = catalog_for_platform(CatalogPlatform::LinuxArm64);
-        assert_eq!(catalog.entries.len(), 30);
+        assert_eq!(catalog.entries.len(), 34);
         assert_eq!(catalog.implementations.len(), 20);
         let lnd = catalog
             .implementations
             .iter()
             .find(|support| support.implementation == "lnd")
             .expect("LND support summary");
-        assert_eq!(lnd.minimum_supported.as_deref(), Some("0.20.5-beta"));
-        assert_eq!(lnd.preferred_version.as_deref(), Some("0.21.4-beta"));
+        assert_eq!(lnd.minimum_supported.as_deref(), Some("0.20.8-beta"));
+        assert_eq!(lnd.preferred_version.as_deref(), Some("0.21.8-beta"));
         assert_eq!(
             lnd.supported_versions,
-            BTreeSet::from(["0.20.5-beta".into(), "0.21.4-beta".into()])
+            BTreeSet::from(["0.20.8-beta".into(), "0.21.8-beta".into()])
         );
         assert!(catalog.implementations.iter().all(|support| {
             matches!(

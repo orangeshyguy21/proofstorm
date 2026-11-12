@@ -67,7 +67,7 @@
     "execution_context": {
       "component_id": "cache",
       "environment": {},
-      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/redis@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/redis@sha256:1f88291b4c57bdf249f02eb085a8669889b2d2954e91d4de5118a5da6b78dd53",
       "mounts": [],
       "state_contract": "proofstorm/redis-cache-state/v1"
     },
@@ -126,7 +126,7 @@
     },
     "relevant_links": [],
     "revision_digest": "sha256:b2-golden-revision",
-    "rollout_digest": "sha256:a7841e99bd280823d8aa62f93c577af803ae6382273024d8f24c2a3aa413f892",
+    "rollout_digest": "sha256:544fc51343b085a8097252e108ba40399b8eb0f5c7bc192b2b0d906477c2de9e",
     "storage": [],
     "target_descriptor": {
       "backend_id": "redis",
@@ -135,7 +135,7 @@
       "ports": {
         "redis": 6379
       },
-      "version": "8.10.2"
+      "version": "8.10.3"
     },
     "workload": {
       "desired_replicas": 1,
@@ -177,7 +177,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:a7841e99bd280823d8aa62f93c577af803ae6382273024d8f24c2a3aa413f892"
+                "proofstorm.dev/rollout-digest": "sha256:544fc51343b085a8097252e108ba40399b8eb0f5c7bc192b2b0d906477c2de9e"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -208,7 +208,7 @@
                       }
                     }
                   ],
-                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/redis@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6",
+                  "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/redis@sha256:1f88291b4c57bdf249f02eb085a8669889b2d2954e91d4de5118a5da6b78dd53",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "ports": [

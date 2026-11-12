@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:aafd863f53dde6c92e320e18913d521f012cfdb3a9c8e5d2efc3685719ed5ba4",
+  "catalog_digest": "sha256:5ec55500759fd2aaa5f89b2987fc2f58170bbfc3f3fa23eece9daca98d7e976e",
   "entries": [
     {
       "implementation": "bark-server",
@@ -457,7 +457,7 @@
             "backend": {
               "implementation": "cln",
               "versions": [
-                "26.06.9"
+                "26.06.10"
               ]
             }
           },
@@ -467,8 +467,8 @@
             "backend": {
               "implementation": "lnd",
               "versions": [
-                "0.20.5-beta",
-                "0.21.4-beta"
+                "0.20.8-beta",
+                "0.21.8-beta"
               ]
             }
           },
@@ -540,15 +540,15 @@
           "link_kind": "payment_backend",
           "implementation": "lnd",
           "versions": [
-            "0.20.5-beta",
-            "0.21.4-beta"
+            "0.20.8-beta",
+            "0.21.8-beta"
           ]
         },
         {
           "link_kind": "payment_backend",
           "implementation": "cln",
           "versions": [
-            "26.06.9"
+            "26.06.10"
           ]
         },
         {
@@ -975,6 +975,90 @@
     {
       "implementation": "cln",
       "kind": "lightning",
+      "upstream_version": "26.06.10",
+      "release_channel": "stable",
+      "support_lifecycle": "preferred",
+      "config_version": "cln/26.06/v1",
+      "config_schema_digest": "sha256:1af8bae18445cca3dd6d67f9469145d70447781ea8d6ad369b33fb96f7ae0eee",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:59f10c4c7429bb80791481c906859f6de1aa58ef224758aa25d50b7d47fc0c04",
+      "fields": {
+        "alias": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "announce_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "autoconnect_policy": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "bitcoin_retry_timeout": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "chain_backend_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "chain_backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "developer_mode": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "listen_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "log_level": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "reconnect_policy": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "31.1"
+          ]
+        }
+      ]
+    },
+    {
+      "implementation": "cln",
+      "kind": "lightning",
       "upstream_version": "26.06.7",
       "release_channel": "stable",
       "support_lifecycle": "deprecated",
@@ -1061,7 +1145,7 @@
       "kind": "lightning",
       "upstream_version": "26.06.9",
       "release_channel": "stable",
-      "support_lifecycle": "preferred",
+      "support_lifecycle": "deprecated",
       "config_version": "cln/26.06/v1",
       "config_schema_digest": "sha256:1af8bae18445cca3dd6d67f9469145d70447781ea8d6ad369b33fb96f7ae0eee",
       "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:de74289ddcccb68cd60543b08b2b8594002d819125d200492e17a95166d56577",
@@ -1523,10 +1607,98 @@
       "kind": "lightning",
       "upstream_version": "0.20.5-beta",
       "release_channel": "prerelease",
-      "support_lifecycle": "supported",
+      "support_lifecycle": "deprecated",
       "config_version": "lnd/0.20/v1",
       "config_schema_digest": "sha256:65dff70176da398204126577f4d5892b2c5de8b47804f79d3891a0ed636d14d5",
       "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:2108a19d7569489a734f6b0862ddd1c07b1701fb2d65d554ec463706eeb68a98",
+      "fields": {
+        "accept_keysend": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "admin_macaroon": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "alias": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "chain_backend_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "chain_backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "debug_level": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "external_address": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "listen_endpoints": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "seed_backup_policy": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "tls_extra_domain": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "tls_identity": {
+          "classification": "generated_instance_secret",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "31.1"
+          ]
+        }
+      ]
+    },
+    {
+      "implementation": "lnd",
+      "kind": "lightning",
+      "upstream_version": "0.20.8-beta",
+      "release_channel": "prerelease",
+      "support_lifecycle": "supported",
+      "config_version": "lnd/0.20/v1",
+      "config_schema_digest": "sha256:65dff70176da398204126577f4d5892b2c5de8b47804f79d3891a0ed636d14d5",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:d23faa661edebdcb0c633ce6bc33a7abdcdb82283bc53620463bf2b00a30c8cb",
       "fields": {
         "accept_keysend": {
           "classification": "runtime_policy",
@@ -1699,10 +1871,98 @@
       "kind": "lightning",
       "upstream_version": "0.21.4-beta",
       "release_channel": "prerelease",
-      "support_lifecycle": "preferred",
+      "support_lifecycle": "deprecated",
       "config_version": "lnd/0.20/v1",
       "config_schema_digest": "sha256:65dff70176da398204126577f4d5892b2c5de8b47804f79d3891a0ed636d14d5",
       "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:04d06edcc0f6e99a5e797ea34959f330add222226f840cd86afbc31f8f29627d",
+      "fields": {
+        "accept_keysend": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "admin_macaroon": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "alias": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "chain_backend_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "chain_backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "debug_level": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "external_address": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "listen_endpoints": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "seed_backup_policy": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "tls_extra_domain": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "tls_identity": {
+          "classification": "generated_instance_secret",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "31.1"
+          ]
+        }
+      ]
+    },
+    {
+      "implementation": "lnd",
+      "kind": "lightning",
+      "upstream_version": "0.21.8-beta",
+      "release_channel": "prerelease",
+      "support_lifecycle": "preferred",
+      "config_version": "lnd/0.20/v1",
+      "config_schema_digest": "sha256:65dff70176da398204126577f4d5892b2c5de8b47804f79d3891a0ed636d14d5",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:f17b2944b1b76396cccbe58feac469b6cefb5f407557ac77f0880f136fb935f9",
       "fields": {
         "accept_keysend": {
           "classification": "runtime_policy",
@@ -2043,7 +2303,7 @@
             "backend": {
               "implementation": "cln",
               "versions": [
-                "26.06.9"
+                "26.06.10"
               ]
             }
           },
@@ -2053,8 +2313,8 @@
             "backend": {
               "implementation": "lnd",
               "versions": [
-                "0.20.5-beta",
-                "0.21.4-beta"
+                "0.20.8-beta",
+                "0.21.8-beta"
               ]
             }
           }
@@ -2076,15 +2336,15 @@
           "link_kind": "payment_backend",
           "implementation": "lnd",
           "versions": [
-            "0.20.5-beta",
-            "0.21.4-beta"
+            "0.20.8-beta",
+            "0.21.8-beta"
           ]
         },
         {
           "link_kind": "payment_backend",
           "implementation": "cln",
           "versions": [
-            "26.06.9"
+            "26.06.10"
           ]
         },
         {
@@ -2098,7 +2358,7 @@
           "link_kind": "database_backend",
           "implementation": "redis",
           "versions": [
-            "8.10.2"
+            "8.10.3"
           ]
         }
       ]
@@ -2364,7 +2624,7 @@
             "backend": {
               "implementation": "cln",
               "versions": [
-                "26.06.9"
+                "26.06.10"
               ]
             }
           },
@@ -2374,8 +2634,8 @@
             "backend": {
               "implementation": "lnd",
               "versions": [
-                "0.20.5-beta",
-                "0.21.4-beta"
+                "0.20.8-beta",
+                "0.21.8-beta"
               ]
             }
           }
@@ -2400,15 +2660,15 @@
           "link_kind": "payment_backend",
           "implementation": "lnd",
           "versions": [
-            "0.20.5-beta",
-            "0.21.4-beta"
+            "0.20.8-beta",
+            "0.21.8-beta"
           ]
         },
         {
           "link_kind": "payment_backend",
           "implementation": "cln",
           "versions": [
-            "26.06.9"
+            "26.06.10"
           ]
         },
         {
@@ -2422,7 +2682,7 @@
           "link_kind": "database_backend",
           "implementation": "redis",
           "versions": [
-            "8.10.2"
+            "8.10.3"
           ]
         },
         {
@@ -2711,10 +2971,54 @@
       "kind": "database",
       "upstream_version": "8.10.2",
       "release_channel": "stable",
-      "support_lifecycle": "preferred",
+      "support_lifecycle": "deprecated",
       "config_version": "redis/8.10/v1",
       "config_schema_digest": "sha256:338876fa399504a6168471adad43dc480f9b240dfd733ac1a36868c7b8f20250",
       "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/redis@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6",
+      "fields": {
+        "credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "eviction_policy": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "listen_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "maxmemory_mb": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "persistence": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "ephemeral"
+        ],
+        "payment_methods": [],
+        "payment_backends": [],
+        "units": [],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": []
+    },
+    {
+      "implementation": "redis",
+      "kind": "database",
+      "upstream_version": "8.10.3",
+      "release_channel": "stable",
+      "support_lifecycle": "preferred",
+      "config_version": "redis/8.10/v1",
+      "config_schema_digest": "sha256:338876fa399504a6168471adad43dc480f9b240dfd733ac1a36868c7b8f20250",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/library/redis@sha256:1f88291b4c57bdf249f02eb085a8669889b2d2954e91d4de5118a5da6b78dd53",
       "fields": {
         "credentials": {
           "classification": "generated_instance_secret",

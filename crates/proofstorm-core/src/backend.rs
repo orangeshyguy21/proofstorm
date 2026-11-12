@@ -4353,8 +4353,8 @@ mod tests {
                 ports: BTreeMap::new(),
             };
         let mut targets = BTreeMap::from([
-            ("bolt11".into(), target("bolt11-node", "lnd", "0.20.5-beta")),
-            ("bolt12".into(), target("bolt12-node", "lnd", "0.20.5-beta")),
+            ("bolt11".into(), target("bolt11-node", "lnd", "0.20.8-beta")),
+            ("bolt12".into(), target("bolt12-node", "lnd", "0.20.8-beta")),
         ]);
         let mounts = resolve_execution_mounts(&backend, "mint", &links, &targets, false)
             .expect("unselected methods and implementations do not collide");
@@ -4367,7 +4367,7 @@ mod tests {
         let cln_link = payment("cln-bolt11", crate::PaymentMethod::Bolt11);
         let cln_targets = BTreeMap::from([(
             "cln-bolt11".into(),
-            target("cln-bolt11-node", "cln", "26.06.9"),
+            target("cln-bolt11-node", "cln", "26.06.10"),
         )]);
         let cln_mounts =
             resolve_execution_mounts(&backend, "mint", &[cln_link], &cln_targets, false)
@@ -4384,7 +4384,7 @@ mod tests {
         links.push(payment("bolt11-secondary", crate::PaymentMethod::Bolt11));
         targets.insert(
             "bolt11-secondary".into(),
-            target("bolt11-secondary-node", "lnd", "0.20.5-beta"),
+            target("bolt11-secondary-node", "lnd", "0.20.8-beta"),
         );
         let error = resolve_execution_mounts(&backend, "mint", &links, &targets, false)
             .expect_err("duplicate exact selectors must refuse");
@@ -4433,7 +4433,7 @@ mod tests {
                         component_id: "lightning".into(),
                         kind: ComponentKind::Lightning,
                         backend_id: "lnd".into(),
-                        version: "0.20.5-beta".into(),
+                        version: "0.20.8-beta".into(),
                         ports: BTreeMap::from([("rpc".into(), 10_009)]),
                     },
                 )]),

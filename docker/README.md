@@ -9,7 +9,7 @@ The `upstream/<registry>/<repository>` path records their original source.
 | Component | Source |
 | --- | --- |
 | Bitcoin Core 31.1 | Proofstorm packaging of verified bitcoincore.org release binaries |
-| LND 0.21.4-beta (preferred), 0.20.5-beta | docker.io/lightninglabs/lnd |
+| LND 0.21.8-beta (preferred), 0.20.8-beta | docker.io/lightninglabs/lnd |
 | Core Lightning | docker.io/elementsproject/lightningd |
 | CDK and Nutshell | docker.io/cashubtc images, with the existing management-client wrappers |
 | LDK Server and CDK LDK Server processor | Pinned upstream source builds; see [payment processor packaging](payment/README.md) |

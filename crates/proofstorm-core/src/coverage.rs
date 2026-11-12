@@ -122,7 +122,7 @@ mod tests {
             default_backend_registry(),
         )
         .expect("coverage manifest");
-        assert_eq!(manifest.entries.len(), 30);
+        assert_eq!(manifest.entries.len(), 34);
         let cdk = manifest
             .entries
             .iter()
@@ -264,14 +264,14 @@ mod tests {
         assert!(nutshell.compatible_dependencies.iter().any(|dependency| {
             dependency.link_kind == crate::LinkKind::DatabaseBackend
                 && dependency.implementation == "redis"
-                && dependency.versions.contains("8.10.2")
+                && dependency.versions.contains("8.10.3")
         }));
         let redis = manifest
             .entries
             .iter()
             .find(|entry| entry.implementation == "redis" && entry.support_lifecycle.is_supported())
             .expect("Redis coverage");
-        assert_eq!(redis.upstream_version, "8.10.2");
+        assert_eq!(redis.upstream_version, "8.10.3");
         assert_eq!(redis.config_version, "redis/8.10/v1");
         assert_eq!(redis.support.storage, [StorageBackend::Ephemeral].into());
         assert_eq!(

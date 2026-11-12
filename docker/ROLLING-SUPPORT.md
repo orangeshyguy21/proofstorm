@@ -48,24 +48,27 @@ CDK adds versioned 0.18.1 and 0.18.2 mint and CLI wallet recipes. The 0.18.0
 recipes and existing unversioned receipt interpretation remain unchanged.
 
 The release inventory reviewed on 2026-09-16, with CDK refreshed on 2026-09-18,
-Lightning and CDK patches refreshed on 2026-10-19, and the CDK support floor applied:
+Lightning and CDK patches refreshed on 2026-10-19 and again on 2026-11-12, and the
+CDK support floor applied:
 
 | Implementation | Release families to qualify/retain |
 | --- | --- |
 | Bitcoin Core | 31.1, 30.3, 29.4 |
-| Core Lightning | 26.06.9, 26.04.1, 25.12.1 |
-| LND | 0.21.4-beta, 0.20.5-beta, 0.19.3-beta |
+| Core Lightning | 26.06.10, 26.04.1, 25.12.1 |
+| LND | 0.21.8-beta, 0.20.8-beta, 0.19.3-beta |
 | Nutshell mint and wallet | 0.21.0, 0.20.3 |
 | CDK mint presets and CLI wallet | 0.18.2; add a second family when 0.19 qualifies |
 
-The catalog selects CLN 26.06.9 and LND 0.21.4-beta and 0.20.5-beta. CLN 26.06.8
-and 26.06.9 are upstream security point releases; the LND patches are bug fixes
-without database migrations. CLN 26.06.7, LND 0.21.3-beta and LND 0.20.4-beta are
-deprecated and retained for existing locks. Mint compatibility lists are qualification
+The catalog selects CLN 26.06.10 and LND 0.21.8-beta and 0.20.8-beta. CLN 26.06.8,
+26.06.9 and 26.06.10 are upstream security point releases. LND 0.21.6-beta and
+0.20.7-beta disable MPTCP listeners by default as a mitigation for CVE-2026-98432;
+the LND patches have no database migrations. CLN 26.06.9 and 26.06.7, LND
+0.21.4-beta, 0.21.3-beta, 0.20.5-beta and 0.20.4-beta, and Redis 8.10.2 and 8.10.1
+are deprecated and retained for existing locks. Mint compatibility lists are qualification
 claims, so they name only the new patches. Editing an existing cell re-resolves its
 lock, so a cell on a deprecated patch must be recreated before it can be edited.
-The CLN 26.06.9 multi-platform digest is
-`sha256:de74289ddcccb68cd60543b08b2b8594002d819125d200492e17a95166d56577`.
+The CLN 26.06.10 multi-platform digest is
+`sha256:59f10c4c7429bb80791481c906859f6de1aa58ef224758aa25d50b7d47fc0c04`.
 Installed-component qualification and candidate compatibility use the same pins.
 `cln-hold` is still built on CLN 26.06.7 until its own native rebuild and publication.
 Historical release receipts and saved locks remain records of their original artifacts.

@@ -6832,7 +6832,7 @@ mod tests {
         );
         assert!(lock.entries.iter().any(|entry| {
             entry.catalog_id == "cln"
-                && entry.version == "26.06.9"
+                && entry.version == "26.06.10"
                 && entry.image.contains("@sha256:")
         }));
     }

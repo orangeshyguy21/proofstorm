@@ -151,14 +151,14 @@ mod tests {
             {"tag_name":"v0.22.0-beta","draft":false,"prerelease":true},
             {"tag_name":"v0.23.0-beta.rc1","draft":false,"prerelease":false},
             {"tag_name":"v0.19.3-beta","draft":false,"prerelease":false},
-            {"tag_name":"v0.21.4-beta","draft":false,"prerelease":false},
-            {"tag_name":"v0.20.5-beta","draft":false,"prerelease":false}
+            {"tag_name":"v0.21.8-beta","draft":false,"prerelease":false},
+            {"tag_name":"v0.20.8-beta","draft":false,"prerelease":false}
         ]))
         .unwrap();
         let result = proposal("lnd", &releases, default_catalog());
         assert_eq!(
             result["proposed_versions"],
-            json!(["0.21.4-beta", "0.20.5-beta", "0.19.3-beta"])
+            json!(["0.21.8-beta", "0.20.8-beta", "0.19.3-beta"])
         );
         assert_eq!(result["qualify"], json!(["0.19.3-beta"]));
         assert_eq!(result["retire_after_qualification"], json!([]));

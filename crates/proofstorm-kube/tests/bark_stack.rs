@@ -297,7 +297,7 @@ fn peer_and_network_links_do_not_become_backend_requirements() {
                 component_id: "peer".into(),
                 kind: ComponentKind::Lightning,
                 backend_id: "cln".into(),
-                version: "26.06.9".into(),
+                version: "26.06.10".into(),
                 ports: std::collections::BTreeMap::from([("p2p".into(), 9735)]),
             },
         );
