@@ -93,7 +93,11 @@ mod tests {
                 inputs
                     .images
                     .keys()
-                    .any(|source| source.contains("/busybox@sha256:"))
+                    // The BusyBox probe, served from the GHCR upstream mirror.
+                    .any(|source| *source == format!(
+                        "{}@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+                        proofstorm_core::UPSTREAM_MIRROR
+                    ))
             );
             plan.identity.attempt += 1;
             assert_ne!(inputs, image_inputs(&plan).unwrap());

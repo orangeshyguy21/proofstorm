@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeSet,
     ffi::OsString,
     fs,
     io::Write,
@@ -297,6 +298,30 @@ fn current_repository(name: &str) -> &str {
         "nutshell-mint-management" => "nutshell-mint",
         _ => name,
     }
+}
+
+/// Every pinned third-party image Proofstorm serves from its GHCR mirror: the
+/// upstream catalog images of both platform catalogs and the build helpers.
+pub(crate) fn upstream_origins() -> BTreeSet<String> {
+    let mut origins = BTreeSet::new();
+    for platform in [
+        proofstorm_core::CatalogPlatform::LinuxArm64,
+        proofstorm_core::CatalogPlatform::LinuxAmd64,
+    ] {
+        let catalog = proofstorm_core::distributed_catalog_for_platform(platform);
+        origins.extend(
+            catalog
+                .entries
+                .iter()
+                .filter_map(|entry| proofstorm_core::upstream_origin(&entry.image)),
+        );
+    }
+    origins.extend(
+        proofstorm_core::UPSTREAM_HELPER_ORIGINS
+            .iter()
+            .map(ToString::to_string),
+    );
+    origins
 }
 
 fn copy_repository_matches(source: &str, destination: &str) -> bool {
@@ -851,24 +876,38 @@ fn fields(work: &Path) -> Result<()> {
 }
 
 fn verify(image: &str, platform: &str, output: &Path) -> Result<()> {
-    let reference = registry::Reference::parse(image)?;
-    let name = reference
-        .repository
-        .rsplit('/')
-        .next()
-        .context("missing repository")?;
-    recipe(name)?;
-    ensure!(
-        image.starts_with(&format!("{NAMESPACE}/{name}@")),
-        "only approved published catalog images may be verified here"
-    );
+    // The upstream mirror holds only the digests of pinned third-party images.
+    let mirrored = image
+        .strip_prefix(&format!("{}@", proofstorm_core::UPSTREAM_MIRROR))
+        .is_some_and(|digest| {
+            upstream_origins()
+                .iter()
+                .any(|origin| origin.split_once('@').is_some_and(|(_, pin)| pin == digest))
+        });
+    if !mirrored {
+        let reference = registry::Reference::parse(image)?;
+        let name = reference
+            .repository
+            .rsplit('/')
+            .next()
+            .context("missing repository")?;
+        recipe(name)?;
+        ensure!(
+            image.starts_with(&format!("{NAMESPACE}/{name}@")),
+            "only approved published catalog images may be verified here"
+        );
+    }
     registry::architecture(platform)?;
     let output = output_path(output)?;
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(output)?;
-    let result = registry::verify(image, None, platform, false);
+    let result = if mirrored {
+        registry::verify_mirror(image, platform)
+    } else {
+        registry::verify(image, None, platform, false)
+    };
     file.write_all(&serde_json::to_vec_pretty(&json!({"format_version":1,"image":image,"required_platform":platform,"anonymous_verified":result.is_ok(),"platforms":result.as_ref().ok().map(|r| &r.platforms),"release_ready":false,"error":result.as_ref().err().map(ToString::to_string)}))?)?;
     result?;
     Ok(())
@@ -887,6 +926,12 @@ pub(super) fn cli(args: impl Iterator<Item = OsString>) -> Result<()> {
     }
     match args.as_slice() {
         ["audit"] => audit::run(),
+        ["upstream-list"] => {
+            for origin in upstream_origins() {
+                println!("{origin}");
+            }
+            Ok(())
+        }
         ["list"] => {
             println!("{}", recipe_list());
             Ok(())

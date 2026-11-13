@@ -601,3 +601,37 @@ fn local_probes_bind_both_platforms_to_clean_source_and_immutable_ids() {
         assert!(load(&work).is_err());
     }
 }
+
+#[test]
+fn every_third_party_image_is_mirrored_and_anonymously_verified() {
+    let receipt: Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../release/upstream-mirror.json"),
+        )
+        .expect("release/upstream-mirror.json; run just upstream-mirror publish and verify"),
+    )
+    .unwrap();
+    assert_eq!(receipt["repository"], proofstorm_core::UPSTREAM_MIRROR);
+    let mirrored: BTreeSet<String> = receipt["images"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|image| {
+            image["anonymous_verified"]["linux/amd64"] == true
+                && image["anonymous_verified"]["linux/arm64"] == true
+                && image["image"]
+                    .as_str()
+                    .zip(image["origin"].as_str())
+                    .is_some_and(|(mirror, origin)| {
+                        mirror.split_once('@').map(|(_, digest)| digest)
+                            == origin.split_once('@').map(|(_, digest)| digest)
+                    })
+        })
+        .filter_map(|image| image["origin"].as_str().map(ToString::to_string))
+        .collect();
+    let missing: Vec<_> = upstream_origins().difference(&mirrored).cloned().collect();
+    assert!(
+        missing.is_empty(),
+        "mirror these pins before shipping: just upstream-mirror publish, then verify: {missing:?}"
+    );
+}

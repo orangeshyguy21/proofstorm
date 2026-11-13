@@ -375,6 +375,25 @@ pub enum CatalogPlatform {
 }
 
 /// Resolve a catalog/local-registry lock to its immutable distribution source.
+/// GHCR repository holding every pinned third-party image by its exact digest.
+pub const UPSTREAM_MIRROR: &str = "ghcr.io/osygy/proofstorm/upstream";
+
+/// Public origins of the mirrored candidate-build helpers (git source fetch and
+/// `BuildKit`), which are not catalog entries.
+pub const UPSTREAM_HELPER_ORIGINS: [&str; 2] = [
+    "docker.io/alpine/git@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26",
+    "docker.io/moby/buildkit@sha256:a02f6571999693089dc928e9bbb64836c21703b214195d8637c011f1a7025ef6",
+];
+
+/// The original public reference of a mirrored third-party catalog image, if
+/// the image is one (`docker.io/...@sha256:...`).
+#[must_use]
+pub fn upstream_origin(image: &str) -> Option<String> {
+    let (repository, sha) = image.split_once("@sha256:")?;
+    let origin = repository.strip_prefix("proofstorm-registry.localhost:5000/upstream/")?;
+    Some(format!("{origin}@sha256:{sha}"))
+}
+
 /// Installation and qualification must use the same mapping.
 ///
 /// # Errors
@@ -386,10 +405,14 @@ pub fn catalog_image_source(image: &str) -> Result<String, String> {
     if sha.len() != 64 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("invalid runtime image digest".into());
     }
-    let source = if let Some(repository) =
-        repository.strip_prefix("proofstorm-registry.localhost:5000/upstream/")
+    // Pinned third-party images are served from Proofstorm's GHCR mirror, so
+    // installs, cells and CI never depend on Docker Hub or Quay rate limits.
+    // The in-cluster name keeps the original registry path as provenance.
+    let source = if repository
+        .strip_prefix("proofstorm-registry.localhost:5000/upstream/")
+        .is_some()
     {
-        repository.to_owned()
+        UPSTREAM_MIRROR.to_owned()
     } else if let Some(repository) = repository.strip_prefix("proofstorm-registry.localhost:5000/")
     {
         format!("ghcr.io/osygy/proofstorm/{repository}")
@@ -2278,7 +2301,7 @@ mod tests {
     }
 
     #[test]
-    fn busybox_and_saved_workspace_locks_use_the_upstream_pin() {
+    fn busybox_and_saved_workspace_locks_use_the_mirrored_upstream_pin() {
         let sha = "73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
         let upstream = format!("docker.io/library/busybox@sha256:{sha}");
         let workspace = default_catalog()
@@ -2287,16 +2310,28 @@ mod tests {
             .find(|entry| entry.id == "workspace")
             .unwrap();
         assert_eq!(workspace.image, mirror_image(&upstream));
-        for image in [&upstream, &workspace.image] {
-            assert_eq!(catalog_image_source(image).unwrap(), upstream);
-        }
+        let mirrored = format!("{UPSTREAM_MIRROR}@sha256:{sha}");
+        assert_eq!(catalog_image_source(&workspace.image).unwrap(), mirrored);
+        assert_eq!(upstream_origin(&workspace.image).unwrap(), upstream);
+        assert_eq!(catalog_image_source(&upstream).unwrap(), upstream);
         for image in [
             format!("docker.io/library/busybox@sha256:{}", "a".repeat(64)),
             format!("docker.io/example/busybox@sha256:{sha}"),
             format!("example.org/library/busybox@sha256:{sha}"),
         ] {
             assert_eq!(catalog_image_source(&image).unwrap(), image);
-            assert_eq!(catalog_image_source(&mirror_image(&image)).unwrap(), image);
+            let local = mirror_image(&image);
+            if local == image {
+                // Only Docker Hub and Quay images are mirrored.
+                assert_eq!(catalog_image_source(&local).unwrap(), image);
+            } else {
+                let digest = image.split_once('@').unwrap().1;
+                assert_eq!(
+                    catalog_image_source(&local).unwrap(),
+                    format!("{UPSTREAM_MIRROR}@{digest}")
+                );
+                assert_eq!(upstream_origin(&local).unwrap(), image);
+            }
         }
     }
 

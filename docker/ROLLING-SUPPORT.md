@@ -42,7 +42,8 @@ apply. Build both architectures and retain their receipts.
 
 The added preparation recipes are Bitcoin Core 29.4/30.3/31.2 and Nutshell 0.21.0.
 Their checksums, source identities, and recipe digests
-are recorded beside the recipes. LND and CLN use upstream immutable images.
+are recorded beside the recipes. LND and CLN use upstream immutable images, served
+by digest from the Proofstorm GHCR mirror (see [README.md](README.md)).
 Preparation recipes are intentionally separate from the installed support list.
 CDK adds versioned 0.18.1, 0.18.2 and 0.18.3 mint and CLI wallet recipes. The 0.18.0
 recipes and existing unversioned receipt interpretation remain unchanged.

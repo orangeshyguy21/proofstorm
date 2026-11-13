@@ -64,9 +64,9 @@ pub use catalog::{
     CatalogResponse, CatalogRuntimeEndpoint, CatalogSupportMatrix, CatalogVersionSupport,
     LND_VERSION, ReleaseChannel, SPARK_LDK_SERVER_VERSION, SPARK_OPERATORS_VERSION,
     SPARK_PROCESSOR_VERSION, SPARK_SSP_VERSION, StorageBackend, SupportLifecycle,
-    catalog_for_platform, catalog_image_source, default_catalog, distributed_catalog,
-    distributed_catalog_for_platform, validate_catalog_component, validate_component_config,
-    validate_new_cell_versions,
+    UPSTREAM_HELPER_ORIGINS, UPSTREAM_MIRROR, catalog_for_platform, catalog_image_source,
+    default_catalog, distributed_catalog, distributed_catalog_for_platform, upstream_origin,
+    validate_catalog_component, validate_component_config, validate_new_cell_versions,
 };
 pub use coverage::{
     CONFIGURATION_COVERAGE_API_VERSION, ConfigurationCoverageEntry, ConfigurationCoverageManifest,

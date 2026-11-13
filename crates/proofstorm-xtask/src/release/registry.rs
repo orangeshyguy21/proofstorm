@@ -140,6 +140,8 @@ pub(super) struct Inspection {
     pub platforms: BTreeSet<String>,
     identities: BTreeSet<String>,
     runnable: usize,
+    /// Mirrored third-party indexes also carry platforms Proofstorm never runs.
+    foreign_platforms: bool,
 }
 
 fn inspect_with(
@@ -181,6 +183,18 @@ fn inspect_with(
         );
         for child in children {
             if child["platform"]["os"] == "unknown" {
+                continue;
+            }
+            if result.foreign_platforms
+                && child.get("platform").is_some_and(|p| {
+                    architecture(&format!(
+                        "{}/{}",
+                        p["os"].as_str().unwrap_or_default(),
+                        p["architecture"].as_str().unwrap_or_default()
+                    ))
+                    .is_err()
+                })
+            {
                 continue;
             }
             let platform = child
@@ -243,6 +257,7 @@ fn check(
     identity: Option<&str>,
     platform: &str,
     exact: bool,
+    foreign_platforms: bool,
     fetch: &mut impl FnMut(&str, &str, bool) -> Result<Vec<u8>>,
 ) -> Result<Inspection> {
     architecture(platform)?;
@@ -256,6 +271,7 @@ fn check(
         platforms: BTreeSet::new(),
         identities: BTreeSet::new(),
         runnable: 0,
+        foreign_platforms,
     };
     inspect_with(digest, 0, None, fetch, &mut result)?;
     ensure!(
@@ -282,6 +298,22 @@ pub(super) fn verify(
     identity: Option<&str>,
     platform: &str,
     exact: bool,
+) -> Result<Inspection> {
+    verify_anonymously(image, identity, platform, exact, false)
+}
+
+/// Anonymously verify a mirrored third-party index: the amd64 and arm64 images
+/// are checked completely; its other platforms are skipped.
+pub(super) fn verify_mirror(image: &str, platform: &str) -> Result<Inspection> {
+    verify_anonymously(image, None, platform, false, true)
+}
+
+fn verify_anonymously(
+    image: &str,
+    identity: Option<&str>,
+    platform: &str,
+    exact: bool,
+    foreign_platforms: bool,
 ) -> Result<Inspection> {
     architecture(platform)?;
     let reference = Reference::parse(image)?;
@@ -311,6 +343,7 @@ pub(super) fn verify(
         identity,
         platform,
         exact,
+        foreign_platforms,
         &mut |kind, digest, head| {
             request(&reference.url(kind, digest)?, token.as_deref(), head, local)
         },
@@ -379,12 +412,12 @@ mod tests {
                 graph[digest].clone()
             })
         };
-        let result = check(&index, None, "linux/amd64", false, &mut fetch).unwrap();
+        let result = check(&index, None, "linux/amd64", false, false, &mut fetch).unwrap();
         assert_eq!(
             result.platforms,
             BTreeSet::from(["linux/amd64".into(), "linux/arm64".into()])
         );
-        assert!(check(&index, None, "linux/arm64", true, &mut fetch).is_err());
+        assert!(check(&index, None, "linux/arm64", true, false, &mut fetch).is_err());
         assert_eq!(heads, 4);
     }
 
@@ -410,6 +443,7 @@ mod tests {
                     Some(identity),
                     &platform,
                     true,
+                    false,
                     &mut |_, digest, head| {
                         if head {
                             assert_eq!(digest, layer);
@@ -439,6 +473,7 @@ mod tests {
                             &platform
                         },
                         true,
+                        false,
                         &mut |_, digest, head| {
                             if head && missing_layer {
                                 bail!("missing layer");
@@ -460,9 +495,14 @@ mod tests {
                 &json!({"schemaVersion":2,"manifests":[{"digest":manifest,"platform":{"os":"linux","architecture":if arch == "arm64" {"amd64"} else {"arm64"}}}]}),
             );
             assert!(
-                check(&wrong, None, &platform, false, &mut |_, digest, head| Ok(
-                    if head { vec![] } else { graph[digest].clone() }
-                ))
+                check(
+                    &wrong,
+                    None,
+                    &platform,
+                    false,
+                    false,
+                    &mut |_, digest, head| Ok(if head { vec![] } else { graph[digest].clone() })
+                )
                 .is_err()
             );
         }

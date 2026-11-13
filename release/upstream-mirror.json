@@ -1,0 +1,167 @@
+{
+  "format_version": 1,
+  "date": "2026-11-13",
+  "repository": "ghcr.io/osygy/proofstorm/upstream",
+  "images": [
+    {
+      "origin": "docker.io/alpine/git@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/elementsproject/lightningd@sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:0421a5f0d1b2e1ad639edfa17d777816040e3850d91bae7f2d32186d9c1e6da4",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/elementsproject/lightningd@sha256:29a2b1df82d04675be289656d0fe681b587acd38bb8e203d00f226cad84ef73d",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:29a2b1df82d04675be289656d0fe681b587acd38bb8e203d00f226cad84ef73d",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/elementsproject/lightningd@sha256:59f10c4c7429bb80791481c906859f6de1aa58ef224758aa25d50b7d47fc0c04",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:59f10c4c7429bb80791481c906859f6de1aa58ef224758aa25d50b7d47fc0c04",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/elementsproject/lightningd@sha256:618eed33ba923cc459164bba38e8c554f97113f730a2f96e8423b18c0c515d9d",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:618eed33ba923cc459164bba38e8c554f97113f730a2f96e8423b18c0c515d9d",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/elementsproject/lightningd@sha256:de74289ddcccb68cd60543b08b2b8594002d819125d200492e17a95166d56577",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:de74289ddcccb68cd60543b08b2b8594002d819125d200492e17a95166d56577",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/library/postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/library/redis@sha256:1f88291b4c57bdf249f02eb085a8669889b2d2954e91d4de5118a5da6b78dd53",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:1f88291b4c57bdf249f02eb085a8669889b2d2954e91d4de5118a5da6b78dd53",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/library/redis@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/library/redis@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/lightninglabs/lnd@sha256:04d06edcc0f6e99a5e797ea34959f330add222226f840cd86afbc31f8f29627d",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:04d06edcc0f6e99a5e797ea34959f330add222226f840cd86afbc31f8f29627d",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/lightninglabs/lnd@sha256:2108a19d7569489a734f6b0862ddd1c07b1701fb2d65d554ec463706eeb68a98",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:2108a19d7569489a734f6b0862ddd1c07b1701fb2d65d554ec463706eeb68a98",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/lightninglabs/lnd@sha256:4d6e02cb80ea48db2ef011823bcb2087d4379b70e2797fc7f6e857b32d5d7a09",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:4d6e02cb80ea48db2ef011823bcb2087d4379b70e2797fc7f6e857b32d5d7a09",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/lightninglabs/lnd@sha256:b175f136c01ffe01e75eee836273dd15b21a7e2cea2bd316ea98ad3640743aaa",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:b175f136c01ffe01e75eee836273dd15b21a7e2cea2bd316ea98ad3640743aaa",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/lightninglabs/lnd@sha256:d23faa661edebdcb0c633ce6bc33a7abdcdb82283bc53620463bf2b00a30c8cb",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:d23faa661edebdcb0c633ce6bc33a7abdcdb82283bc53620463bf2b00a30c8cb",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/lightninglabs/lnd@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:d29074335f3bffb2ac0e789b0d023c24fbb85ce67ecbfb7d677399842fe0535c",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/lightninglabs/lnd@sha256:f17b2944b1b76396cccbe58feac469b6cefb5f407557ac77f0880f136fb935f9",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:f17b2944b1b76396cccbe58feac469b6cefb5f407557ac77f0880f136fb935f9",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "docker.io/moby/buildkit@sha256:a02f6571999693089dc928e9bbb64836c21703b214195d8637c011f1a7025ef6",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:a02f6571999693089dc928e9bbb64836c21703b214195d8637c011f1a7025ef6",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    },
+    {
+      "origin": "quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
+      "image": "ghcr.io/osygy/proofstorm/upstream@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2",
+      "anonymous_verified": {
+        "linux/amd64": true,
+        "linux/arm64": true
+      }
+    }
+  ]
+}

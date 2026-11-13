@@ -110,8 +110,20 @@ fn published_bark_images_are_downloadable_on_demand_and_prefetched() {
         let runtime = catalog_for_platform(platform);
         let distributed = distributed_catalog_for_platform(platform);
         let admitted = catalog_images(&runtime);
-        let prefetch = catalog_images(&distributed);
-        assert_eq!(admitted, prefetch);
+        let prefetch = prefetch_images(&distributed);
+        assert!(prefetch.is_subset(&admitted));
+        // Deprecated entries remain admitted for saved locks but are never prefetched.
+        for entry in &distributed.entries {
+            assert!(admitted.contains(&entry.image));
+            if entry.support_lifecycle != proofstorm_core::SupportLifecycle::Deprecated {
+                assert!(prefetch.contains(&entry.image));
+            } else if !distributed.entries.iter().any(|other| {
+                other.image == entry.image
+                    && other.support_lifecycle != proofstorm_core::SupportLifecycle::Deprecated
+            }) {
+                assert!(!prefetch.contains(&entry.image));
+            }
+        }
         for image in &prefetch {
             assert_eq!(
                 download_source(image, &runtime, &distributed).unwrap(),
@@ -235,7 +247,7 @@ fn renamed_mint_repositories_preserve_saved_locks_only_for_shipped_digests() {
 }
 
 #[test]
-fn probe_and_saved_workspace_locks_download_the_upstream_busybox_pin() {
+fn probe_and_saved_workspace_locks_download_the_mirrored_busybox_pin() {
     let home = tempfile::tempdir().unwrap();
     let installation = fixture_installation(home.path());
     let mut lock = sample_lock();
@@ -245,7 +257,13 @@ fn probe_and_saved_workspace_locks_download_the_upstream_busybox_pin() {
     let selected = selected_images(&installation, &lock).unwrap();
     assert!(selected.contains(image));
     let public = source(image).unwrap();
-    assert!(public.starts_with("docker.io/library/busybox@sha256:"));
+    // Third-party pins download from Proofstorm's GHCR mirror, not Docker Hub.
+    assert!(public.starts_with(&format!("{}@sha256:", proofstorm_core::UPSTREAM_MIRROR)));
+    assert!(
+        proofstorm_core::upstream_origin(image)
+            .unwrap()
+            .starts_with("docker.io/library/busybox@sha256:")
+    );
     assert_eq!(
         image.split_once('@').unwrap().1,
         public.split_once('@').unwrap().1

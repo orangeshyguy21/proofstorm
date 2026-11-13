@@ -4,7 +4,17 @@ The Rust component catalog is the authority for supported versions and immutable
 runtime image digests. Every built-in catalog image is served by the local
 Proofstorm registry. `storm setup` prepares the installation; cell creation
 downloads the selected images on demand, preserving their exact digests.
-The `upstream/<registry>/<repository>` path records their original source.
+`storm setup --prefetch-all` downloads every image a new cell can select;
+deprecated entries kept for saved locks still download on demand.
+
+Third-party images (LND, Core Lightning, Redis, PostgreSQL, BusyBox, Keycloak and
+the candidate-build git and BuildKit helpers) are never pulled from Docker Hub or
+Quay at runtime. Each pinned digest is mirrored once into
+`ghcr.io/osygy/proofstorm/upstream`, and installs, cells, e2e and CI download it
+from there, so anonymous registry rate limits cannot break them. The
+`upstream/<registry>/<repository>` in-cluster path records each image's original
+source, and [the mirror receipt](../release/upstream-mirror.json) lists every
+origin with its anonymous verification on both platforms.
 
 | Component | Source |
 | --- | --- |
@@ -134,7 +144,11 @@ rebuild is not a substitute for a missing approved artifact during installation.
 ## Updating a component
 
 Use a project-published image when available; otherwise package verified official
-release artifacts and retain provenance. Pin the multi-architecture digest,
+release artifacts and retain provenance. A new third-party pin must be mirrored
+before it ships: `just upstream-mirror publish` copies every missing digest (using
+your Docker login once), then `just upstream-mirror verify NEW_EXTERNAL_WORK`
+checks each digest anonymously and rewrites the receipt. A test fails while any
+catalog or helper image is missing from it. Pin the multi-architecture digest,
 validate native commands and data paths under the restricted runtime, update
 catalog compatibility declarations and examples, regenerate coverage and render
 fixtures, and run the affected live gates. Keep application version updates

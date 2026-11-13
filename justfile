@@ -194,6 +194,10 @@ tool-pins target output:
 catalog-image *args:
     bash scripts/catalog-image.sh "$@"
 
+# Mirror pinned third-party images into GHCR by digest (publish), or verify them anonymously.
+upstream-mirror *args:
+    bash scripts/upstream-mirror.sh "$@"
+
 # Remove downloaded checkout tools, not installation state or cells.
 clean-tools:
     rm -rf -- .tools
