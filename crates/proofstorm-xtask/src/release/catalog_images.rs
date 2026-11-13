@@ -87,6 +87,11 @@ const VERSIONED_RECIPES: &[(&str, &str, &str)] = &[
         "0.21.0",
         "docker/mint/Dockerfile.nutshell-0.21.0",
     ),
+    (
+        "nutshell-mint",
+        "0.22.1",
+        "docker/mint/Dockerfile.nutshell-0.22.1",
+    ),
     ("cdk-mint", "0.18.1", "docker/mint/Dockerfile.cdk-0.18.1"),
     (
         "cdk-cli-wallet",

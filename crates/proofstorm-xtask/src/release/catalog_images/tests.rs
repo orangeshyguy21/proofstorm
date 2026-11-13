@@ -165,6 +165,12 @@ pub(super) const ADDED_VERSIONS: &[(&str, &str, &str, &str)] = &[
         "Nutshell, version 0.21.0\nUsage: cashu [OPTIONS] COMMAND [ARGS]...\nUsage: mint-cli [OPTIONS] COMMAND [ARGS]...\n",
     ),
     (
+        "nutshell-mint",
+        "0.22.1",
+        "docker/mint/nutshell-0.22.1-provenance.json",
+        "Nutshell, version 0.22.1\nUsage: cashu [OPTIONS] COMMAND [ARGS]...\nUsage: mint-cli [OPTIONS] COMMAND [ARGS]...\n",
+    ),
+    (
         "ldk-server",
         "0.1.0-762bc47",
         "docker/payment/ldk-server-762bc47-provenance.json",

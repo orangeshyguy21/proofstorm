@@ -1,0 +1,13 @@
+{
+  "repository": "https://github.com/cashubtc/nutshell",
+  "commit_sha": "3ab0137b0c6b214cecc2f883be606a668ae74e60",
+  "artifact_url": "https://registry-1.docker.io/v2/cashubtc/nutshell/manifests/sha256:05b536e0e3d6beee75417ece319a3f89a687d34cfb3cc12c6b19d253104b450e",
+  "artifact_sha256": "05b536e0e3d6beee75417ece319a3f89a687d34cfb3cc12c6b19d253104b450e",
+  "platform": "linux/amd64,linux/arm64",
+  "runtime_image": "docker.io/cashubtc/nutshell@sha256:05b536e0e3d6beee75417ece319a3f89a687d34cfb3cc12c6b19d253104b450e",
+  "recipe_digest": "sha256:0c7ccea1854a2a6517aeb3eec9038da2ac5d0afe560699f1afc19c3c8bb58fdc",
+  "transformations": [
+    "Install only the source project already present in the pinned upstream image, preserving installed dependencies.",
+    "Verify mint version and cashu/mint-cli entrypoints."
+  ]
+}

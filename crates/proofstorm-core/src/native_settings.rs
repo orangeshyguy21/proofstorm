@@ -243,6 +243,7 @@ fn nutshell_settings(version: &str) -> Option<&'static str> {
     match version {
         "0.20.3" => Some(include_str!("native_settings/nutshell-0.20.3.txt")),
         "0.21.0" => Some(include_str!("native_settings/nutshell-0.21.0.txt")),
+        "0.22.1" => Some(include_str!("native_settings/nutshell-0.22.1.txt")),
         _ => None,
     }
 }
