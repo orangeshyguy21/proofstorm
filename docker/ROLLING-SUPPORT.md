@@ -48,20 +48,37 @@ CDK adds versioned 0.18.1, 0.18.2 and 0.18.3 mint and CLI wallet recipes. The 0.
 recipes and existing unversioned receipt interpretation remain unchanged.
 
 The release inventory reviewed on 2026-09-16, with CDK refreshed on 2026-09-18,
-Lightning and CDK patches refreshed on 2026-10-19 and again on 2026-11-12, and the
-CDK support floor applied:
+Lightning and CDK patches refreshed on 2026-10-19 and again on 2026-11-12, the
+Bitcoin window advanced to 32 on 2026-11-12, and the CDK support floor applied:
 
 | Implementation | Release families to qualify/retain |
 | --- | --- |
-| Bitcoin Core | 31.2, 30.3, 29.4 |
+| Bitcoin Core | 32.1, 31.2, 30.4 |
 | Core Lightning | 26.06.10, 26.04.1, 25.12.1 |
 | LND | 0.21.8-beta, 0.20.8-beta, 0.19.3-beta |
 | Nutshell mint and wallet | 0.21.0, 0.20.3 |
 | CDK mint presets and CLI wallet | 0.18.3; add a second family when 0.19 qualifies |
 
-The catalog selects Bitcoin Core 31.2, CLN 26.06.10, and LND 0.21.8-beta and
-0.20.8-beta. CLN 26.06.8, 26.06.9 and 26.06.10 are upstream security point
-releases. LND 0.21.6-beta and 0.20.7-beta disable MPTCP listeners by default as a
+The catalog supports all three families in each window: Bitcoin Core 32.1
+(preferred), 31.2 and 30.4; CLN 26.06.10 (preferred), 26.04.1 and 25.12.1; and LND
+0.21.8-beta (preferred), 0.20.8-beta and 0.19.3-beta. CDK and Nutshell mints claim
+every supported LND and CLN family.
+
+LND 0.20 and 0.19 cannot run on Bitcoin Core 32. They detect Taproot from the
+`taproot` deployment in `getdeploymentinfo`, which Bitcoin Core 32 removed
+(bitcoin/bitcoin#26201, with no `-deprecatedrpc` switch), and refuse to start.
+LND 0.21 checks `script_flags` instead (lightningnetwork/lnd#10683, not backported).
+Those LND entries therefore declare only Bitcoin Core 31.2 and 30.4, the compat
+matrix records the two pairs as excluded, and qualification pairs each Lightning
+release with the newest Bitcoin Core it declares.
+
+Bitcoin Core 32 also caps simultaneous RPC clients at 16 by default
+(`-rpcmaxconnections`). Agents can raise it with the `rpc_max_connections` setting
+on Bitcoin Core 32 and newer; zero keeps the upstream default, and older releases
+refuse a non-zero value because their daemons reject the flag.
+
+CLN 26.06.8, 26.06.9 and 26.06.10 are upstream security point releases.
+LND 0.21.6-beta and 0.20.7-beta disable MPTCP listeners by default as a
 mitigation for CVE-2026-98432; the LND patches have no database migrations.
 Bitcoin Core 31.1, CLN 26.06.9 and 26.06.7, LND 0.21.4-beta, 0.21.3-beta,
 0.20.5-beta and 0.20.4-beta, and Redis 8.10.2 and 8.10.1 are deprecated and
@@ -95,8 +112,9 @@ configuration interface and wallet are outside the support and qualification sco
 
 The `Component image qualification` workflow runs these builds and contracts on
 native Linux AMD64 and ARM64 runners when relevant pull requests change, or by
-manual dispatch. It also runs all 18 Bitcoin/Lightning release pairings and the
-two Nutshell mint and wallet families against every selected Lightning release,
+manual dispatch. It also runs the Bitcoin/Lightning release pairings (18, less the
+two recorded LND exclusions) and the two Nutshell mint and wallet families on
+Bitcoin Core 31.2 against every selected Lightning release,
 plus the CDK 0.18 wallet against both Nutshell mints with the preferred LND release.
 It saves exact image receipts, helper identity, version probes and structured
 live results as artifacts. It has read-only repository permissions and does not

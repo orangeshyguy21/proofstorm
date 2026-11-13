@@ -96,7 +96,7 @@ pub fn run(context: &GateContext) -> Result<()> {
     )?;
     let document = json!({"api_version":"proofstorm/v1alpha1","name":"reliable-exec",
         "components":[
-            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.2","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
+            {"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"32.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}},
             {"id":"lightning","kind":"lightning","implementation":"lnd","version": proofstorm_core::LND_VERSION,"config_version":"lnd/0.20/v1","control":"cell","config":{}},
             {"id":"wallet","kind":"wallet","implementation":"cdk-cli-wallet","version": proofstorm_core::CDK_VERSION,"config_version":"cdk-cli-wallet/0.18/v1","control":"cell","config":{}}
         ],"links":[{"id":"chain-link","kind":"chain_backend","from":"lightning","to":"chain","binding":{"type":"chain","network":"regtest"}}],

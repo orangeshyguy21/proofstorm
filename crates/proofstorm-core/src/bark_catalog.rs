@@ -64,7 +64,7 @@ pub(super) fn extend(
         vec![dependency(
             LinkKind::ChainBackend,
             "bitcoin-core",
-            &[crate::BITCOIN_VERSION],
+            crate::catalog::EXPERIMENTAL_BITCOIN_VERSIONS,
         )],
         support_matrix(
             &[StorageBackend::PersistentVolume],
@@ -100,7 +100,7 @@ pub(super) fn extend(
             dependency(
                 LinkKind::ChainBackend,
                 "bitcoin-core",
-                &[crate::BITCOIN_VERSION],
+                crate::catalog::EXPERIMENTAL_BITCOIN_VERSIONS,
             ),
             dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
             dependency(LinkKind::PaymentBackend, CLN_HOLD, &[CLN_HOLD_VERSION]),
@@ -142,7 +142,7 @@ pub(super) fn extend(
             dependency(
                 LinkKind::ChainBackend,
                 "bitcoin-core",
-                &[crate::BITCOIN_VERSION],
+                crate::catalog::EXPERIMENTAL_BITCOIN_VERSIONS,
             ),
             dependency(LinkKind::ArkBackend, BARK_SERVER, &[SERVER_VERSION]),
         ],

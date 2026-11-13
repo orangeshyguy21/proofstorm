@@ -11,7 +11,7 @@ const MINTS: &[&str] = &["cdk", "cdk-ldk", "cdk-bdk", "nutshell"];
 
 fn document() -> Value {
     let mut components = vec![
-        json!({"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"31.2","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}),
+        json!({"id":"chain","kind":"bitcoin","implementation":"bitcoin-core","version":"32.1","config_version":"bitcoin-core/31/v1","control":"cell","config":{}}),
         json!({"id":"lightning","kind":"lightning","implementation":"lnd","version": proofstorm_core::LND_VERSION,"config_version":"lnd/0.20/v1","control":"cell","config":{}}),
     ];
     let mut links = vec![

@@ -107,7 +107,7 @@
                   "value": "proofstorm-regtest-only"
                 }
               ],
-              "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
+              "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:cfec5b592dfea4af2b3e715649c95ca07885d219b651e4a7844ba52750deb331",
               "imagePullPolicy": "IfNotPresent",
               "name": "exec",
               "resources": {
@@ -354,6 +354,7 @@
       "effective_config": {
         "config": {
           "fallback_fee": 0.0002,
+          "rpc_max_connections": 0,
           "txindex": true
         },
         "implementation": "bitcoin-core"
@@ -363,7 +364,7 @@
         "environment": {
           "HOME": "/home/bitcoin"
         },
-        "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
+        "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:cfec5b592dfea4af2b3e715649c95ca07885d219b651e4a7844ba52750deb331",
         "mounts": [
           {
             "mount_path": "/home/bitcoin/.bitcoin",
@@ -431,7 +432,7 @@
       },
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:8afe38d1dcb56aa92790fcb332c144bf08a2a2e1d45e30820d40b515d15d0d62",
+      "rollout_digest": "sha256:1113fac6b43e71211cd4a1b52d96c8258cf8132cd9f9dad8dc65d938eb28e561",
       "storage": [
         {
           "claim_name": "data-chain-a-0"
@@ -447,7 +448,7 @@
           "zmq_block": 28334,
           "zmq_tx": 28335
         },
-        "version": "31.2"
+        "version": "32.1"
       },
       "workload": {
         "desired_replicas": 1,
@@ -524,6 +525,7 @@
       "effective_config": {
         "config": {
           "fallback_fee": 0.0002,
+          "rpc_max_connections": 0,
           "txindex": true
         },
         "implementation": "bitcoin-core"
@@ -533,7 +535,7 @@
         "environment": {
           "HOME": "/home/bitcoin"
         },
-        "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
+        "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:cfec5b592dfea4af2b3e715649c95ca07885d219b651e4a7844ba52750deb331",
         "mounts": [
           {
             "mount_path": "/home/bitcoin/.bitcoin",
@@ -601,7 +603,7 @@
       },
       "relevant_links": [],
       "revision_digest": "sha256:b2-golden-revision",
-      "rollout_digest": "sha256:8afe38d1dcb56aa92790fcb332c144bf08a2a2e1d45e30820d40b515d15d0d62",
+      "rollout_digest": "sha256:1113fac6b43e71211cd4a1b52d96c8258cf8132cd9f9dad8dc65d938eb28e561",
       "storage": [
         {
           "claim_name": "data-chain-b-0"
@@ -617,7 +619,7 @@
           "zmq_block": 28334,
           "zmq_tx": 28335
         },
-        "version": "31.2"
+        "version": "32.1"
       },
       "workload": {
         "desired_replicas": 1,
@@ -735,7 +737,7 @@
             "zmq_block": 28334,
             "zmq_tx": 28335
           },
-          "version": "31.2"
+          "version": "32.1"
         }
       },
       "operation_admission": [
@@ -933,7 +935,7 @@
             "zmq_block": 28334,
             "zmq_tx": 28335
           },
-          "version": "31.2"
+          "version": "32.1"
         }
       },
       "operation_admission": [
@@ -2697,7 +2699,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:8afe38d1dcb56aa92790fcb332c144bf08a2a2e1d45e30820d40b515d15d0d62"
+                "proofstorm.dev/rollout-digest": "sha256:1113fac6b43e71211cd4a1b52d96c8258cf8132cd9f9dad8dc65d938eb28e561"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -2728,7 +2730,7 @@
                   "command": [
                     "bitcoind"
                   ],
-                  "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
+                  "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:cfec5b592dfea4af2b3e715649c95ca07885d219b651e4a7844ba52750deb331",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {
@@ -2849,7 +2851,7 @@
           "template": {
             "metadata": {
               "annotations": {
-                "proofstorm.dev/rollout-digest": "sha256:8afe38d1dcb56aa92790fcb332c144bf08a2a2e1d45e30820d40b515d15d0d62"
+                "proofstorm.dev/rollout-digest": "sha256:1113fac6b43e71211cd4a1b52d96c8258cf8132cd9f9dad8dc65d938eb28e561"
               },
               "labels": {
                 "app.kubernetes.io/managed-by": "proofstormd",
@@ -2880,7 +2882,7 @@
                   "command": [
                     "bitcoind"
                   ],
-                  "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
+                  "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:cfec5b592dfea4af2b3e715649c95ca07885d219b651e4a7844ba52750deb331",
                   "imagePullPolicy": "IfNotPresent",
                   "name": "component",
                   "readinessProbe": {

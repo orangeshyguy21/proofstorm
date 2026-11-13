@@ -24,7 +24,7 @@ fn cell_document(postgres_enabled: bool) -> Value {
         "api_version": "proofstorm/v1alpha1",
         "name": "cdk-bdk-stress-cell",
         "components": [
-            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "31.2", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}},
+            {"id": "chain", "kind": "bitcoin", "implementation": "bitcoin-core", "version": "32.1", "config_version": "bitcoin-core/31/v1", "control": "cell", "config": {"txindex": true, "fallback_fee": 0.0002}},
             {
                 "id": "mint", "kind": "mint", "implementation": "cdk", "version": proofstorm_core::CDK_VERSION,
                 "config_version": "cdk-mintd/0.18/v1", "control": "target",

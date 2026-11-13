@@ -3,9 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result, bail, ensure};
 use proofstorm_core::{
     AuthenticationMode, BARK_CLN_HOLD_VERSION, BARK_PROCESSOR_VERSION, BARK_SERVER_VERSION,
-    CatalogEntry, CatalogPlatform, CatalogResponse, ComponentKind, SPARK_LDK_SERVER_VERSION,
-    SPARK_OPERATORS_VERSION, SPARK_PROCESSOR_VERSION, SPARK_SSP_VERSION, StorageBackend,
-    SupportLifecycle, catalog_image_source, digest_json, distributed_catalog_for_platform,
+    CatalogEntry, CatalogPlatform, CatalogResponse, ComponentKind, LinkKind,
+    SPARK_LDK_SERVER_VERSION, SPARK_OPERATORS_VERSION, SPARK_PROCESSOR_VERSION, SPARK_SSP_VERSION,
+    StorageBackend, SupportLifecycle, catalog_image_source, digest_json,
+    distributed_catalog_for_platform,
 };
 use serde::Serialize;
 
@@ -70,6 +71,57 @@ fn preferred<'a>(catalog: &'a CatalogResponse, name: &str) -> Result<&'a Catalog
         .iter()
         .find(|entry| entry.id == name && entry.support_lifecycle == SupportLifecycle::Preferred)
         .with_context(|| format!("qualification has no preferred {name}"))
+}
+
+fn declared_chains(entry: &CatalogEntry) -> Option<&BTreeSet<String>> {
+    entry
+        .compatible_dependencies
+        .iter()
+        .find(|dependency| {
+            dependency.link_kind == LinkKind::ChainBackend
+                && dependency.implementation == "bitcoin-core"
+        })
+        .map(|dependency| &dependency.versions)
+}
+
+/// The Bitcoin Core release a case runs against: the preferred release when
+/// every entry that declares a chain accepts it, otherwise the newest supported
+/// release they all accept.
+fn chain_for_all<'a>(
+    catalog: &'a CatalogResponse,
+    entries: &[&CatalogEntry],
+) -> Result<&'a CatalogEntry> {
+    let declared: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| declared_chains(entry))
+        .collect();
+    let accepts = |version: &String| declared.iter().all(|versions| versions.contains(version));
+    let preferred = preferred(catalog, "bitcoin-core")?;
+    if accepts(&preferred.version) {
+        return Ok(preferred);
+    }
+    catalog
+        .entries
+        .iter()
+        .filter(|chain| {
+            chain.id == "bitcoin-core"
+                && chain.support_lifecycle.is_supported()
+                && accepts(&chain.version)
+        })
+        .max_by_key(|chain| release_key(&chain.version))
+        .context("no supported Bitcoin Core suits every chain user in the case")
+}
+
+fn chain_for<'a>(catalog: &'a CatalogResponse, entry: &CatalogEntry) -> Result<&'a CatalogEntry> {
+    chain_for_all(catalog, &[entry])
+}
+
+/// Numeric release order; non-numeric parts sort first.
+fn release_key(version: &str) -> Vec<u64> {
+    version
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|part| part.parse().ok())
+        .collect()
 }
 
 fn obligations(entry: &CatalogEntry) -> BTreeSet<String> {
@@ -226,7 +278,13 @@ impl Builder<'_> {
                 .iter()
                 .any(|entry| entry.implementation == *implementation)
             {
-                components.push(component(preferred(self.catalog, implementation)?)?);
+                // A chain must suit every subject that declares one.
+                let selected = if *implementation == "bitcoin-core" {
+                    chain_for_all(self.catalog, subjects)?
+                } else {
+                    preferred(self.catalog, implementation)?
+                };
+                components.push(component(selected)?);
             }
         }
         let versions = components
@@ -313,7 +371,7 @@ impl Builder<'_> {
                                 component(mint)?,
                                 component(wallet)?,
                                 component(lightning)?,
-                                component(preferred(self.catalog, "bitcoin-core")?)?,
+                                component(chain_for(self.catalog, lightning)?)?,
                                 component(preferred(self.catalog, "lnd")?)?,
                             ];
                             if *storage == StorageBackend::Postgres {
@@ -381,6 +439,38 @@ impl Builder<'_> {
 
     /// Embedded CDK backends are configuration of the one CDK entry. Each
     /// embedded backend is qualified per storage mode by its own gate.
+    /// The embedded BDK on-chain path against each older supported Bitcoin
+    /// Core family the mint declares; the preferred release runs in every
+    /// other mint case.
+    fn older_mint_chains(&mut self, entry: &CatalogEntry) -> Result<()> {
+        if !entry
+            .support_matrix
+            .embedded_payment_bindings
+            .iter()
+            .any(|binding| binding.backend == "bdk")
+        {
+            return Ok(());
+        }
+        let preferred = preferred(self.catalog, "bitcoin-core")?;
+        let chains: Vec<&CatalogEntry> = self
+            .catalog
+            .entries
+            .iter()
+            .filter(|chain| {
+                chain.id == "bitcoin-core"
+                    && chain.support_lifecycle.is_supported()
+                    && chain.version != preferred.version
+            })
+            .collect();
+        for chain in chains {
+            let claims = dependencies(entry, &[component(chain)?]);
+            if !claims.is_empty() {
+                self.gate("cdk-bdk", &[entry, chain], &[], claims, false)?;
+            }
+        }
+        Ok(())
+    }
+
     fn embedded_mint(&mut self, entry: &CatalogEntry) -> Result<()> {
         let backends = entry
             .support_matrix
@@ -508,6 +598,20 @@ impl Builder<'_> {
             .filter(|entry| entry.support_lifecycle.is_supported())
         {
             match entry.id.as_str() {
+                // The preferred release runs in every case; each older
+                // family gets its own Lightning round trip.
+                "bitcoin-core" if entry.support_lifecycle != SupportLifecycle::Preferred => {
+                    let lnd = preferred(self.catalog, "lnd")?;
+                    self.push(
+                        "bitcoin-core",
+                        Scenario::Lightning {
+                            component: component(lnd)?,
+                        },
+                        vec![component(lnd)?, component(entry)?],
+                        behavioral(entry),
+                        true,
+                    );
+                }
                 "bitcoin-core" | "nutshell-wallet" | "postgresql" | "redis" => {}
                 "keycloak" => self.gate(
                     "keycloak",
@@ -517,7 +621,7 @@ impl Builder<'_> {
                     true,
                 )?,
                 "lnd" | "cln" => {
-                    let bitcoin = preferred(self.catalog, "bitcoin-core")?;
+                    let bitcoin = chain_for(self.catalog, entry)?;
                     let mut claims = behavioral(entry);
                     claims.extend(behavioral(bitcoin));
                     self.push(
@@ -534,6 +638,7 @@ impl Builder<'_> {
                 "cdk" => {
                     self.mint(entry)?;
                     self.embedded_mint(entry)?;
+                    self.older_mint_chains(entry)?;
                 }
                 "cdk-cli-wallet" => self.gate(
                     "cdk-wallet",
@@ -779,6 +884,48 @@ mod tests {
         "spark-operators",
         "ldk-server@0.1.0-762bc47",
     ];
+
+    #[test]
+    fn lightning_cases_use_a_declared_chain_and_older_bitcoin_families_are_covered() {
+        let plan = plan(identity(), Mode::Full).unwrap();
+        for platform in ["linux/arm64", "linux/amd64"] {
+            let cases: Vec<_> = plan
+                .cases
+                .iter()
+                .filter(|case| case.platform == platform)
+                .collect();
+            let version = |case: &Case, id: &str| {
+                case.components
+                    .iter()
+                    .find(|component| component.implementation == id)
+                    .map(|component| component.version.clone())
+            };
+            // LND before 0.21 cannot start on Bitcoin Core 32.
+            for old in ["0.19.3-beta", "0.20.8-beta"] {
+                let case = cases
+                    .iter()
+                    .find(|case| {
+                        matches!(&case.scenario, Scenario::Lightning { component }
+                            if component.implementation == "lnd" && component.version == old)
+                    })
+                    .expect("older LND case");
+                assert_eq!(version(case, "bitcoin-core").as_deref(), Some("31.2"));
+            }
+            for chain in ["30.4", "31.2"] {
+                assert!(cases.iter().any(|case| {
+                    matches!(&case.scenario, Scenario::Lightning { .. })
+                        && version(case, "bitcoin-core").as_deref() == Some(chain)
+                        && case
+                            .claims
+                            .contains(&format!("bitcoin-core@{chain}:behavior:\"bitcoin-core\""))
+                }));
+                assert!(cases.iter().any(|case| {
+                    matches!(&case.scenario, Scenario::Gate { name, .. } if name == "cdk-bdk")
+                        && version(case, "bitcoin-core").as_deref() == Some(chain)
+                }));
+            }
+        }
+    }
 
     fn identity() -> Identity {
         Identity {

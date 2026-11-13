@@ -394,6 +394,9 @@ pub struct ComponentPlanInput {
 pub struct BitcoinCoreConfig {
     pub txindex: bool,
     pub fallback_fee: f64,
+    /// `-rpcmaxconnections` on Bitcoin Core 32+; zero keeps the upstream default.
+    #[serde(default)]
+    pub rpc_max_connections: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1061,6 +1064,9 @@ impl EffectiveComponentConfig {
                 fallback_fee: required_config_value(component, "fallback_fee")?
                     .as_f64()
                     .ok_or_else(|| typed_config_error(component, "fallback_fee"))?,
+                rpc_max_connections: required_config_value(component, "rpc_max_connections")?
+                    .as_u64()
+                    .ok_or_else(|| typed_config_error(component, "rpc_max_connections"))?,
             })),
             "lnd" => Ok(Self::Lnd(LndConfig {
                 alias: string("alias")?,
@@ -1842,6 +1848,15 @@ fn default_backend_contracts() -> Vec<ComponentBackendContract> {
                         ConfigValueKind::Boolean,
                         ConfigDefault::Literal(json!(true)),
                     ),
+                ),
+                (
+                    "rpc_max_connections".into(),
+                    config_field(
+                        "Maximum simultaneous RPC (HTTP) clients, passed as -rpcmaxconnections; Bitcoin Core 32 and newer only. Zero keeps the upstream default of 16. Raise it when many Lightning nodes, mints or wallets share one node.",
+                        ConfigValueKind::Integer,
+                        ConfigDefault::Literal(json!(0)),
+                    )
+                    .with_numeric_bounds(0.0, 4096.0),
                 ),
             ]),
             BTreeMap::from([

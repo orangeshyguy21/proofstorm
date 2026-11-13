@@ -100,7 +100,7 @@ pub(super) fn extend(
             dependency(
                 LinkKind::ChainBackend,
                 "bitcoin-core",
-                &[crate::BITCOIN_VERSION],
+                crate::catalog::EXPERIMENTAL_BITCOIN_VERSIONS,
             ),
             dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
         ],

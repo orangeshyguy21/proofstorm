@@ -1,6 +1,6 @@
 {
   "api_version": "proofstorm/configuration-coverage/v1alpha1",
-  "catalog_digest": "sha256:e799b149cb97d9fb6208a8c89179ec6da1d3ff4d049022ab643b7bc43cac079c",
+  "catalog_digest": "sha256:3e99ba8c193f52a0eea1fdc6d10841c488ee9c56d9caedb646d16858ea897230",
   "entries": [
     {
       "implementation": "bark-server",
@@ -101,11 +101,83 @@
     {
       "implementation": "bitcoin-core",
       "kind": "bitcoin",
+      "upstream_version": "30.4",
+      "release_channel": "stable",
+      "support_lifecycle": "supported",
+      "config_version": "bitcoin-core/31/v1",
+      "config_schema_digest": "sha256:d19fe8e6cc1d5db4c63dddbfe8db1c49753987cd7478fcb87460288a7f08d741",
+      "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:48495824207a5d7945ff91a450a218a7131165ccb3eda5dfd309fc37f219e716",
+      "fields": {
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "debug_level": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "fallback_fee": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "p2p_bind": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "rpc_allow_policy": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "rpc_bind": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "rpc_credentials": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "rpc_max_connections": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "server_mode": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "txindex": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "zmq_endpoints": {
+          "classification": "topology_derived",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [],
+        "payment_backends": [],
+        "units": [],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": []
+    },
+    {
+      "implementation": "bitcoin-core",
+      "kind": "bitcoin",
       "upstream_version": "31.1",
       "release_channel": "stable",
       "support_lifecycle": "deprecated",
       "config_version": "bitcoin-core/31/v1",
-      "config_schema_digest": "sha256:3a41021706a3caf803b5042469743a335c7c6fb20ea64f3fcdb0187da0251a30",
+      "config_schema_digest": "sha256:d19fe8e6cc1d5db4c63dddbfe8db1c49753987cd7478fcb87460288a7f08d741",
       "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b3faffac8d3414faf57df61889c354d15fb2851782c2002251ea8df5be358ad6",
       "fields": {
         "data_directory": {
@@ -140,6 +212,10 @@
           "classification": "runtime_policy",
           "required": true
         },
+        "rpc_max_connections": {
+          "classification": "agent_authorable",
+          "required": true
+        },
         "server_mode": {
           "classification": "runtime_policy",
           "required": true
@@ -171,9 +247,9 @@
       "kind": "bitcoin",
       "upstream_version": "31.2",
       "release_channel": "stable",
-      "support_lifecycle": "preferred",
+      "support_lifecycle": "supported",
       "config_version": "bitcoin-core/31/v1",
-      "config_schema_digest": "sha256:3a41021706a3caf803b5042469743a335c7c6fb20ea64f3fcdb0187da0251a30",
+      "config_schema_digest": "sha256:d19fe8e6cc1d5db4c63dddbfe8db1c49753987cd7478fcb87460288a7f08d741",
       "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0",
       "fields": {
         "data_directory": {
@@ -206,6 +282,82 @@
         },
         "rpc_credentials": {
           "classification": "runtime_policy",
+          "required": true
+        },
+        "rpc_max_connections": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "server_mode": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "txindex": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "zmq_endpoints": {
+          "classification": "topology_derived",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [],
+        "payment_backends": [],
+        "units": [],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": []
+    },
+    {
+      "implementation": "bitcoin-core",
+      "kind": "bitcoin",
+      "upstream_version": "32.1",
+      "release_channel": "stable",
+      "support_lifecycle": "preferred",
+      "config_version": "bitcoin-core/31/v1",
+      "config_schema_digest": "sha256:d19fe8e6cc1d5db4c63dddbfe8db1c49753987cd7478fcb87460288a7f08d741",
+      "image": "proofstorm-registry.localhost:5000/bitcoin-core@sha256:cfec5b592dfea4af2b3e715649c95ca07885d219b651e4a7844ba52750deb331",
+      "fields": {
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "debug_level": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "fallback_fee": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "p2p_bind": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "rpc_allow_policy": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "rpc_bind": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "rpc_credentials": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "rpc_max_connections": {
+          "classification": "agent_authorable",
           "required": true
         },
         "server_mode": {
@@ -525,6 +677,8 @@
             "backend": {
               "implementation": "cln",
               "versions": [
+                "25.12.1",
+                "26.04.1",
                 "26.06.10"
               ]
             }
@@ -535,6 +689,7 @@
             "backend": {
               "implementation": "lnd",
               "versions": [
+                "0.19.3-beta",
                 "0.20.8-beta",
                 "0.21.8-beta"
               ]
@@ -608,6 +763,7 @@
           "link_kind": "payment_backend",
           "implementation": "lnd",
           "versions": [
+            "0.19.3-beta",
             "0.20.8-beta",
             "0.21.8-beta"
           ]
@@ -616,6 +772,8 @@
           "link_kind": "payment_backend",
           "implementation": "cln",
           "versions": [
+            "25.12.1",
+            "26.04.1",
             "26.06.10"
           ]
         },
@@ -623,7 +781,9 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
-            "31.2"
+            "30.4",
+            "31.2",
+            "32.1"
           ]
         },
         {
@@ -954,6 +1114,8 @@
             "backend": {
               "implementation": "cln",
               "versions": [
+                "25.12.1",
+                "26.04.1",
                 "26.06.10"
               ]
             }
@@ -964,6 +1126,7 @@
             "backend": {
               "implementation": "lnd",
               "versions": [
+                "0.19.3-beta",
                 "0.20.8-beta",
                 "0.21.8-beta"
               ]
@@ -1037,6 +1200,7 @@
           "link_kind": "payment_backend",
           "implementation": "lnd",
           "versions": [
+            "0.19.3-beta",
             "0.20.8-beta",
             "0.21.8-beta"
           ]
@@ -1045,6 +1209,8 @@
           "link_kind": "payment_backend",
           "implementation": "cln",
           "versions": [
+            "25.12.1",
+            "26.04.1",
             "26.06.10"
           ]
         },
@@ -1052,7 +1218,9 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
-            "31.2"
+            "30.4",
+            "31.2",
+            "32.1"
           ]
         },
         {
@@ -1525,6 +1693,178 @@
     {
       "implementation": "cln",
       "kind": "lightning",
+      "upstream_version": "25.12.1",
+      "release_channel": "stable",
+      "support_lifecycle": "supported",
+      "config_version": "cln/26.06/v1",
+      "config_schema_digest": "sha256:1af8bae18445cca3dd6d67f9469145d70447781ea8d6ad369b33fb96f7ae0eee",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:618eed33ba923cc459164bba38e8c554f97113f730a2f96e8423b18c0c515d9d",
+      "fields": {
+        "alias": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "announce_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "autoconnect_policy": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "bitcoin_retry_timeout": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "chain_backend_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "chain_backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "developer_mode": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "listen_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "log_level": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "reconnect_policy": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "30.4",
+            "31.2",
+            "32.1"
+          ]
+        }
+      ]
+    },
+    {
+      "implementation": "cln",
+      "kind": "lightning",
+      "upstream_version": "26.04.1",
+      "release_channel": "stable",
+      "support_lifecycle": "supported",
+      "config_version": "cln/26.06/v1",
+      "config_schema_digest": "sha256:1af8bae18445cca3dd6d67f9469145d70447781ea8d6ad369b33fb96f7ae0eee",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/elementsproject/lightningd@sha256:29a2b1df82d04675be289656d0fe681b587acd38bb8e203d00f226cad84ef73d",
+      "fields": {
+        "alias": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "announce_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "autoconnect_policy": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "bitcoin_retry_timeout": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "chain_backend_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "chain_backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "developer_mode": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "listen_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "log_level": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "reconnect_policy": {
+          "classification": "runtime_policy",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "30.4",
+            "31.2",
+            "32.1"
+          ]
+        }
+      ]
+    },
+    {
+      "implementation": "cln",
+      "kind": "lightning",
       "upstream_version": "26.06.10",
       "release_channel": "stable",
       "support_lifecycle": "preferred",
@@ -1601,7 +1941,9 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
-            "31.2"
+            "30.4",
+            "31.2",
+            "32.1"
           ]
         }
       ]
@@ -1685,7 +2027,9 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
-            "31.2"
+            "30.4",
+            "31.2",
+            "32.1"
           ]
         }
       ]
@@ -1769,7 +2113,9 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
-            "31.2"
+            "30.4",
+            "31.2",
+            "32.1"
           ]
         }
       ]
@@ -2067,6 +2413,95 @@
     {
       "implementation": "lnd",
       "kind": "lightning",
+      "upstream_version": "0.19.3-beta",
+      "release_channel": "prerelease",
+      "support_lifecycle": "supported",
+      "config_version": "lnd/0.20/v1",
+      "config_schema_digest": "sha256:65dff70176da398204126577f4d5892b2c5de8b47804f79d3891a0ed636d14d5",
+      "image": "proofstorm-registry.localhost:5000/upstream/docker.io/lightninglabs/lnd@sha256:b175f136c01ffe01e75eee836273dd15b21a7e2cea2bd316ea98ad3640743aaa",
+      "fields": {
+        "accept_keysend": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "admin_macaroon": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "alias": {
+          "classification": "agent_authorable",
+          "required": true
+        },
+        "chain_backend_credentials": {
+          "classification": "generated_instance_secret",
+          "required": true
+        },
+        "chain_backend_endpoint": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "data_directory": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "debug_level": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "external_address": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "listen_endpoints": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "network": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "seed_backup_policy": {
+          "classification": "runtime_policy",
+          "required": true
+        },
+        "tls_extra_domain": {
+          "classification": "topology_derived",
+          "required": true
+        },
+        "tls_identity": {
+          "classification": "generated_instance_secret",
+          "required": true
+        }
+      },
+      "support": {
+        "storage": [
+          "persistent_volume"
+        ],
+        "payment_methods": [
+          "bolt11"
+        ],
+        "payment_backends": [],
+        "units": [
+          "sat"
+        ],
+        "payment_bindings": [],
+        "authentication": [],
+        "compatible_wallet_adapters": []
+      },
+      "compatible_dependencies": [
+        {
+          "link_kind": "chain_backend",
+          "implementation": "bitcoin-core",
+          "versions": [
+            "30.4",
+            "31.2"
+          ]
+        }
+      ]
+    },
+    {
+      "implementation": "lnd",
+      "kind": "lightning",
       "upstream_version": "0.20.4-beta",
       "release_channel": "prerelease",
       "support_lifecycle": "deprecated",
@@ -2147,6 +2582,7 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
+            "30.4",
             "31.2"
           ]
         }
@@ -2235,6 +2671,7 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
+            "30.4",
             "31.2"
           ]
         }
@@ -2323,6 +2760,7 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
+            "30.4",
             "31.2"
           ]
         }
@@ -2411,7 +2849,9 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
-            "31.2"
+            "30.4",
+            "31.2",
+            "32.1"
           ]
         }
       ]
@@ -2499,7 +2939,9 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
-            "31.2"
+            "30.4",
+            "31.2",
+            "32.1"
           ]
         }
       ]
@@ -2587,7 +3029,9 @@
           "link_kind": "chain_backend",
           "implementation": "bitcoin-core",
           "versions": [
-            "31.2"
+            "30.4",
+            "31.2",
+            "32.1"
           ]
         }
       ]
@@ -2853,6 +3297,8 @@
             "backend": {
               "implementation": "cln",
               "versions": [
+                "25.12.1",
+                "26.04.1",
                 "26.06.10"
               ]
             }
@@ -2863,6 +3309,7 @@
             "backend": {
               "implementation": "lnd",
               "versions": [
+                "0.19.3-beta",
                 "0.20.8-beta",
                 "0.21.8-beta"
               ]
@@ -2886,6 +3333,7 @@
           "link_kind": "payment_backend",
           "implementation": "lnd",
           "versions": [
+            "0.19.3-beta",
             "0.20.8-beta",
             "0.21.8-beta"
           ]
@@ -2894,6 +3342,8 @@
           "link_kind": "payment_backend",
           "implementation": "cln",
           "versions": [
+            "25.12.1",
+            "26.04.1",
             "26.06.10"
           ]
         },
@@ -3174,6 +3624,8 @@
             "backend": {
               "implementation": "cln",
               "versions": [
+                "25.12.1",
+                "26.04.1",
                 "26.06.10"
               ]
             }
@@ -3184,6 +3636,7 @@
             "backend": {
               "implementation": "lnd",
               "versions": [
+                "0.19.3-beta",
                 "0.20.8-beta",
                 "0.21.8-beta"
               ]
@@ -3210,6 +3663,7 @@
           "link_kind": "payment_backend",
           "implementation": "lnd",
           "versions": [
+            "0.19.3-beta",
             "0.20.8-beta",
             "0.21.8-beta"
           ]
@@ -3218,6 +3672,8 @@
           "link_kind": "payment_backend",
           "implementation": "cln",
           "versions": [
+            "25.12.1",
+            "26.04.1",
             "26.06.10"
           ]
         },

@@ -43,8 +43,14 @@ fn document(case: &proofstorm_qualification::Case, selection: &MintRoundtrip) ->
             })
             .context("missing fixture dependency")
     };
+    // A case runs exactly one Bitcoin Core release, chosen for its backend.
+    let chain = case
+        .components
+        .iter()
+        .find(|entry| entry.implementation == "bitcoin-core")
+        .context("missing fixture chain")?;
     let mut components = vec![
-        node("chain", find("bitcoin-core")?, &case.platform)?,
+        node("chain", chain, &case.platform)?,
         node("seed-lnd", find("lnd")?, &case.platform)?,
         node("payer-lnd", find("lnd")?, &case.platform)?,
         node("backend", &selection.lightning, &case.platform)?,

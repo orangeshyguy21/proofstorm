@@ -50,6 +50,13 @@
           "format": "double",
           "type": "number"
         },
+        "rpc_max_connections": {
+          "default": 0,
+          "description": "`-rpcmaxconnections` on Bitcoin Core 32+; zero keeps the upstream default.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "txindex": {
           "type": "boolean"
         }

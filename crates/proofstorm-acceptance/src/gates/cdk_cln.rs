@@ -20,7 +20,7 @@ fn cell_document() -> Value {
                 "id": "chain",
                 "kind": "bitcoin",
                 "implementation": "bitcoin-core",
-                "version": "31.2",
+                "version": "32.1",
                 "config_version": "bitcoin-core/31/v1",
                 "control": "cell",
                 "config": {"txindex": true, "fallback_fee": 0.0002}

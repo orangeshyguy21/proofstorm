@@ -1802,7 +1802,7 @@ pub fn render_bitcoin_component(
             "bitcoin plan does not carry Bitcoin Core configuration".into(),
         ));
     };
-    let args = vec![
+    let mut args = vec![
         "-regtest".to_owned(),
         "-datadir=/home/bitcoin/.bitcoin".to_owned(),
         "-server=1".to_owned(),
@@ -1817,6 +1817,10 @@ pub fn render_bitcoin_component(
         format!("-fallbackfee={}", config.fallback_fee),
         "-debug=0".to_owned(),
     ];
+    // Validation admits a non-zero value only on Bitcoin Core 32 and newer.
+    if config.rpc_max_connections > 0 {
+        args.push(format!("-rpcmaxconnections={}", config.rpc_max_connections));
+    }
     let mut rendered = RenderedComponent::default();
     rendered.services.push(resource(service_from_plan(plan))?);
     rendered.stateful_sets.push(resource(stateful_set(
@@ -4759,6 +4763,47 @@ mod tests {
             lock.entries
                 .iter()
                 .all(|entry| entry.image.contains("@sha256:"))
+        );
+    }
+
+    #[test]
+    fn bitcoin_rpc_max_connections_renders_only_when_set() {
+        let cell = CellSpec {
+            api_version: API_VERSION.into(),
+            name: "bitcoin-rpc".into(),
+            components: vec![component(
+                "chain",
+                ComponentKind::Bitcoin,
+                "bitcoin-core",
+                ControlClass::Cell,
+            )],
+            links: vec![],
+            policy: CellPolicy::default(),
+        };
+        let lock = resolve_lock(&cell, default_catalog()).expect("lock");
+        let first_plan =
+            compile_component_plans("i0123456789012345678", "sha256:rpc", &cell, &lock)
+                .expect("compile plan")
+                .remove(0);
+        let args = |plan: &ComponentPlanContract| {
+            let rendered = render_bitcoin_component(plan).expect("render");
+            serde_json::to_value(&rendered.stateful_sets[0]).expect("JSON")["spec"]["template"]
+                ["spec"]["containers"][0]["args"]
+                .clone()
+        };
+        assert!(
+            !args(&first_plan).to_string().contains("-rpcmaxconnections"),
+            "the upstream default leaves the flag out"
+        );
+        let mut raised = first_plan.clone();
+        if let EffectiveComponentConfig::BitcoinCore(config) = &mut raised.effective_config {
+            config.rpc_max_connections = 256;
+        }
+        assert!(
+            args(&raised)
+                .as_array()
+                .expect("args")
+                .contains(&json!("-rpcmaxconnections=256"))
         );
     }
 

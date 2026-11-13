@@ -189,7 +189,7 @@ jobs:
         run: |
           set -o pipefail
           driver=proofstorm-qualification-driver:local
-          for selection in bitcoin-core@31.2 bitcoin-core@29.4 bitcoin-core@30.3 \
+          for selection in bitcoin-core@32.1 bitcoin-core@31.2 bitcoin-core@30.4 \
               nutshell-mint@0.20.3 nutshell-mint@0.21.0 \
               cdk-cli-wallet@0.18.3 cdk-mint@0.18.3; do
             work="$RUNNER_TEMP/component-builds/$selection"
@@ -229,10 +229,10 @@ jobs:
         run: |
           set -o pipefail
           jq -n --slurpfile lightning tests/component-compat/lightning.json \
+            --slurpfile btc32 "$RUNNER_TEMP/component-builds/bitcoin-core@32.1/image.json" \
             --slurpfile btc31 "$RUNNER_TEMP/component-builds/bitcoin-core@31.2/image.json" \
-            --slurpfile btc30 "$RUNNER_TEMP/component-builds/bitcoin-core@30.3/image.json" \
-            --slurpfile btc29 "$RUNNER_TEMP/component-builds/bitcoin-core@29.4/image.json" \
-            '{bitcoin: [[$btc31[0],"31.2"],[$btc30[0],"30.3"],[$btc29[0],"29.4"]] | map({version:.[1],image:.[0].local_image_id}),lightning:$lightning[0]}' \
+            --slurpfile btc30 "$RUNNER_TEMP/component-builds/bitcoin-core@30.4/image.json" \
+            '{bitcoin: [[$btc32[0],"32.1"],[$btc31[0],"31.2"],[$btc30[0],"30.4"]] | map({version:.[1],image:.[0].local_image_id}),lightning:$lightning[0]}' \
             > "$RUNNER_TEMP/bitcoin-lightning.json"
           bash tests/component-compat/bitcoin-lightning.sh "$RUNNER_TEMP/bitcoin-lightning.json" \
             "linux/$ARCH" "$RUNNER_TEMP/bitcoin-lightning" \
@@ -242,7 +242,7 @@ jobs:
           set -o pipefail
           jq --slurpfile ns20 "$RUNNER_TEMP/component-builds/nutshell-mint@0.20.3/image.json" \
             --slurpfile ns21 "$RUNNER_TEMP/component-builds/nutshell-mint@0.21.0/image.json" \
-            '.bitcoin=[.bitcoin[0]] | .driver="proofstorm-qualification-driver:local" |
+            '.bitcoin=[.bitcoin[]|select(.version=="31.2")] | .driver="proofstorm-qualification-driver:local" |
              .mints=[{implementation:"nutshell",version:"0.21.0",image:$ns21[0].local_image_id},{implementation:"nutshell",version:"0.20.3",image:$ns20[0].local_image_id}] |
              .wallets=[.mints[]|.implementation="nutshell-wallet"]' \
             "$RUNNER_TEMP/bitcoin-lightning.json" > "$RUNNER_TEMP/nutshell-compat.json"

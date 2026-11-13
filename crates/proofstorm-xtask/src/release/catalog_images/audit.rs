@@ -160,7 +160,7 @@ mod tests {
             result["proposed_versions"],
             json!(["0.21.8-beta", "0.20.8-beta", "0.19.3-beta"])
         );
-        assert_eq!(result["qualify"], json!(["0.19.3-beta"]));
+        assert_eq!(result["qualify"], json!([]));
         assert_eq!(result["retire_after_qualification"], json!([]));
         let missing = proposal("lnd", &[], default_catalog());
         assert_eq!(missing["complete_window"], false);

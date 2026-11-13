@@ -232,8 +232,15 @@ pair() (
   stage=complete
 )
 index=0 failed=0
+: > "$work/excluded.jsonl"
 while IFS= read -r btc; do
   while IFS= read -r ln; do
+    # A Lightning entry can record an upstream incompatibility with a Bitcoin release.
+    if jq -e --arg version "$(jq -r '.version' <<< "$btc")" '(.unsupported_bitcoin // [])|index($version)' <<< "$ln" >/dev/null; then
+      printf 'Excluded: Bitcoin %s / %s %s (%s)\n' "$(jq -r '.version' <<< "$btc")" "$(jq -r '.implementation' <<< "$ln")" "$(jq -r '.version' <<< "$ln")" "$(jq -r '.reason' <<< "$ln")"
+      jq -cn --argjson bitcoin "$btc" --argjson lightning "$ln" '{bitcoin:$bitcoin.version,implementation:$lightning.implementation,version:$lightning.version,reason:$lightning.reason}' >> "$work/excluded.jsonl"
+      continue
+    fi
     index=$((index+1))
     printf 'Compatibility %s: Bitcoin %s / %s %s\n' "$index" "$(jq -r '.version' <<< "$btc")" "$(jq -r '.implementation' <<< "$ln")" "$(jq -r '.version' <<< "$ln")"
     # A separate Bash process retains errexit inside the case function.
@@ -247,7 +254,8 @@ while IFS= read -r btc; do
   done < "$work/lightning.jsonl"
 done < "$work/bitcoin.jsonl"
 jq -s --arg platform "$platform" --argjson expected "$index" --argjson failures "$failed" \
-  '{platform:$platform,expected_cases:$expected,completed_cases:length,cases:.,passed:($failures==0 and length==$expected and all(.passed and .cleanup_verified)),scope:"Explicit Bitcoin/Lightning pairings and optional Nutshell wallet contracts; not complete product qualification"}' \
+  --slurpfile excluded "$work/excluded.jsonl" \
+  '{platform:$platform,expected_cases:$expected,completed_cases:length,cases:.,excluded:$excluded,passed:($failures==0 and length==$expected and all(.passed and .cleanup_verified)),scope:"Explicit Bitcoin/Lightning pairings and optional Nutshell wallet contracts; not complete product qualification"}' \
   "$work"/case-*/result.json > "$work/result.json"
 [[ "$failed" == 0 ]]
 }

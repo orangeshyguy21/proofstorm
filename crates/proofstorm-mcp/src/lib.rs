@@ -3421,7 +3421,7 @@ mod tests {
         assert!(backend.supports(NetworkFaultFeature::Partition));
         assert!(!backend.supports(NetworkFaultFeature::Delay));
         let catalog = default_catalog();
-        assert_eq!(catalog.entries.len(), 37);
+        assert_eq!(catalog.entries.len(), 42);
         assert!(catalog.entries.iter().all(|entry| {
             entry.config_version.contains('/')
                 && entry.config_schema_digest.starts_with("sha256:")
@@ -3530,7 +3530,7 @@ mod tests {
                 support.supported_versions.contains(version)
                     && (matches!(
                         support.implementation.as_str(),
-                        "lnd" | "nutshell" | "nutshell-wallet"
+                        "lnd" | "cln" | "bitcoin-core" | "nutshell" | "nutshell-wallet"
                     ) || support.minimum_supported == support.preferred_version
                         && support.supported_versions.len() == 1)
             })
@@ -3593,7 +3593,7 @@ mod tests {
         page.items = items;
         let page: CatalogListResponse =
             serde_json::from_value(serde_json::to_value(page).unwrap()).unwrap();
-        assert_eq!(page.items.len(), 24);
+        assert_eq!(page.items.len(), 29);
         assert!(page.next_cursor.is_none());
         assert!(read_query::wire_size(&page).unwrap() <= MAX_AGENT_RESPONSE_BYTES);
         assert!(page.items.iter().all(|entry| {
@@ -3612,9 +3612,12 @@ mod tests {
                             | "open-ssp"
                             | "cdk-spark-processor"
                     ) && entry.support_lifecycle == SupportLifecycle::Experimental
-                    || entry.id == "lnd"
-                        && entry.version == "0.20.8-beta"
-                        && entry.support_lifecycle == SupportLifecycle::Supported
+                    || matches!(
+                        (entry.id.as_str(), entry.version.as_str()),
+                        ("lnd", "0.20.8-beta" | "0.19.3-beta")
+                            | ("cln", "26.04.1" | "25.12.1")
+                            | ("bitcoin-core", "31.2" | "30.4")
+                    ) && entry.support_lifecycle == SupportLifecycle::Supported
                     || matches!(entry.id.as_str(), "nutshell" | "nutshell-wallet")
                         && entry.version == "0.20.3"
                         && entry.support_lifecycle == SupportLifecycle::Supported)

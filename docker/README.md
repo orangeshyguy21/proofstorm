@@ -8,8 +8,8 @@ The `upstream/<registry>/<repository>` path records their original source.
 
 | Component | Source |
 | --- | --- |
-| Bitcoin Core 31.2 | Proofstorm packaging of verified bitcoincore.org release binaries |
-| LND 0.21.8-beta (preferred), 0.20.8-beta | docker.io/lightninglabs/lnd |
+| Bitcoin Core 32.1 (preferred), 31.2, 30.4 | Proofstorm packaging of verified bitcoincore.org release binaries |
+| LND 0.21.8-beta (preferred), 0.20.8-beta, 0.19.3-beta | docker.io/lightninglabs/lnd |
 | Core Lightning | docker.io/elementsproject/lightningd |
 | CDK and Nutshell | docker.io/cashubtc images, with the existing management-client wrappers |
 | LDK Server and CDK LDK Server processor | Pinned upstream source builds; see [payment processor packaging](payment/README.md) |
@@ -26,8 +26,9 @@ without creating a cluster.
 
 ## Bitcoin packaging
 
-`bitcoin/Dockerfile.31.2` downloads unmodified Bitcoin Core 31.2 release binaries
-for Linux amd64 and arm64 (`bitcoin/Dockerfile` is the retained 31.1 recipe). It checks the pinned SHA-256 of the release checksum
+`bitcoin/Dockerfile.<version>` (32.1, 31.2, 30.4) downloads unmodified Bitcoin
+Core release binaries for Linux amd64 and arm64 (`bitcoin/Dockerfile` is the
+retained 31.1 recipe). It checks the pinned SHA-256 of the release checksum
 document, requires a valid Michael Ford signature with pinned primary and signing
 key fingerprints, and verifies each architecture's archive against that signed
 document. The signer key is fetched from an immutable bitcoin-core/guix.sigs

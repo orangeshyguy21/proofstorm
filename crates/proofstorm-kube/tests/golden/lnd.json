@@ -109,7 +109,7 @@
           "zmq_block": 28334,
           "zmq_tx": 28335
         },
-        "version": "31.2"
+        "version": "32.1"
       }
     },
     "operation_admission": [

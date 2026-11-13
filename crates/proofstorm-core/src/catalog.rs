@@ -1,13 +1,23 @@
 // Current releases; acceptance gates and candidate baselines read these too.
-pub const BITCOIN_VERSION: &str = "31.2";
+pub const BITCOIN_VERSION: &str = "32.1";
+// The rolling three-family Bitcoin Core window.
+const BITCOIN_VERSIONS: &[&str] = &["30.4", "31.2", BITCOIN_VERSION];
+// LND before 0.21 detects Taproot from getdeploymentinfo's taproot deployment,
+// which Bitcoin Core 32 removed (bitcoin/bitcoin#26201), and refuses to start.
+// LND 0.21 checks script_flags instead (lightningnetwork/lnd#10683).
+const BITCOIN_VERSIONS_BEFORE_32: &[&str] = &["30.4", "31.2"];
+// Experimental stacks keep the release they were last qualified with.
+pub(crate) const EXPERIMENTAL_BITCOIN_VERSIONS: &[&str] = &["31.2"];
 pub const CDK_VERSION: &str = "0.18.3";
 pub const LND_VERSION: &str = "0.21.8-beta";
 pub const CLN_VERSION: &str = "26.06.10";
 
 // Shared CDK daemon with LDK, BDK and PostgreSQL support.
 pub const CDK_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:ad3a895cd2faeb41d8251f874dde164c1a75afc6a4adda1517aae3f520a69bd9";
-// Bitcoin Core release packaging; the catalog promotes the 31.1 base entry to it.
-const BITCOIN_IMAGE: &str = "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0";
+// Bitcoin Core release packaging; the catalog promotes the 31.1 base entry through them.
+const BITCOIN_0312_IMAGE: &str = "proofstorm-registry.localhost:5000/bitcoin-core@sha256:b008a393be3afecf54354c7fe982ee04760501746636bff7bc8465aca89937a0";
+const BITCOIN_IMAGE: &str = "proofstorm-registry.localhost:5000/bitcoin-core@sha256:cfec5b592dfea4af2b3e715649c95ca07885d219b651e4a7844ba52750deb331";
+const BITCOIN_0304_IMAGE: &str = "proofstorm-registry.localhost:5000/bitcoin-core@sha256:48495824207a5d7945ff91a450a218a7131165ccb3eda5dfd309fc37f219e716";
 // Superseded 0.18.2 daemon, kept for existing cell locks.
 const CDK_0182_MINT_IMAGE: &str = "proofstorm-registry.localhost:5000/cdk-mint@sha256:25e54ceb3999a4f99b88b838e1d66a69b0a91043823e50025d7544b968b77e10";
 
@@ -413,8 +423,8 @@ pub fn distributed_catalog_for_platform(platform: CatalogPlatform) -> CatalogRes
 }
 
 // Mint backend support names only qualified releases.
-const LND_VERSIONS: &[&str] = &["0.20.8-beta", LND_VERSION];
-const CLN_VERSIONS: &[&str] = &[CLN_VERSION];
+const LND_VERSIONS: &[&str] = &["0.19.3-beta", "0.20.8-beta", LND_VERSION];
+const CLN_VERSIONS: &[&str] = &["25.12.1", "26.04.1", CLN_VERSION];
 
 fn build_catalog(amd64: bool) -> CatalogResponse {
     build_catalog_with_spark(amd64, spark::pinned(amd64).as_ref())
@@ -488,6 +498,34 @@ fn build_catalog_with_spark(amd64: bool, spark_images: Option<&spark::Images>) -
             CLN_VERSION,
             SupportLifecycle::Preferred,
             "docker.io/elementsproject/lightningd@sha256:59f10c4c7429bb80791481c906859f6de1aa58ef224758aa25d50b7d47fc0c04",
+        ),
+        // Older release families in the rolling three-family window.
+        lightning_entry(
+            amd64,
+            backends,
+            adapter_version,
+            "lnd",
+            "0.19.3-beta",
+            SupportLifecycle::Supported,
+            "docker.io/lightninglabs/lnd@sha256:b175f136c01ffe01e75eee836273dd15b21a7e2cea2bd316ea98ad3640743aaa",
+        ),
+        lightning_entry(
+            amd64,
+            backends,
+            adapter_version,
+            "cln",
+            "26.04.1",
+            SupportLifecycle::Supported,
+            "docker.io/elementsproject/lightningd@sha256:29a2b1df82d04675be289656d0fe681b587acd38bb8e203d00f226cad84ef73d",
+        ),
+        lightning_entry(
+            amd64,
+            backends,
+            adapter_version,
+            "cln",
+            "25.12.1",
+            SupportLifecycle::Supported,
+            "docker.io/elementsproject/lightningd@sha256:618eed33ba923cc459164bba38e8c554f97113f730a2f96e8423b18c0c515d9d",
         ),
         // Superseded patches stay resolvable for existing cell locks; new cells are refused them.
         lightning_entry(
@@ -569,7 +607,7 @@ fn build_catalog_with_spark(amd64: bool, spark_images: Option<&spark::Images>) -
             vec![
                 dependency(LinkKind::PaymentBackend, "lnd", LND_VERSIONS),
                 dependency(LinkKind::PaymentBackend, "cln", CLN_VERSIONS),
-                dependency(LinkKind::ChainBackend, "bitcoin-core", &[BITCOIN_VERSION]),
+                dependency(LinkKind::ChainBackend, "bitcoin-core", BITCOIN_VERSIONS),
                 dependency(LinkKind::DatabaseBackend, "postgresql", &["17.11"]),
                 dependency(LinkKind::AuthenticationBackend, "keycloak", &["25.0.6"]),
             ],
@@ -786,6 +824,7 @@ fn build_catalog_with_spark(amd64: bool, spark_images: Option<&spark::Images>) -
         entry.build_provenance = Some(provenance);
     }
     promote_component_releases(&mut entries, amd64);
+    add_older_family_releases(&mut entries);
     processor::extend(&mut entries, amd64, backends, adapter_version);
     bark::extend(&mut entries, amd64, backends, adapter_version);
     if let Some(images) = spark_images {
@@ -794,19 +833,27 @@ fn build_catalog_with_spark(amd64: bool, spark_images: Option<&spark::Images>) -
     CatalogResponse::try_new(entries).expect("default catalog support contracts are valid")
 }
 
-/// Keep the previous exact entries available for saved locks while new cells
-/// select the current patch and the newest Nutshell release family. Steps run in
-/// order, so one implementation can advance through several patches.
-fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
+/// (implementation, new version, image, provenance, lifecycle of the replaced entry)
+type ReleaseStep = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    SupportLifecycle,
+);
+
+/// Release promotions in order; later steps advance the entry earlier steps produced.
+fn release_steps(amd64: bool) -> Vec<ReleaseStep> {
     let (cdk_0181, cdk_0181_provenance) = crate::wallet_builds::cdk_0181(amd64);
     let (cdk_0182, cdk_0182_provenance) = crate::wallet_builds::cdk_0182(amd64);
     let (cdk_0183, cdk_0183_provenance) = crate::wallet_builds::cdk_0183(amd64);
     let cdk_mint_provenance = include_str!("../../../docker/mint/cdk-0.18.3-provenance.json");
-    let bitcoin_provenance = include_str!("../../../docker/bitcoin/bitcoin-31.2-provenance.json");
+    let bitcoin_0312_provenance =
+        include_str!("../../../docker/bitcoin/bitcoin-31.2-provenance.json");
+    let bitcoin_provenance = include_str!("../../../docker/bitcoin/bitcoin-32.1-provenance.json");
     let nutshell = crate::wallet_builds::nutshell_021(amd64);
     let nutshell_provenance = include_str!("../../../docker/mint/nutshell-0.21.0-provenance.json");
-    // (implementation, new version, image, provenance, lifecycle of the replaced entry)
-    let steps = [
+    vec![
         (
             "cdk-cli-wallet",
             "0.18.1",
@@ -837,10 +884,17 @@ fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
         ),
         (
             "bitcoin-core",
+            "31.2",
+            BITCOIN_0312_IMAGE,
+            bitcoin_0312_provenance,
+            SupportLifecycle::Deprecated,
+        ),
+        (
+            "bitcoin-core",
             BITCOIN_VERSION,
             BITCOIN_IMAGE,
             bitcoin_provenance,
-            SupportLifecycle::Deprecated,
+            SupportLifecycle::Supported,
         ),
         (
             "nutshell",
@@ -856,7 +910,14 @@ fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
             nutshell_provenance,
             SupportLifecycle::Supported,
         ),
-    ];
+    ]
+}
+
+/// Keep the previous exact entries available for saved locks while new cells
+/// select the current patch and the newest Nutshell release family. Steps run in
+/// order, so one implementation can advance through several patches.
+fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
+    let steps = release_steps(amd64);
     let mut previous = Vec::new();
     for (id, version, image, encoded, replaced_lifecycle) in steps {
         let entry = entries
@@ -899,6 +960,33 @@ fn promote_component_releases(entries: &mut Vec<CatalogEntry>, amd64: bool) {
         entry.build_provenance = Some(provenance);
     }
     entries.extend(previous);
+}
+
+/// Older release families in a rolling window: copies of the current entry
+/// with their own image and provenance, so they share its support contract.
+fn add_older_family_releases(entries: &mut Vec<CatalogEntry>) {
+    let releases = [(
+        "bitcoin-core",
+        "30.4",
+        BITCOIN_0304_IMAGE,
+        include_str!("../../../docker/bitcoin/bitcoin-30.4-provenance.json"),
+    )];
+    for (id, version, image, encoded) in releases {
+        let current = entries
+            .iter()
+            .find(|entry| entry.id == id && entry.support_lifecycle == SupportLifecycle::Preferred)
+            .expect("older family has a preferred entry")
+            .clone();
+        let provenance: BuildProvenance =
+            serde_json::from_str(encoded).expect("older family build provenance");
+        let mut entry = current;
+        entry.version = version.into();
+        entry.image = image.into();
+        entry.support_lifecycle = SupportLifecycle::Supported;
+        entry.source_digest = crate::digest_json(&(&entry.source_digest, version, &provenance));
+        entry.build_provenance = Some(provenance);
+        entries.push(entry);
+    }
 }
 
 fn implementation_support(
@@ -1383,7 +1471,7 @@ fn lightning_entry(
         vec![dependency(
             LinkKind::ChainBackend,
             "bitcoin-core",
-            &[BITCOIN_VERSION],
+            lightning_chain_versions(id, version),
         )],
         support_matrix(
             &[StorageBackend::PersistentVolume],
@@ -1432,6 +1520,18 @@ fn redis_entry(
     )
 }
 
+/// The Bitcoin Core releases a Lightning release can run against.
+fn lightning_chain_versions(id: &str, version: &str) -> &'static [&'static str] {
+    let lnd_minor = version
+        .strip_prefix("0.")
+        .and_then(|rest| rest.split('.').next())
+        .and_then(|minor| minor.parse::<u32>().ok());
+    match (id, lnd_minor) {
+        ("lnd", Some(minor)) if minor < 21 => BITCOIN_VERSIONS_BEFORE_32,
+        _ => BITCOIN_VERSIONS,
+    }
+}
+
 /// Standalone LDK Server regtest nodes share one contract; the CDK processor
 /// and open-ssp each pin their own revision.
 fn ldk_server_entry(
@@ -1464,7 +1564,7 @@ fn ldk_server_entry(
         vec![dependency(
             LinkKind::ChainBackend,
             "bitcoin-core",
-            &[BITCOIN_VERSION],
+            EXPERIMENTAL_BITCOIN_VERSIONS,
         )],
         support_matrix(
             &[StorageBackend::PersistentVolume],
@@ -2028,7 +2128,37 @@ pub fn validate_catalog_component<'a>(
     }
     validate_component_config(component)?;
     crate::native_settings::validate_release_names(component, entry)?;
+    validate_bitcoin_release_settings(component, entry)?;
     Ok(entry)
+}
+
+/// Older Bitcoin Core releases refuse to start on an unknown
+/// `-rpcmaxconnections`, so only 32 and newer accept a non-zero value.
+/// Candidate builds have no release number and are not checked.
+fn validate_bitcoin_release_settings(
+    component: &ComponentSpec,
+    entry: &CatalogEntry,
+) -> Result<(), String> {
+    if entry.id != "bitcoin-core" {
+        return Ok(());
+    }
+    let requested = component
+        .config
+        .get("rpc_max_connections")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let major = entry
+        .version
+        .split('.')
+        .next()
+        .and_then(|major| major.parse::<u32>().ok());
+    match major {
+        Some(major) if requested > 0 && major < 32 => Err(format!(
+            "component {:?} sets rpc_max_connections, which Bitcoin Core {} does not support; it needs Bitcoin Core 32 or newer, or leave it at 0",
+            component.id, entry.version
+        )),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -2171,6 +2301,35 @@ mod tests {
     }
 
     #[test]
+    fn rpc_max_connections_is_refused_before_bitcoin_core_32() {
+        let catalog = default_catalog();
+        let mut component = ComponentSpec {
+            resources: None,
+            id: "chain".into(),
+            kind: ComponentKind::Bitcoin,
+            implementation: "bitcoin-core".into(),
+            version: Some("31.2".into()),
+            config_version: "bitcoin-core/31/v1".into(),
+            control: ControlClass::Cell,
+            config: BTreeMap::from([("rpc_max_connections".into(), serde_json::json!(64))]),
+        };
+        let error = validate_catalog_component(&component, catalog).unwrap_err();
+        assert!(error.contains("needs Bitcoin Core 32 or newer"), "{error}");
+        component.version = Some(BITCOIN_VERSION.into());
+        assert_eq!(
+            validate_catalog_component(&component, catalog)
+                .unwrap()
+                .version,
+            "32.1"
+        );
+        component.version = Some("31.2".into());
+        component
+            .config
+            .insert("rpc_max_connections".into(), serde_json::json!(0));
+        assert!(validate_catalog_component(&component, catalog).is_ok());
+    }
+
+    #[test]
     fn bitcoin_release_provenance_and_publisher_mirrors_are_pinned() {
         use sha2::{Digest, Sha256};
         let catalog = default_catalog();
@@ -2183,14 +2342,14 @@ mod tests {
             .build_provenance
             .as_ref()
             .expect("Bitcoin release provenance");
-        assert_eq!(bitcoin.version, "31.2");
+        assert_eq!(bitcoin.version, "32.1");
         assert_eq!(bitcoin.config_version, "bitcoin-core/31/v1");
         assert_eq!(provenance.platform, "linux/amd64,linux/arm64");
         assert_eq!(
             provenance.recipe_digest,
             format!(
                 "sha256:{:x}",
-                Sha256::digest(include_bytes!("../../../docker/bitcoin/Dockerfile.31.2"))
+                Sha256::digest(include_bytes!("../../../docker/bitcoin/Dockerfile.32.1"))
             )
         );
         for entry in &catalog.entries {
@@ -2337,18 +2496,22 @@ mod tests {
     )]
     fn catalog_support_summary_is_exact_and_invariants_fail_closed() {
         let catalog = catalog_for_platform(CatalogPlatform::LinuxArm64);
-        assert_eq!(catalog.entries.len(), 37);
+        assert_eq!(catalog.entries.len(), 42);
         assert_eq!(catalog.implementations.len(), 20);
         let lnd = catalog
             .implementations
             .iter()
             .find(|support| support.implementation == "lnd")
             .expect("LND support summary");
-        assert_eq!(lnd.minimum_supported.as_deref(), Some("0.20.8-beta"));
+        assert_eq!(lnd.minimum_supported.as_deref(), Some("0.19.3-beta"));
         assert_eq!(lnd.preferred_version.as_deref(), Some("0.21.8-beta"));
         assert_eq!(
             lnd.supported_versions,
-            BTreeSet::from(["0.20.8-beta".into(), "0.21.8-beta".into()])
+            BTreeSet::from([
+                "0.19.3-beta".into(),
+                "0.20.8-beta".into(),
+                "0.21.8-beta".into()
+            ])
         );
         assert!(catalog.implementations.iter().all(|support| {
             matches!(
@@ -2362,13 +2525,14 @@ mod tests {
                     | "spark-operators"
                     | "open-ssp"
                     | "cdk-spark-processor"
-            ) || support.implementation == "lnd"
-                || matches!(
-                    support.implementation.as_str(),
-                    "nutshell" | "nutshell-wallet"
-                )
-                || support.minimum_supported == support.preferred_version
-                    && support.supported_versions.len() == 1
+            ) || matches!(
+                support.implementation.as_str(),
+                "lnd" | "cln" | "bitcoin-core"
+            ) || matches!(
+                support.implementation.as_str(),
+                "nutshell" | "nutshell-wallet"
+            ) || support.minimum_supported == support.preferred_version
+                && support.supported_versions.len() == 1
         }));
 
         let mut duplicate = catalog.entries.clone();

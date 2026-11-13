@@ -939,7 +939,7 @@ mod tests {
         };
 
         let selected = validate_catalog_component(&component, &catalog).expect("preferred entry");
-        assert_eq!(selected.version, "31.2");
+        assert_eq!(selected.version, "32.1");
 
         component.version = Some("29.1".into());
         component.config_version = "bitcoin-core/29/v1".into();
@@ -982,7 +982,7 @@ mod tests {
         };
         let lock = resolve_lock(&cell, default_catalog()).expect("lock");
         let entry = &lock.entries[0];
-        assert_eq!(entry.version, "31.2");
+        assert_eq!(entry.version, "32.1");
         assert_eq!(entry.config_version, "bitcoin-core/31/v1");
         assert!(entry.config_schema_digest.starts_with("sha256:"));
         assert!(entry.protocol_action_adapter_version.is_some());

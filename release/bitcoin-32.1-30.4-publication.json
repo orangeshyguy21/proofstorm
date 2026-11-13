@@ -1,0 +1,102 @@
+{
+  "format_version": 1,
+  "date": "2026-11-12",
+  "repository": "https://github.com/bitcoin/bitcoin",
+  "releases": [
+    {
+      "version": "32.1",
+      "source": {
+        "tag": "v32.1",
+        "commit_sha": "f0de87f040621468b956f01f526a43a010310501",
+        "checksums": "https://bitcoincore.org/bin/bitcoin-core-32.1/SHA256SUMS",
+        "checksums_sha256": "8efe242e99fe85d96f6a564a14e41eae6ab903736f0732af4d6c00bf1d92534d"
+      },
+      "images": [
+        {
+          "platform": "linux/arm64",
+          "recipe": "docker/bitcoin/Dockerfile.32.1",
+          "source_revision": "46e78c0953b4b66a2c3a4755a41d0c11d5703fad",
+          "image": "ghcr.io/osygy/proofstorm/bitcoin-core@sha256:5f078e95b5de0aaf44b469b1551c1273276383bb23fa4bc8d15b3005c8cceac1",
+          "probe": "Bitcoin Core daemon version v32.1.0 bitcoind",
+          "publication": "verified"
+        },
+        {
+          "platform": "linux/amd64",
+          "recipe": "docker/bitcoin/Dockerfile.32.1",
+          "source_revision": "46e78c0953b4b66a2c3a4755a41d0c11d5703fad",
+          "image": "ghcr.io/osygy/proofstorm/bitcoin-core@sha256:9ff963b38703587096afa440cca6e1d77dc8c95875e8a6581e031c4831c594e6",
+          "probe": "Bitcoin Core daemon version v32.1.0 bitcoind",
+          "publication": "verified"
+        }
+      ],
+      "index": {
+        "image": "ghcr.io/osygy/proofstorm/bitcoin-core@sha256:cfec5b592dfea4af2b3e715649c95ca07885d219b651e4a7844ba52750deb331",
+        "media_type": "application/vnd.oci.image.index.v1+json",
+        "manifests": {
+          "linux/arm64": "sha256:5f078e95b5de0aaf44b469b1551c1273276383bb23fa4bc8d15b3005c8cceac1",
+          "linux/amd64": "sha256:9ff963b38703587096afa440cca6e1d77dc8c95875e8a6581e031c4831c594e6"
+        },
+        "anonymous_verified": {
+          "linux/arm64": true,
+          "linux/amd64": true
+        }
+      }
+    },
+    {
+      "version": "30.4",
+      "source": {
+        "tag": "v30.4",
+        "commit_sha": "5cd4411542f3fd9c2f6e42af5c52c1a2b21506f6",
+        "checksums": "https://bitcoincore.org/bin/bitcoin-core-30.4/SHA256SUMS",
+        "checksums_sha256": "d1c70ff2bc5af4318c61323753528625a8cb46f518f1a769c5004afbbdf65426"
+      },
+      "images": [
+        {
+          "platform": "linux/arm64",
+          "recipe": "docker/bitcoin/Dockerfile.30.4",
+          "source_revision": "46e78c0953b4b66a2c3a4755a41d0c11d5703fad",
+          "image": "ghcr.io/osygy/proofstorm/bitcoin-core@sha256:3a184e446d544cbfff75b437736bca103b4e85df9e438b9b54e33ab50704676a",
+          "probe": "Bitcoin Core daemon version v30.4.0 bitcoind",
+          "publication": "verified"
+        },
+        {
+          "platform": "linux/amd64",
+          "recipe": "docker/bitcoin/Dockerfile.30.4",
+          "source_revision": "46e78c0953b4b66a2c3a4755a41d0c11d5703fad",
+          "image": "ghcr.io/osygy/proofstorm/bitcoin-core@sha256:d6165565c1829e651e24965649bbb7a748704bf99760d73b9f6faedef28b1525",
+          "probe": "Bitcoin Core daemon version v30.4.0 bitcoind",
+          "publication": "verified"
+        }
+      ],
+      "index": {
+        "image": "ghcr.io/osygy/proofstorm/bitcoin-core@sha256:48495824207a5d7945ff91a450a218a7131165ccb3eda5dfd309fc37f219e716",
+        "media_type": "application/vnd.oci.image.index.v1+json",
+        "manifests": {
+          "linux/arm64": "sha256:3a184e446d544cbfff75b437736bca103b4e85df9e438b9b54e33ab50704676a",
+          "linux/amd64": "sha256:d6165565c1829e651e24965649bbb7a748704bf99760d73b9f6faedef28b1525"
+        },
+        "anonymous_verified": {
+          "linux/arm64": true,
+          "linux/amd64": true
+        }
+      }
+    }
+  ],
+  "build_note": "Built from component-refresh commit 46e78c0; arm64 natively, amd64 under emulation on an arm64 host. Published to ghcr.io/osygy/proofstorm. Native AMD64 behavior is qualified by CI, not by this build.",
+  "local_compatibility": {
+    "platform": "linux/arm64",
+    "bitcoin": [
+      "32.1",
+      "31.2",
+      "30.4"
+    ],
+    "cases": 18,
+    "passed_cases": 16,
+    "failed": [
+      "32.1/lnd 0.20.8-beta",
+      "32.1/lnd 0.19.3-beta"
+    ],
+    "failure_cause": "LND 0.20/0.19 refuse to start: Bitcoin Core 32 removed the taproot deployment from getdeploymentinfo (bitcoin/bitcoin#26201); LND 0.21 uses script_flags (lightningnetwork/lnd#10683). Recorded as catalog and matrix exclusions."
+  },
+  "release_ready": false
+}

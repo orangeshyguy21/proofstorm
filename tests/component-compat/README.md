@@ -19,6 +19,11 @@ the checked-in render fixtures: fund, open a channel, settle payments, restart
 Bitcoin and the sending node, verify persisted identity/state, and settle again.
 CLN exercises both `pay` and the Nutshell 0.21 `xpay` contract.
 
+A Lightning entry may list `unsupported_bitcoin` releases with a `reason` for an
+upstream incompatibility. The runner reports those pairs as excluded, records them
+in `result.json`, and does not count them as cases. LND 0.20 and 0.19 exclude
+Bitcoin Core 32.1: Bitcoin Core 32 removed the `taproot` deployment they check.
+
 To qualify Nutshell, select one Bitcoin version and add:
 
 - `driver`: the locally built `Dockerfile.proofstormd` `native` target.
