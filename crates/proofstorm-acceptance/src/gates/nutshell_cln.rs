@@ -56,6 +56,14 @@ pub fn run(context: &GateContext) -> Result<()> {
             nutshell["support_matrix"]
         );
     }
+    // Exactly the supported Core Lightning families, never a deprecated patch.
+    let mut supported_cln: Vec<String> = proofstorm_core::default_catalog()
+        .entries
+        .iter()
+        .filter(|entry| entry.id == "cln" && entry.support_lifecycle.is_supported())
+        .map(|entry| entry.version.clone())
+        .collect();
+    supported_cln.sort();
     let advertises_cln = expect::array(&nutshell, "/support_matrix/payment_bindings")?
         .iter()
         .any(|binding| {
@@ -63,8 +71,21 @@ pub fn run(context: &GateContext) -> Result<()> {
                 .pointer("/backend/implementation")
                 .and_then(Value::as_str)
                 == Some("cln")
-                && binding.pointer("/backend/versions")
-                    == Some(&json!([proofstorm_core::CLN_VERSION]))
+                && binding
+                    .pointer("/backend/versions")
+                    .is_some_and(|versions| {
+                        let mut advertised: Vec<String> = versions
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|version| version.as_str().map(ToString::to_string))
+                            .collect();
+                        advertised.sort();
+                        advertised == supported_cln
+                            && advertised
+                                .iter()
+                                .any(|version| version == proofstorm_core::CLN_VERSION)
+                    })
         });
     if !advertises_cln {
         bail!("Nutshell does not advertise its exact Core Lightning binding");

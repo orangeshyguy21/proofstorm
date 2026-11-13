@@ -541,9 +541,15 @@ pub fn run_with_fee(context: &GateContext, input_fee_ppk: u64) -> Result<()> {
     let published = crate::cell::review(&mut client, &preview)?;
     save(&directory, "published", &published)?;
     let locked = cell::lock_entry(&published, "cdk-cli-wallet")?;
-    if locked.pointer("/build_provenance/commit_sha")
-        != Some(&json!("9f6d3a3734d7223d10b5553e3591d3f9d5c6c904"))
-    {
+    // The current CDK wallet release's source commit, read from the catalog.
+    let current = proofstorm_core::default_catalog()
+        .entries
+        .iter()
+        .find(|entry| entry.id == "cdk-cli-wallet" && entry.version == proofstorm_core::CDK_VERSION)
+        .and_then(|entry| entry.build_provenance.as_ref())
+        .map(|provenance| provenance.commit_sha.clone())
+        .ok_or_else(|| anyhow::anyhow!("catalog has no current CDK wallet provenance"))?;
+    if locked.pointer("/build_provenance/commit_sha") != Some(&json!(current)) {
         bail!("wallet lock does not contain the current CDK source provenance");
     }
     crate::cell::apply(&mut client, &preview)?;

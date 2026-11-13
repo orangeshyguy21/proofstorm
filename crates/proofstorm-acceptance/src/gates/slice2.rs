@@ -13,13 +13,73 @@ use anyhow::{Result, bail};
 use crate::{GateContext, gate::CONTROL_NAMESPACE, json as expect};
 
 const CELL: &str = "slice2-security-spine";
+const WORKSPACE: &str = "slice2";
+const INSTANCE_KEY: &str = "01slice2cell00";
 const NAMESPACE: &str = "proofstorm-01slice2cell00";
+
+/// Declare an empty cell the way the app does: the cell object names its
+/// revision digest, and the immutable revision (`CellSpec` and lock) is stored
+/// in a `ConfigMap` owned by the cell.
+fn apply_cell(kubectl: &crate::kubectl::Kubectl) -> Result<()> {
+    let cell: proofstorm_core::CellSpec = serde_json::from_value(serde_json::json!({
+        "api_version": "proofstorm/v1alpha1",
+        "name": CELL,
+        "components": [],
+        "links": [],
+        "policy": {"allow": [], "limits": {"max_components": 64, "max_links": 256, "max_config_bytes": 65536}}
+    }))?;
+    let lock = proofstorm_core::resolve_lock(&cell, proofstorm_core::default_catalog())
+        .map_err(anyhow::Error::msg)?;
+    let revision_digest = proofstorm_core::publication_digest(WORKSPACE, &cell, &lock);
+    kubectl.apply_stdin(&serde_json::to_string(&serde_json::json!({
+        "apiVersion": "proofstorm.dev/v1alpha1",
+        "kind": "ProofstormCell",
+        "metadata": {"name": CELL, "namespace": CONTROL_NAMESPACE},
+        "spec": {
+            "workspaceId": WORKSPACE,
+            "instanceId": CELL,
+            "instanceKey": INSTANCE_KEY,
+            "revisionDigest": revision_digest
+        }
+    }))?)?;
+    let uid = kubectl.run(&[
+        "get",
+        &format!("proofstormcell/{CELL}"),
+        "-n",
+        CONTROL_NAMESPACE,
+        "-o",
+        "jsonpath={.metadata.uid}",
+    ])?;
+    let revision = proofstorm_kube::CellRevision {
+        workspace_id: WORKSPACE.into(),
+        instance_key: INSTANCE_KEY.into(),
+        revision_digest,
+        cell,
+        lock,
+    };
+    revision.verify()?;
+    let mut map = serde_json::to_value(proofstorm_kube::revision_config_map(
+        &revision,
+        CONTROL_NAMESPACE,
+        None,
+    )?)?;
+    map["metadata"]["ownerReferences"] = serde_json::json!([{
+        "apiVersion": "proofstorm.dev/v1alpha1",
+        "kind": "ProofstormCell",
+        "name": CELL,
+        "uid": uid,
+        "controller": true,
+        "blockOwnerDeletion": true
+    }]);
+    kubectl.apply_stdin(&serde_json::to_string(&map)?)?;
+    Ok(())
+}
 
 pub fn run(context: &GateContext) -> Result<()> {
     let kubectl = &context.kubectl;
     let manifest = |name: &str| context.root.join(name).to_string_lossy().to_string();
 
-    kubectl.run(&["apply", "-f", &manifest("examples/slice2-cell.yaml")])?;
+    apply_cell(kubectl)?;
     kubectl.run(&[
         "wait",
         "--for=jsonpath={.status.phase}=Ready",
